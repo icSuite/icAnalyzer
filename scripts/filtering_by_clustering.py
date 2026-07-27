@@ -110,7 +110,8 @@ for ax, stop in zip(axs, [1, 3, 5, 10, 20, 40, 50, 73, 36*36 - 1]):
 
 import umap
 
-reducer = umap.UMAP(n_components=2)#, random_state=42)
+#reducer = umap.UMAP(n_components=2)#, random_state=42)
+reducer = umap.UMAP(n_components=3)
 X_umap = reducer.fit_transform(X_scaled)
 
 #%%
@@ -134,7 +135,7 @@ axs[2].set_ylabel("UMAP-3")
 
 import hdbscan
 
-clusterer = hdbscan.HDBSCAN(min_cluster_size=400, min_samples=17)
+clusterer = hdbscan.HDBSCAN(min_cluster_size=4000, min_samples=17)
 labels = clusterer.fit_predict(X_umap)  # X_umap: your UMAP 2D/3D array
 
 #%%

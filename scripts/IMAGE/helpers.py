@@ -1,0 +1,85 @@
+#%% Import
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.utils.data import TensorDataset, DataLoader
+import numpy as np
+import scipy.linalg
+import matplotlib.pyplot as plt
+import pandas as pd
+from os.path import join as pjoin
+from tqdm import tqdm
+import glob
+from icreader import ConductanceImage
+
+
+#%% Functions
+
+def load_data(PATHS, spar=1):
+    
+    # --- 4.1 Load and Process Data ---
+    gos = pd.read_csv(PATHS['segments'], header=None)
+    gos.columns = ['orbit', 'shit_start', 'shit_stop', 'good_start', 'good_stop']
+    gos = gos.loc[gos['orbit'] < 503, :]
+
+    t, H, P, W, o = [], [], [], [], []
+    grid = None
+    for orbit in tqdm(gos['orbit'], total=gos.shape[0]):
+        try:
+            cI = ConductanceImage(pjoin(PATHS['data_in'], f'or_{str(orbit).zfill(4)}.nc'))
+            start = gos.loc[gos['orbit']==orbit].iloc[0]['good_start']
+            stop = gos.loc[gos['orbit']==orbit].iloc[0]['good_stop']
+            
+            if stop == 0 or np.isnan(start): continue
+            if np.isnan(stop): stop = cI.H.shape[0]-1
+            
+            start, stop = int(start), int(stop+1)
+            H.append(cI.H[start:stop])
+            P.append(cI.P[start:stop])
+            W.append(cI.w[start:stop])
+            t.append(cI.time[start:stop])
+            o.append(np.ones(cI.time[start:stop].size)*orbit)
+            if grid is None:
+                grid = cI.grid
+        except Exception as e:
+            continue
+
+    H = np.concatenate(H, axis=0)
+    P = np.concatenate(P, axis=0)
+    W = np.concatenate(W, axis=0)
+    t = np.concatenate(t)
+    o = np.concatenate(o)
+    
+    f = np.sum(np.isnan(H) | np.isnan(P) | np.isnan(W), axis=(1,2)) / (H.shape[1] * H.shape[2])
+    f = f <= spar
+
+    return H[f], P[f], W[f], t[f], o[f], grid
+
+
+def load_all_data(PATHS):
+    
+    # --- 4.1 Load and Process Data ---
+    gos = pd.read_csv(PATHS['segments'], header=None)
+    gos.columns = ['orbit', 'shit_start', 'shit_stop', 'good_start', 'good_stop']
+    #gos = gos.loc[gos['orbit'] < 503, :]
+
+    t, H, P, W, o = [], [], [], [], []
+    for orbit in tqdm(gos['orbit'], total=gos.shape[0]):
+        try:
+            cI = ConductanceImage(pjoin(PATHS['data_in'], f'or_{str(orbit).zfill(4)}.nc'))
+            H.append(cI.H)
+            P.append(cI.P)
+            W.append(cI.w)
+            t.append(cI.time)
+            o.append(np.ones(cI.time.size)*orbit)
+        except Exception as e:
+            continue
+
+    H = np.concatenate(H, axis=0)
+    P = np.concatenate(P, axis=0)
+    W = np.concatenate(W, axis=0)
+    t = np.concatenate(t)
+    o = np.concatenate(o)
+
+    return H, P, W, t, o

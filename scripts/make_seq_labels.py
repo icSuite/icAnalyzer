@@ -16,7 +16,7 @@ o = [int(o[-7:-3]) for o in sorted(glob.glob(p_in + '*.nc'))]
 
 #%%
 
-H, P, dH, dP  = [], [], [], []
+H, P, dH, dP, w = [], [], [], [], []
 for orbit in tqdm(o, total=len(o)):
     filename = p_in + f'or_{str(orbit).zfill(4)}.nc'
     cI = ConductanceImage(filename)
@@ -24,6 +24,7 @@ for orbit in tqdm(o, total=len(o)):
     P.append(cI.P)
     dH.append(cI.dH)
     dP.append(cI.dP)
+    w.append(cI.w)
 
 #%%
 
@@ -46,14 +47,19 @@ else:
     results = []
 
 # -- Classification loop function --
-def classify_images(H, P, dH, dP, classified = []):
+def classify_images(H, P, dH, dP, w, classified = []):
     #classified = []
     keep_going = True
 
-    cb, cg = 0, 0
+    if len(classified) != 0:
+        cb = np.sum(np.array(results)[:, -1] == 0)
+        cp = np.sum(np.array(results)[:, -1] == 1)
+        cg = len(results) - cb - cp
+    else:
+        cb, cp, cg = 0, 0, 0
     while keep_going:
         ids = random.randint(0, N - 1)
-        Hs, Ps, dHs, dPs = H[ids], P[ids], dH[ids], dP[ids]
+        Hs, Ps, dHs, dPs, ws = H[ids], P[ids], dH[ids], dP[ids], w[ids]
 
         ns = Hs.shape[0]
         idt = random.randint(0, ns - 1)
@@ -65,7 +71,7 @@ def classify_images(H, P, dH, dP, classified = []):
         
         idt = np.arange(start, stop+1)
 
-        fig, axs = plt.subplots(4, 10, figsize=(20, 15))
+        fig, axs = plt.subplots(5, 10, figsize=(20, 15))
         
         for ax, idi in zip(axs[0, :], idt):
             ax.imshow(Hs[idi], vmin=0, vmax=40)
@@ -83,16 +89,20 @@ def classify_images(H, P, dH, dP, classified = []):
             ax.imshow(dPs[idi], vmin=0, vmax=65)
             ax.set_title(f'Pedersen std - Index {idi}')
         
+        for ax, idi in zip(axs[4, :], idt):
+            ax.imshow(ws[idi], vmin=0, vmax=1, cmap='Greys_r')
+            ax.set_title(f'w - Index {idi}')
+        
         for ax in axs.flatten():
             ax.axis('off')
             
-        plt.suptitle(f"Press 1 (bad), 9 (good), 5 (save and exit), #bad: {cb}, #good: {cg}")
+        plt.suptitle(f"Press 1 (bad), 2 (partial), 3 (good), 5 (save and exit), #bad: {cb}, #partial: {cp}, #good: {cg}")
         plt.tight_layout()
 
         pressed = []
 
         def on_key(event):
-            if event.key in ['1', '9', '5']:
+            if event.key in ['1', '2', '3', '5']:
                 pressed.append(event.key)
                 plt.close()
 
@@ -104,19 +114,22 @@ def classify_images(H, P, dH, dP, classified = []):
             key = pressed[0]
             if key == '1':
                 classified.append((ids, idt[0], 0))
-            elif key == '9':
+            elif key == '2':
                 classified.append((ids, idt[0], 1))
+            elif key == '3':
+                classified.append((ids, idt[0], 2))
             elif key == '5':
                 keep_going = False
                 print("Stopping and saving...")
 
         cb = np.sum(np.array(classified)[:, -1] == 0)
-        cg = np.sum(np.array(classified)[:, -1] == 1)
+        cp = np.sum(np.array(classified)[:, -1] == 1)
+        cg = np.sum(np.array(classified)[:, -1] == 2)
 
     return classified
 
 # -- Run the classification session --
-results = classify_images(H, P, dH, dP, classified=results)
+results = classify_images(H, P, dH, dP, w, classified=results)
 
 # -- Save the results --
 if results:

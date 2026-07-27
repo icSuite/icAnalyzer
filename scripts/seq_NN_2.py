@@ -111,7 +111,7 @@ model = MaskedCNN().to(device)
 opt = torch.optim.Adam(model.parameters(), lr=1e-3)
 loss_fn = nn.CrossEntropyLoss()
 
-for epoch in range(10):
+for epoch in range(100):
     model.train()
     for xb, yb in train_dl:
         xb, yb = xb.to(device), yb.to(device)

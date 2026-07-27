@@ -21,6 +21,7 @@ base = '/home/bing/Dropbox/work/code/repos/icAnalyzer/'
 # Read the CSV with datetime parsing
 sl = pd.read_csv(base + 'data/newell_substorm_list.csv', parse_dates=['Date_UTC'])
 slt = np.array([datetime(t.year, t.month, t.day, t.hour, t.minute, t.second) for t in sl['Date_UTC']])
+slmlt = sl['MLT'].to_numpy()
 
 #%% NN good predictions
 
@@ -61,7 +62,7 @@ def get_sl_data(t, H, P, slt, os1, os2):
     for Hi, Pi, ti in zip(H, P, t):
         if np.any((ti[0] <= slt) & (slt <= ti[-1])):
             slto = slt[np.argmin(abs(slt - ti[len(ti)//2]))]
-            f = (slto <= ti + os1) & (ti <= slto + os2)
+            f = (slto + os1 <= ti) & (ti <= slto + os2)
             Hs.append(Hi[f])
             Ps.append(Pi[f])
             sc += 1

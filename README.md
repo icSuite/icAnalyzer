@@ -26,3 +26,8 @@ This project is licensed under the MIT License. See the `LICENSE` file for detai
 ## Contact
 
 For questions or comments, please contact [michael.madelaire@uib.no].
+
+## Project memory
+
+Repository instructions are in [`AGENTS.md`](AGENTS.md). Versioned technical
+project memory and the current handoff are under [`vault/`](vault/).
