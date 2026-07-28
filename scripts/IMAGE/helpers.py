@@ -31,7 +31,9 @@ def load_data(PATHS, spar=1):
             start = gos.loc[gos['orbit']==orbit].iloc[0]['good_start']
             stop = gos.loc[gos['orbit']==orbit].iloc[0]['good_stop']
             
-            if stop == 0 or np.isnan(start): continue
+            #if stop == 0 or np.isnan(start): continue
+            if stop == 0: continue # New
+            if np.isnan(start): start = 0 # New
             if np.isnan(stop): stop = cI.H.shape[0]-1
             
             start, stop = int(start), int(stop+1)

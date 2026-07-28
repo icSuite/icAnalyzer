@@ -12,6 +12,12 @@ conductance model using a variational autoencoder. Spatial covariance is
 particularly important for the user's broader work on data assimilation of
 ionospheric electrodynamics.
 
+The longer-term model target is conditional: geomagnetic-activity descriptors
+should condition the generated conductance distribution, allowing an end user
+to request conditions and estimate a representative field and conditional
+spatial covariance. The unconditional spline VAE remains the necessary
+baseline before this extension.
+
 The repository README links the published conductance estimates and associated
 uncertainties at `https://doi.org/10.5281/zenodo.15579301`.
 
