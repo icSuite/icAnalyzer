@@ -1,0 +1,334 @@
+# WIC/SI12 VAE Pipeline Plan
+
+Last reviewed: 2026-09-25  
+Status: Scientific direction accepted; product/interface design under review;
+Git transition and implementation not yet executed
+
+## Objective
+
+Build a reproducible pipeline that:
+
+1. trains a joint VAE on paired IMAGE WIC and SI12 global fields;
+2. samples the latent distribution and analyzes WIC/SI12 spatial covariance;
+3. propagates the corrected-WIC component of each paired sample nonlinearly to
+   Hall and Pedersen conductance;
+4. estimates the joint Hall/Pedersen covariance; and
+5. reconstructs conductance from sparse Hall and/or Pedersen observations.
+
+The first milestone is an unconditional baseline on one clearly versioned
+dataset. Conditional generation and publication-scale evaluation follow only
+after that baseline is verified.
+
+## Confirmed baseline assumptions
+
+- Mean proton energy is spatially and temporally constant at 2 keV.
+- Mean electron energy is spatially and temporally constant at 2 keV.
+- Proton and electron energies are not sampled in the first ensemble. The
+  resulting covariance therefore measures variation learned from paired
+  WIC/SI12 fields under fixed energy assumptions.
+- Detector measurement uncertainty remains separate from latent geophysical
+  variability. Use it in data weighting and reconstruction observation error;
+  do not silently add it to the learned prior covariance.
+- WIC and SI12 samples remain paired through every processing stage.
+- The first sparse reconstruction uses the propagated conductance ensemble,
+  not latent optimization through the VAE.
+
+The 2 keV assumptions are deliberate baseline simplifications, not claims that
+the real precipitation energies are constant. Energy models and energy
+uncertainty can be introduced later as controlled sensitivity experiments.
+
+## Repository and API boundaries
+
+```text
+fuvpy
+  -> icBuilder fuv_detector
+  -> icBuilder precipitation_detector (Product 2)
+  -> icBuilder precipitation_cs
+  -> icReader.load()
+  -> icAnalyzer corrected-WIC/SI12 VAE
+  -> reviewed fixed-E0 propagation at E0 = 2 keV
+  -> Hall/Pedersen ensemble
+  -> joint covariance and sparse reconstruction
+```
+
+`icAnalyzer` must not import `fuvpy` or `icBuilder`. `icBuilder` owns camera
+preprocessing, coregistration, geometry, gridding, and product provenance.
+`icReader` owns product loading and schema validation. `icPhysics` owns the
+array-to-array physical conversion.
+
+## Authoritative VAE input product
+
+The user has coordinated an upstream Product-2 contract change in icBuilder.
+Product 2 will include:
+
+- proton-corrected WIC and its uncertainty;
+- proton-corrected SI13 and its uncertainty;
+- SI12 and its uncertainty; and
+- the existing precipitation fields, support, grid, and provenance.
+
+These observation fields will be carried into `precipitation_cs`, which is the
+authoritative fixed-grid product ingested by icAnalyzer through
+`icreader.load()`. A separate `fuv_cs` product is not required for this plan.
+
+This is a confirmed interface decision but remains pending live-code and
+schema verification after the icBuilder and icReader changes land. The reader
+must expose the new Product-2 CS fields without icAnalyzer importing icBuilder.
+
+The VAE channels are specifically `wic_corrected` and `si12`. Use those names
+in code and artifacts even when the shorter phrase “WIC/SI12 VAE” is used in
+discussion. Corrected SI13 is retained for diagnostics and later comparisons,
+but it is not a baseline VAE channel.
+
+**Critical invariant:** `wic_corrected` has already undergone SI12-based proton
+correction in icBuilder. icAnalyzer must never call `proton_correct_images()`
+on this field or subtract a proton contribution again. The 2 keV proton-energy
+assumption belongs to the upstream Product-2 provenance.
+
+## icPhysics compatibility gate
+
+`ped()` and `hall()` already accept NumPy arrays. The only conversion relevant
+inside icAnalyzer is from the already proton-corrected WIC sample to electron
+energy flux for an explicitly supplied electron mean energy, followed by Hall
+and Pedersen conductance. SI12 is not used to proton-correct the sample again.
+
+This observation does **not** authorize an icPhysics change. icBuilder already
+depends on the current public functions, and its detector, precipitation, and
+conductance products have numerical parity tests tied to them. Before changing
+icPhysics:
+
+1. enumerate every icBuilder and icAnalyzer call site;
+2. freeze representative 2 keV input/output fixtures from the current
+   icBuilder calculation;
+3. determine whether the existing public API can be safely composed without a
+   new function;
+4. run the icPhysics and icBuilder test suites against any candidate change;
+   and
+5. request a separate approval for an API change after reporting numerical and
+   pipeline impact.
+
+If the existing API proves insufficient, a possible small API—subject to that
+review rather than accepted by this plan—would have semantics equivalent to:
+
+```python
+precipitation_from_mean_energy(
+    wic_corrected,
+    dwic_corrected,
+    electron_energy,
+    electron_energy_uncertainty,
+)
+```
+
+It would broadcast scalar energies across arrays and return `E0`, `dE0`, `Fe`,
+`dFe`, and `varE0Fe`, without knowing about files, grids, Kp, fuvpy, or the
+VAE. Do not implement this candidate merely because it appears in this plan.
+
+The intended scientific composition, whether achieved through existing calls
+or a separately approved API, is:
+
+```python
+precipitation = reviewed_precipitation_adapter(
+    wic_corrected,
+    dwic_corrected,
+    electron_energy=2.0,
+    electron_energy_uncertainty=0.0,
+)
+
+hall_sample = hall(precipitation["E0"], precipitation["Fe"])
+pedersen_sample = ped(precipitation["E0"], precipitation["Fe"])
+```
+
+For latent-ensemble covariance, the energy values stay fixed and only the
+paired decoded corrected-WIC/SI12 fields vary. Analytic
+measurement-uncertainty outputs are stored separately and do not define the
+ensemble anomalies.
+
+Under this baseline, propagated Hall and Pedersen depend directly on sampled
+`wic_corrected` and fixed electron energy. Sampled SI12 does not enter the
+conversion a second time. SI12 remains part of the learned joint FUV state and
+its covariance with corrected WIC, but it has no additional independent effect
+on conductance unless a future experiment instead samples uncorrected WIC and
+repeats proton correction.
+
+## Phase 0: preserve the current repository state
+
+1. Create `archive/pre-wic-si12-vae-2026-09-25` from the current dirty
+   worktree before committing.
+2. Make coherent preservation commits for:
+   - annotation and project memory;
+   - the experimental WIC/SI12 loader/script and overview changes; and
+   - repository hygiene.
+3. Stop tracking Python bytecode and ignore generated caches.
+4. Do not commit `figures/ncso_new/` or the local literature PDF as ordinary
+   source files.
+5. Create `vae/wic-si12` from the preserved checkpoint. Leave `main` at the
+   reviewed `7c71591` commit until integration is intentional.
+
+The copied `step_1_vae_wic_s12.py` is preserved as an experiment, not adopted
+as the new canonical implementation.
+
+## Phase 1: establish the fixed-grid data contract
+
+1. Wait for the coordinated Product-2 update to add corrected WIC, corrected
+   SI13, SI12, and their uncertainties to detector and CS products.
+2. Update and verify `PrecipitationCS` schema support in `icreader.load()`.
+3. Verify the corrected-WIC provenance and assert that icAnalyzer does not
+   apply proton correction again.
+4. Verify constant-field reproduction, area-integral behavior, coverage, and
+   propagated detector variance on representative frames.
+5. Record exact upstream commits and processing configuration in every file,
+   including the 2 keV proton-energy assumption used for correction.
+6. Convert the existing annotation geometry non-destructively from 36x36
+   index coordinates to Cubed-Sphere coordinates, then rasterize on 46x46.
+
+Exit criterion: icAnalyzer can load one orbit through `icreader.load()` with
+corrected WIC, corrected SI13, SI12, their uncertainties, masks/weights,
+orbit/time identity, and grid/provenance, with no silently dropped frames and
+no duplicate proton correction.
+
+## Phase 2: audit and verify physical propagation
+
+1. Make no icPhysics code change initially.
+2. Trace the current icBuilder production of corrected WIC, its electron-flux
+   conversion, and `robinson_conductance()` and freeze 2 keV reference cases.
+3. Determine whether existing public functions can support scalar, 46x46,
+   time-batched, and ensemble-batched inputs without semantic changes.
+4. Define finite, negative-count, zero-count, masked, and NaN behavior from the
+   current pipeline rather than inventing new behavior in icAnalyzer.
+5. If a public API gap remains, prepare a minimal icPhysics proposal with
+   focused icPhysics tests, frozen icBuilder parity tests, and an icAnalyzer
+   batched-array test. Do not implement it without separate approval.
+
+Exit criterion: an approved, numerically parity-tested path converts a
+corrected-WIC ensemble of shape `(sample, 46, 46)` to paired Hall/Pedersen
+fields of the same shape at fixed 2 keV electron energy without changing
+existing icBuilder results or applying proton correction twice.
+
+## Phase 3: build the processed VAE dataset
+
+Create a versioned artifact containing:
+
+- corrected WIC, SI12, and optional corrected SI13 fields;
+- per-channel measurement variance;
+- binary validity masks and continuous quality weights as distinct concepts;
+- orbit, time, source identity, and grid metadata;
+- train/validation/test assignment by orbit; and
+- upstream product identifiers and repository commits.
+
+Do not use the legacy first-10,000-frame split. Do not use
+`log10(value + 1)` until the new background-subtracted value range is
+inspected; negative values may require a linear standardization or signed
+transform.
+
+Exit criterion: saved split counts, shapes, units, finite fractions, grid
+identity, and annotation alignment reproduce on reload.
+
+## Phase 4: train a defensible WIC/SI12 VAE
+
+Use a two-channel, mask-aware model with dynamically derived grid shape.
+Retain the readable spline decoder only if its 46x46 basis is verified.
+
+The saved run artifact must contain:
+
+- model state;
+- architecture and latent dimension;
+- normalization/transform parameters;
+- grid definition;
+- data-product provenance and split identifiers;
+- optimizer, learning-rate, beta/KL schedule, and random seeds; and
+- separate reconstruction and KL histories.
+
+Reduce reconstruction and KL terms consistently per sample so changing batch
+size does not change the effective beta.
+
+Verification gates:
+
+- tiny-subset overfit smoke test;
+- orbit-held-out reconstruction metrics;
+- reload reproduces the same outputs;
+- prior samples and aggregate-posterior samples are compared with held-out
+  WIC/SI12 distributions; and
+- missing-data masks do not become a generated physical channel.
+
+## Phase 5: sample and analyze WIC/SI12 covariance
+
+1. Draw paired latent samples in reproducible chunks.
+2. Decode physical WIC and SI12 fields, applying only the documented inverse
+   transform.
+3. Preserve sample ordering and pairing.
+4. Store the ensemble mean and centered anomaly factor. Materialize dense
+   covariance blocks only when needed.
+5. Distinguish coefficient covariance, transformed-field covariance, and
+   physical-count covariance in names and metadata.
+
+Required checks include symmetry, positive-semidefinite tolerance,
+cross-block transpose, bounded correlations, and convergence of means,
+variances, and leading subspaces across sample counts and seeds.
+
+## Phase 6: propagate samples and form conductance covariance
+
+For every latent sample:
+
+1. take the decoded `wic_corrected` field without further proton correction;
+2. infer electron energy flux from corrected WIC at 2 keV electron energy;
+3. calculate paired Hall and Pedersen conductance fields; and
+4. retain the same sample index through all outputs.
+
+Construct the joint state as `[Hall, Pedersen]`. Save physical-Siemens moments
+for interpretation and, if used for assimilation, a separately named
+transformed positive state. Verify that the Hall-to-Pedersen and
+Pedersen-to-Hall covariance blocks are transposes.
+
+## Phase 7: sparse conductance reconstruction
+
+Use the propagated ensemble mean and anomaly factor directly in an ensemble-
+space Gaussian update. Support separate Hall and Pedersen observation masks
+and an explicit observation-error covariance `R`.
+
+Required experiments:
+
+- Hall-only observations;
+- Pedersen-only observations;
+- joint observations;
+- several realistic sparse geometries; and
+- prior-mean and independent-channel baselines.
+
+Required invariants:
+
+- no observations returns the prior mean;
+- near-zero-error full observations recover the state;
+- larger observation error weakens the update;
+- Hall-only observations affect Pedersen only through learned cross-covariance;
+- posterior uncertainty does not increase from a valid observation update;
+  and
+- final scores use held-out orbits.
+
+## First end-to-end milestone
+
+One representative orbit must run reproducibly through:
+
+```text
+icreader.load(precipitation_cs)
+  -> processed WIC/SI12 tensors
+  -> trained/reloaded VAE
+  -> paired latent samples
+  -> WIC/SI12 covariance diagnostics
+  -> fixed-2-keV propagation
+  -> joint Hall/Pedersen ensemble
+  -> sparse reconstruction with posterior uncertainty
+```
+
+Only after this succeeds should the workflow scale to the full corpus or add
+conditional variables, nonconstant energy models, or sampled physical-model
+uncertainty.
+
+## Deferred decisions
+
+- the VAE input transform after inspecting the new count distributions;
+- latent dimension and spline/control-grid resolution;
+- whether SI13 becomes an auxiliary VAE channel later;
+- the final representation and storage of large covariance products;
+- conditional variables for the later conditional VAE; and
+- the realistic proton/electron energy model and its uncertainty distribution
+  after the fixed-2-keV baseline.
+- whether the fixed-energy precipitation conversion can use the existing
+  public icPhysics API unchanged or needs a separately approved addition.

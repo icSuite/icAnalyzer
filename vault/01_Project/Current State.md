@@ -1,9 +1,12 @@
 # Current State
 
-Last reviewed: 2026-07-27
-Repository snapshot: `main` at `f0a139a`, aligned with `origin/main`
-Worktree: dirty with the current IMAGE development, project-memory updates,
-and the user's loader/cache changes; preserve all of it
+Last reviewed: 2026-09-25
+Repository snapshot: `main` at `7c71591`, aligned with `origin/main`
+Worktree: nine tracked files are modified, comprising annotation progress, two
+exploratory script changes, a generated Python cache, repository guidance, and
+project-memory updates. Relevant untracked paths include generated overview
+figures, a local literature directory, the WIC/SI12 experiment, and an
+algorithm note; preserve all of it.
 
 ## Current position
 
@@ -12,19 +15,33 @@ height-integrated Hall and Pedersen conductance using IMAGE-derived data and a
 variational autoencoder. The spatial covariance representation is especially
 important for later ionospheric-electrodynamics data assimilation.
 
-The user considers this the quickest project to turn into a publication. The
-AGU 2026 abstract is due 2026-08-05, and the associated paper is targeted for
-December 2026.
+The user has described this as the quickest project to turn into a
+publication. The AGU 2026 abstract deadline was 2026-08-05, but the repository
+does not record whether an abstract was submitted or accepted. The associated
+paper remains targeted for December 2026 in the latest confirmed project
+context.
+
+**Confirmed desired direction, 2026-09-25:** update `icAnalyzer` for the
+regenerated upstream dataset and develop a WIC/SI12 VAE that supports latent
+sampling, WIC/SI12 covariance analysis, nonlinear propagation of sampled
+corrected WIC to Hall/Pedersen, joint conductance covariance, and sparse
+conductance reconstruction. The user's proposed preservation commit and
+dedicated VAE branch remain to be confirmed after technical review.
 
 ## Verified repository evidence
 
-- `main` tracks `origin/main`; both are at `f0a139a`, committed on 2026-07-27
-  as `Checkpoint after prolonged pause of project`.
-- The checkpoint incorporated the previously dirty research scripts, selected
-  data and figures, and the project vault. The worktree was clean before the
-  2026-07-27 memory update.
-- All 43 Python files under `scripts/` pass a read-only AST parse as of the
-  annotation-tool checkpoint.
+- `main` and the locally recorded `origin/main` are both at `7c71591`, a
+  2026-07-28 checkpoint that committed the primary log-spline working copy,
+  loader correction, annotation implementation, initial annotations, and
+  project-memory updates.
+- The tracked worktree now has nine modified files: `AGENTS.md`, the
+  annotation JSON, `scripts/IMAGE/helpers.py`, its tracked bytecode cache,
+  `scripts/make_overview_images.py`, and four project-memory files.
+- All 44 Python files under `scripts/` passed a read-only AST parse on
+  2026-09-25. No scientific pipeline was run.
+- The annotation JSON loaded under schema version 1. Boundary/completion
+  checks succeeded for all 53 represented orbit records, and all 469 stored
+  masks decoded with valid fractions matching their recorded values.
 - The `scripts/IMAGE/` experiments form a progression from iterative PCA and
   direct-pixel VAE covariance, through direct-pixel manual reconstruction, to
   physical-space and then log-space spline VAE reconstruction.
@@ -60,11 +77,42 @@ December 2026.
 - No maintained automated test suite or CI workflow was found.
 - On 2026-07-26, a read-only AST parse succeeded for all 39 Python files under
   `scripts/`.
+- The live modular product boundary is `icBuilder` products loaded through
+  `icreader.load()`, with array physics supplied by `icPhysics`; `icAnalyzer`
+  should not import `fuvpy` or `icBuilder` directly.
+- The current fixed CS grid is `image_apex_130km_46x46_v1`.
+  `precipitation_cs` and `conductance_cs` already exist, with icBuilder writers
+  and icReader dispatch/classes.
+- **Confirmed upstream contract decision, pending implementation
+  verification:** Product 2 will include corrected WIC, corrected SI13, SI12,
+  and their uncertainties, and carry those fields into `precipitation_cs` for
+  icAnalyzer. A separate `fuv_cs` product is not required.
+- The `precipitation_cs.wic_corrected` field has already undergone proton
+  correction in icBuilder. icAnalyzer must not call proton correction on it
+  again. The 2 keV proton-energy assumption belongs to upstream Product-2
+  provenance; the 2 keV electron-energy assumption is used when propagating
+  decoded corrected-WIC samples to conductance.
+- The untracked `step_1_vae_wic_s12.py` is nearly a copy of the conductance
+  VAE with only its loader changed. Its downstream names, transformations,
+  covariance analysis, and sparse reconstruction still treat WIC/SI12 as
+  Hall/Pedersen, and it contains no propagation to conductance.
+- `icPhysics` can already calculate Hall/Pedersen conductance for arrays, but
+  the reusable WIC/SI12 precipitation boundary needed for a 46x46 ensemble is
+  not yet confirmed through its public API. Do not change icPhysics until all
+  icBuilder call sites and parity tests have been reviewed; first determine
+  whether existing functions can be composed unchanged.
+- The first propagation baseline now fixes both proton and electron mean
+  energy at 2 keV. Energies are not sampled in the first ensemble; detector
+  uncertainty remains separate from learned WIC/SI12 variability.
 
 ## Working lineage
 
 - **Current primary:** log-space spline VAE, joint coefficient covariance, and
   control-space OI in `scripts/IMAGE/primary_log_spline_vae.py`.
+- **Proposed successor:** a clean WIC/SI12 workflow built against modular
+  46x46 products, with propagation of sampled corrected WIC and ensemble-space
+  joint conductance reconstruction. Do not treat the copied WIC/SI12 script as
+  this workflow.
 - **Completed:** correct cross-channel correlation normalization and
   unit-consistent latent assimilation.
 - **Deferred:** restore Hall-only, Pedersen-only, and joint-observation
@@ -75,6 +123,33 @@ December 2026.
 - **Skipped by user decision:** iterative PCA as a baseline.
 
 ## Development roadmap
+
+The WIC/SI12 direction supersedes starting new work directly from the legacy
+36x36 loader. The proposed sequence, pending confirmation of the preservation
+and branch plan, is:
+
+1. **Stable data and physics contracts.** Verify the updated Product-2 and
+   `precipitation_cs` schemas expose corrected WIC, corrected SI13, SI12, and
+   their uncertainties through icReader. Audit the existing icPhysics and
+   icBuilder path before proposing any API change; preserve numerical parity
+   and never repeat proton correction in icAnalyzer.
+2. **Processed dataset.** Preserve WIC, SI12, their measurement uncertainties,
+   binary validity, continuous quality weights, orbit/time, grid identity,
+   split assignment, and exact upstream repository/product provenance.
+3. **Defensible unconditional VAE.** Use orbit-separated validation, a
+   two-channel mask-aware loss with consistent per-sample scaling, and a
+   reloadable artifact containing normalization, grid, configuration, and
+   split identifiers.
+4. **Paired sampling and propagation.** Decode paired corrected-WIC/SI12
+   samples and propagate the corrected-WIC component through the reviewed
+   nonlinear conversion before estimating Hall/Pedersen statistics.
+5. **Covariance and reconstruction.** Keep transformed/count/physical spaces
+   explicit, retain a low-rank ensemble anomaly representation, and validate
+   joint sparse conductance reconstruction with explicit observation errors
+   on held-out orbits.
+
+The earlier broader roadmap remains relevant after this baseline, especially
+for a conditional VAE and publication-scale evaluation:
 
 The next phase should be sequenced as follows:
 
@@ -164,13 +239,6 @@ multi-line intersection, flip-last, undo-last, clear, JSON save, fresh load,
 identical masks, and restored geometry. Dividing-line mode is the default for
 new keyframes; existing saved lassos still reopen in lasso mode.
 
-Read-only inspection confirms that the user's current trial is saving to
-`/tmp/icAnalyzer_annotation_trial.json`: it contains two orbit records, and
-orbit 169 has fully good `0:51`, usable stop 233, and saved keyframes. Because
-`/tmp` is not durable across cleanup or reboot, this file should be copied to
-the default project annotation path before it becomes production annotation
-work.
-
 A later attempt to add a keyframe at frame 58 exposed two avoidable line-input
 restrictions: the divider accepted only press-drag-release and only on the WIC
 panel. It now accepts dragging or two endpoint clicks on any of the four
@@ -182,6 +250,104 @@ frame zero. They report that this increases loaded data from 3,664 to 11,136
 images, and they increased the primary training subset from 3,000 to 10,000,
 with a substantial speed cost. These counts and training behavior are
 user-reported rather than independently regenerated here.
+
+The production annotation file is `data/partial_image_annotations.json`.
+Read-only inspection on 2026-09-25 found 53 represented orbit records: 49
+complete and four in progress, with the cursor at orbit 167. The file contains
+469 mask keyframes across 50 orbits and was last saved on 2026-08-19. Compared
+with `HEAD`, 46 orbit records changed and 45 moved from in progress to
+complete. This is substantial annotation progress, but the number of orbits
+discoverable from the external overview/data directories was not enumerated,
+so it is not evidence that the full annotation campaign is nearly complete.
+
+### TODO: grid-independent annotation format
+
+The current schema stores 36x36 raster masks and dividing-line coordinates in
+array-index space. Replace this with a grid-independent format that stores
+annotation geometry in cubed-sphere coordinates, together with enough grid
+metadata to reproduce a raster mask on any chosen grid.
+
+Write a one-time converter from the existing annotation file to the new
+format. Dividing-line endpoints should be mapped from the old pixel grid into
+cubed-sphere coordinates and evaluated as infinite half-planes on the new
+grid. The two keyframes using the older single-line geometry may be discarded
+if supporting them is not worthwhile.
+
+Inspection on 2026-08-18 resolved the 15 keyframes without a `geometry` field:
+nine are all valid, two are all invalid, and the remaining four retain lasso
+vertices. They can therefore be migrated exactly; there are no partial
+keyframes represented only by an irrecoverable raster mask.
+
+## WIC/S12 input exploration
+
+The dirty worktree adds `load_data_wic` to `scripts/IMAGE/helpers.py`. It loads
+WIC and S12 means and standard deviations, weights, times, orbit identifiers,
+and the grid using the same good-segment selection as the conductance loader.
+The existing `scripts/IMAGE/step_1_vae_wic_s12.py` consumes this helper, ignores
+the two returned standard-deviation arrays, and passes WIC and S12 means into
+variables and model paths still labelled Hall and Pedersen. Static inspection
+therefore shows an active WIC/S12 experiment, not a verified conductance-model
+pipeline or scientific result.
+
+`scripts/make_overview_images.py` has also been redirected from `conductance`
+to `conductance_new` and to new overview-output directories. These path changes
+were inspected but not executed. The helper still catches all per-orbit
+exceptions silently, and the overview script remains a hard-coded interactive
+workflow; both require provenance and failure checks before their outputs are
+used scientifically.
+
+## Kp-dependent electron mean energy
+
+The user added `literature/zhang_paxton_2008.pdf`. Review confirms that the
+paper provides full Kp-dependent `E0` and energy-flux maps as functions of
+magnetic latitude and MLT.
+
+Figure 8(b) is instead a flux-thresholded global average derived from the full
+model. A frame-constant value taken from that curve is suitable as a simple
+baseline, but it discards large spatial variations and should not be the
+preferred replacement without validation.
+
+The user reports through a colleague that Fasil has implemented Zhang-Paxton
+and found that the raw model can misplace the auroral oval in magnetic
+latitude. Fasil reportedly normalizes latitude so that the model contributes
+primarily MLT dependence while magnetic-latitude information comes from the
+images. The exact method is unknown.
+
+The automatic pipeline cannot accommodate manual oval registration or a
+fragile per-frame oval fit. Fasil's method is viable only if it is fully
+automatic and robust at dataset scale. Coordination must first determine
+whether he detects and rescales each oval automatically or instead removes the
+model's latitude dependence without per-frame registration.
+
+See `vault/02_Algorithm/Zhang-Paxton Kp Auroral Model.md` for the model,
+pipeline compatibility, limitations, and an appendix-formula caution.
+
+A direct audit of the public `habtie-phys/auroraloval` repository found a
+plausible but partial third-party transcription. Its energy-flux coefficients,
+Epstein form, hemispheric-power interpolation, and example morphology agree
+with the paper, and a 2026 *Scientific Data* paper cites it for oval-boundary
+validation. However, it implements only `Q` and threshold boundaries, not
+electron mean energy `E0`; it is unlicensed and contains untested endpoint,
+southern-hemisphere, NumPy-compatibility, packaging, and path failures. It
+must not be used unchanged as the production implementation.
+
+## Source geometry and alternative-model boundary
+
+**Decision confirmed by the user:** Global auroral snapshots are important to
+the project. IMAGE remains the primary observational source because the VAE is
+intended to learn global spatial covariance. GUVI's retrieved mean-energy and
+energy-flux products are orbital swaths rather than simultaneous global
+states, so GUVI should be evaluated as an external calibration or validation
+source rather than as a replacement dataset.
+
+Zhang-Paxton is not the only empirical precipitation model. OVATION Prime is
+the strongest immediately practical comparison because it provides global
+average-energy and energy-flux patterns, has public implementations, and uses
+solar-wind/IMF inputs that should be recoverable for the IMAGE interval.
+ASHLEY-A is a newer spectral alternative based on 19 DMSP energy channels, but
+its code availability and batch-operability remain unknown. Newer FTA,
+PrecipNet, and SSUSI/XGBoost models improve selected morphology or energy-flux
+tasks but do not directly supply the required mean-energy and energy-flux pair.
 
 ## User-reported primary run
 
@@ -208,7 +374,10 @@ distinguished.
 - whether weight `w` is the correct quantity for training weights and how
   product uncertainty should define the OI observation-error covariance;
 - which generated figures have known inputs and configuration;
-- the intended abstract claim, final figures, co-authors, and target journal.
+- the intended abstract claim, final figures, co-authors, and target journal;
+- whether the AGU abstract was submitted or accepted;
+- the intended scientific role and validation criteria for the WIC/S12
+  experiment and the `conductance_new` products.
 
 ## Risks
 
@@ -220,19 +389,20 @@ distinguished.
   establish orbit-independent generalization.
 - Several scripts change the process working directory, use hard-coded local
   paths and global decoder state, or silently discard data-loading exceptions.
-- Open-ended model experimentation could consume the short abstract window.
+- The AGU abstract deadline has passed, and submission/acceptance status is not
+  recorded in the repository.
 
 ## Next action
 
-Have the user try the new dividing-line editor and confirm its orientation,
-side-flip behavior, and interaction speed. Before continuing substantive
-annotation, migrate the successfully saved `/tmp` trial JSON to the durable
-default project annotation path so a cleanup or reboot cannot remove it.
+Follow `vault/02_Algorithm/WIC-SI12 VAE Pipeline Plan.md`.
 
-After the interface is accepted, finish the processed-data contract: combine
-manual validity with finite-value validity and continuous `w`; preserve
-provenance, orbit/time, condition variables, split assignment, and
-normalization metadata; and select the versioned processed-data format. Then
-scaffold the remaining data, training, initial-analysis, and
-advanced-analysis stages. The deferred independent-versus-joint experiments
-and validation/uncertainty package remain required later.
+First confirm and execute the curated repository checkpoint and dedicated VAE
+branch. Then verify the updated `precipitation_cs`/icReader contract and the
+fixed-energy propagation compatibility gate. Do not change icPhysics unless an
+existing-API composition proves insufficient and a separately reviewed change
+passes frozen icBuilder parity tests. Verify the first propagation using
+upstream proton-corrected WIC and fixed 2 keV electron energy before training
+at scale.
+
+Continue annotation from orbit 167 as bounded background work. Convert the
+36x36 geometry non-destructively before rasterizing it on the 46x46 grid.

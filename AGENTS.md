@@ -46,6 +46,43 @@ live notes when the task changes project understanding.
 - Treat unpublished research context and local data products as private.
 - Use repository-relative paths in documentation.
 
+## Scientific coding style
+
+- Write for a small research group. The expected reader is a student or
+  scientist who should be able to follow the calculation from top to bottom.
+- Write for a scientist reading the code interactively in an editor. Make
+  workflows visually scannable with `#%%` sections where appropriate, blank
+  lines between conceptual stages, and short comments that identify each block.
+- Keep the main calculation linear and visible from top to bottom. Prefer
+  familiar intermediate variables and explicit operations over nested
+  expressions, generic plumbing, or compressed control flow.
+- Extract a helper when it represents a distinct calculation or removes
+  meaningful repetition. Do not hide a few obvious sequential steps behind an
+  abstraction merely to shorten the main function.
+- Comments may serve as navigational headings even when the underlying Python
+  is straightforward. Treat formatter conventions and line-length targets as
+  secondary to human readability, while avoiding ambiguous or unwieldy code.
+- Use nearby code as the stylistic baseline, not as a ceiling. Do not copy weak
+  patterns blindly: identify scientific, numerical, or code choices that could
+  be improved, explain the tradeoff, and propose a clearer or safer alternative.
+- Adopt improvements when they materially improve correctness,
+  reproducibility, clarity, or demonstrated performance. Do not add complexity
+  merely because it is conventional in large production systems.
+- Let complexity follow the science, numerical method, or actual reuse
+  requirements. Prefer direct functions, NumPy arrays, ordinary loops and
+  dictionaries, and keep the main calculation visible in execution order.
+- Unless current requirements justify them, avoid dataclasses, manager or
+  factory classes, generic schemas, version and compatibility frameworks,
+  checkpoint/resume machinery, and speculative extension points.
+- Retain scientific rigor: make units, coordinates, assumptions, provenance,
+  and uncertainty explicit, and add focused tests or reference comparisons for
+  consequential calculations.
+- Scale packaging, validation, documentation, and abstractions to the code's
+  real reuse. A reusable package may justify more structure, but that structure
+  should solve a current, explained need.
+- If a nominally small feature grows beyond roughly 200 lines or more than two
+  new source files, pause and explain why before continuing.
+
 ## Verification
 
 No automated test suite or CI workflow was found at the 2026-07-26 review.

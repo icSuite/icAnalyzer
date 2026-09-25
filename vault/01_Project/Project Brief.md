@@ -1,6 +1,6 @@
 # Project Brief
 
-Last reviewed: 2026-07-26
+Last reviewed: 2026-09-25
 
 ## Purpose
 
@@ -11,6 +11,13 @@ Hall and Pedersen conductance estimates derived from IMAGE satellite data.
 conductance model using a variational autoencoder. Spatial covariance is
 particularly important for the user's broader work on data assimilation of
 ionospheric electrodynamics.
+
+The desired end-to-end path is now more specific: train the generative model
+on paired WIC/SI12 fields, sample and analyze their joint spatial covariance,
+propagate the corrected-WIC component of each paired sample through the current
+physical conversion to Hall and Pedersen conductance, estimate the resulting
+joint conductance covariance, and use that covariance for sparse conductance
+reconstruction.
 
 The longer-term model target is conditional: geomagnetic-activity descriptors
 should condition the generated conductance distribution, allowing an end user
@@ -47,8 +54,14 @@ treating any of these as publication code.
 
 ## Cross-project dependencies
 
-- `icBuilder` produces the conductance products.
-- `icReader` provides reader code/classes used by analysis scripts.
+- `fuvpy` supplies native FUV preprocessing to `icBuilder`; it is an indirect
+  dependency and should not be imported by `icAnalyzer`.
+- `icBuilder` owns preprocessing, geometry, fixed-grid products, and their
+  provenance.
+- `icReader` is the public product-loading and schema-validation boundary for
+  `icAnalyzer`.
+- `icPhysics` owns reusable array-to-array precipitation and conductance
+  calculations used to propagate ensembles in memory.
 - A future `nandir` integration may be relevant where inverse problems are
   solved, but no integration decision has been confirmed.
 

@@ -132,3 +132,59 @@ Both geometry types use the same forward-held keyframe semantics.
 Dividing-line mode is the default for new keyframes; an existing lasso reopens
 in lasso mode. Lasso remains the fallback for concave or disconnected valid
 regions that an intersection of half-planes cannot represent.
+
+## 2026-07-28 - Retain IMAGE global snapshots
+
+**Decision confirmed by the user:** Global auroral snapshots are essential to
+the project because the intended VAE must represent global spatial covariance.
+Retain IMAGE as the primary observational geometry.
+
+GUVI Level 2B and Level 3 products contain valuable retrieved electron mean
+energy and energy flux, but their orbital swaths are not simultaneous global
+states. Evaluate GUVI as an external calibration, validation, or benchmark
+source rather than replacing IMAGE.
+
+**Proposed implementation consequence:** Compare Zhang-Paxton first with
+OVATION Prime, which supplies both average energy and energy flux and has
+public implementations. Evaluate ASHLEY-A as a newer spectral alternative only
+after confirming code access and batch-operability. No alternative may require
+manual or fragile per-frame oval registration.
+
+## 2026-08-18 - Make annotations independent of the analysis grid
+
+**Decision confirmed by the user:** Replace the 36x36-index-dependent
+annotation representation with geometry in cubed-sphere coordinates. A saved
+annotation must be rasterizable on grids with different density or spatial
+extent.
+
+Write a one-time, non-destructive converter for the existing annotation
+dataset. Transform dividing-line endpoints from old array coordinates into
+cubed-sphere coordinates and retain their valid half-plane. The two keyframes
+using the older single-line representation may be discarded if supporting
+them adds unnecessary complexity.
+
+## 2026-09-25 - Start WIC/SI12 propagation with fixed 2 keV energies
+
+**Decision confirmed by the user:** The first WIC/SI12 VAE propagation
+baseline assumes a spatially and temporally constant proton mean energy of
+2 keV and electron mean energy of 2 keV.
+
+Keep both energies fixed across latent samples. This makes the first joint
+Hall/Pedersen covariance attributable to learned corrected-WIC variability
+under an explicit physical baseline. Do not treat the assumption as the final
+precipitation model. Keep detector measurement uncertainty and future
+physical-model uncertainty separate from the latent ensemble so their
+contributions can be evaluated independently.
+
+## 2026-09-25 - Ingest corrected FUV fields from Product 2 CS
+
+**Decision confirmed by the user:** icBuilder Product 2 will include corrected
+WIC, corrected SI13, SI12, and their uncertainties. These fields will be
+carried into `precipitation_cs`, which icAnalyzer will ingest through
+icReader. Do not create a separate `fuv_cs` product for this workflow.
+
+The WIC field is already proton corrected upstream. icAnalyzer must not apply
+proton correction again. The fixed 2 keV proton-energy assumption belongs to
+the upstream correction and its product provenance; downstream sample
+propagation starts from corrected WIC and uses the fixed 2 keV electron energy
+to obtain electron energy flux and conductance.
