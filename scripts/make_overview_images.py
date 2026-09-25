@@ -13,8 +13,10 @@ from icreader import ConductanceImage
 #%% Paths
 
 base = '/home/bing/Dropbox/work'
-p_in = pjoin(base, 'data', 'IMAGE_FUV', 'conductance')
-p_out = pjoin(base, 'code', 'repos', 'icAnalyzer', 'figures', 'overview_wic')
+#p_in = pjoin(base, 'data', 'IMAGE_FUV', 'conductance')
+#p_out = pjoin(base, 'code', 'repos', 'icAnalyzer', 'figures', 'overview_wic')
+p_in = pjoin(base, 'data', 'IMAGE_FUV', 'conductance_new')
+p_out = pjoin(base, 'projects', 'icAnalyzer', 'overview_wic_new')
 
 #%% Fetch orbits available in all nc files
 
@@ -56,7 +58,7 @@ ncso = ncso.loc[ncso['good']==1].reset_index().drop(columns='index')
 
 #%% Loop over all ncso and plot all figs in stacks of 50
 
-p_out_ncso = pjoin(base, 'code', 'repos', 'icAnalyzer', 'figures', 'ncso')
+p_out_ncso = pjoin(base, 'code', 'repos', 'icAnalyzer', 'figures', 'ncso_new')
 os.makedirs(p_out_ncso, exist_ok=True)
 
 col, row = 6, 6
