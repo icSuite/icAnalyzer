@@ -9,4 +9,4 @@ dependencies = []
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["icanalyzer"]
+include = ["icanalyzer*"]

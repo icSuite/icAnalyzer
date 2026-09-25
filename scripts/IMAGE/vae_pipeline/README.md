@@ -140,3 +140,42 @@ the mask editor for the selected frame.
 This stage records annotations only. Rasterizing the masks together with
 finite-value checks and measurement weights belongs in the processed-data
 builder, so the policy remains explicit and reproducible.
+
+# Corrected-WIC/SI12 VAE baseline
+
+`run_wic_si12_pipeline.py` is the canonical fixed-grid baseline. It reads
+schema-1 `precipitation_cs` files through `icreader.load()` and requires all
+six coordinated camera fields: corrected WIC, corrected SI13, SI12, and their
+uncertainties. The input `wic_corrected` field is already proton corrected;
+the workflow never repeats that correction.
+
+The pipeline splits whole orbit files, fits the channel transform using the
+training split only, trains a mask-aware two-channel VAE, samples paired
+corrected-WIC/SI12 fields, propagates corrected WIC to Hall and Pedersen at a
+fixed 2 keV electron energy, and performs an ensemble-space sparse update.
+The decoder constrains corrected WIC to be nonnegative without clipping
+generated fields.
+
+```bash
+python scripts/IMAGE/vae_pipeline/run_wic_si12_pipeline.py \
+  /path/to/precipitation_cs/image_apex_130km_46x46_v1/IR_hardy \
+  --output outputs/wic_si12_baseline \
+  --epochs 20 \
+  --samples 1000 \
+  --observation-mode joint
+```
+
+Use `--observation-mode hall` or `--observation-mode pedersen` for the
+single-channel sparse-observation experiments. The output directory contains:
+
+- `wic_si12_vae.pt`: model state, transform, histories, split identifiers,
+  grid coordinates, upstream product metadata, and training configuration;
+- `ensemble_products.npz`: FUV and conductance ensemble means and low-rank
+  anomaly factors plus the sparse posterior mean and uncertainty; and
+- `summary.json`: sample, physical-propagation, and validation provenance.
+
+The low-rank anomaly factors are the default covariance representation. A
+dense 4232-by-4232 covariance need not be materialized for reconstruction.
+The propagated covariance represents latent field variability at fixed energy;
+detector uncertainty remains available for weighting and observation-error
+models but is not silently injected into the latent ensemble.
