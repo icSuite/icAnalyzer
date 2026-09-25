@@ -188,3 +188,21 @@ proton correction again. The fixed 2 keV proton-energy assumption belongs to
 the upstream correction and its product provenance; downstream sample
 propagation starts from corrected WIC and uses the fixed 2 keV electron energy
 to obtain electron energy flux and conductance.
+
+## 2026-09-25 - Keep fixed-energy propagation local pending a public API review
+
+**Implementation decision:** Do not modify icPhysics or icBuilder as part of
+the icAnalyzer VAE baseline. Compose the existing batched `hall()` and `ped()`
+functions behind a small icAnalyzer compatibility adapter and freeze the
+current 2 keV WIC response (`477.5 counts/(mW m^-2)`) in a parity test.
+
+The adapter accepts already proton-corrected WIC, rejects finite negative
+counts, preserves NaNs and arbitrary leading ensemble dimensions, and records
+that the nonlinear conversion occurs after CS gridding. It does not imply that
+the missing public, grid-independent WIC-to-precipitation boundary is resolved:
+the current response helper is private, so an icPhysics API remains a separate
+reviewed change requiring upstream parity evidence and approval.
+
+Store covariance as an ensemble mean plus normalized anomaly factor by
+default. This representation is exactly sufficient for the implemented sparse
+Gaussian update and avoids materializing a dense 4232-by-4232 matrix.

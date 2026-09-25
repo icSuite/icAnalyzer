@@ -40,7 +40,13 @@ uncertainties at `https://doi.org/10.5281/zenodo.15579301`.
 
 ## Candidate technical entry points
 
-The following filenames are candidates, not confirmed canonical workflows:
+The canonical fixed-grid baseline is now:
+
+- `scripts/IMAGE/vae_pipeline/run_wic_si12_pipeline.py`
+- `icanalyzer/wic_si12/`
+
+The following older filenames remain historical candidates or experiments,
+not the canonical WIC/SI12 workflow:
 
 - `scripts/Cleaned_VAE_final.py`
 - `scripts/cond_est_VAE.py`

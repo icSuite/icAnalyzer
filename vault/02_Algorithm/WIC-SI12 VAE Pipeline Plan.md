@@ -1,8 +1,58 @@
 # WIC/SI12 VAE Pipeline Plan
 
 Last reviewed: 2026-09-25  
-Status: Scientific direction accepted; product/interface design under review;
-Git transition and implementation not yet executed
+Status: First end-to-end baseline implemented and smoke-tested on the live
+upstream contract; production-data validation and annotation reprojection
+remain open
+
+## Implementation checkpoint
+
+Implemented on `vae/wic-si12` at `5f6de08`:
+
+- strict `precipitation_cs` ingestion for corrected WIC, corrected SI13,
+  SI12, their uncertainties, support, source identity, grid, and provenance;
+- orbit-level train/validation/test splitting and explicit reporting of frames
+  excluded for having no valid weighted pixels;
+- training-only signed-asinh channel transforms and propagated transformed
+  measurement variance;
+- a mask-aware 46x46 convolutional VAE with consistently per-sample reduced
+  reconstruction and KL losses;
+- an architectural nonnegative corrected-WIC decoder constraint;
+- reloadable run artifacts containing model, transform, histories, held-out
+  metrics, split files, coordinates, provenance, optimizer settings, and seed;
+- reproducible paired latent sampling and low-rank physical-count covariance;
+- a local fixed-2-keV compatibility adapter that never repeats proton
+  correction and preserves ensemble dimensions;
+- joint Hall/Pedersen anomaly factors and ensemble-space sparse reconstruction
+  with Hall-only, Pedersen-only, or joint observation selection; and
+- a canonical command-line workflow and focused regression tests.
+
+Verification on 2026-09-25: 18 focused tests passed; 56 Python files parsed;
+and a generated three-orbit Product-2 fixture ran through live icBuilder and
+icReader code, one training epoch, artifact reload, eight latent samples,
+conductance propagation, and sparse reconstruction. Repeating the CPU smoke
+with the same seed reproduced the metrics exactly. This proves interface and
+execution coherence, not model skill; the one-epoch fixture scores have no
+scientific interpretation.
+
+Still open:
+
+- The required icBuilder and icReader Product-2 changes are present only as
+  uncommitted upstream worktree changes (`3f6e460` and `549112a` are their
+  current base commits). A production icAnalyzer run should wait for stable
+  upstream commits and regenerated orbit files.
+- The fixed-energy adapter must currently use private `icphysics.image.fWm`
+  for the WIC response. No icPhysics code was changed. A public,
+  grid-independent batched boundary remains a separately approved upstream
+  task after compatibility review.
+- The legacy 36x36 files that define the annotation source grid are not
+  available at their recorded local path. Reprojecting the 469 masks by pixel
+  scaling would violate the coordinate-independent annotation decision, so
+  conversion remains blocked until the source cubed-sphere coordinates can be
+  recovered.
+- Prior-sample calibration, covariance convergence, observation geometries,
+  independent-channel baselines, and publication-scale held-out results still
+  require the regenerated corpus.
 
 ## Objective
 
