@@ -1,1 +1,9 @@
 vault/.obsidian/
+
+# Python runtime artifacts
+__pycache__/
+*.py[cod]
+
+# Local generated/reference material
+figures/ncso_new/
+literature/*.pdf
