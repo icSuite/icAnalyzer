@@ -49,6 +49,16 @@ of 173 annotated orbits are present, yielding 10,680 selected frames and 9,728
 frames with valid weighted support. A three-orbit annotation smoke selected
 the exact intended source bounds and completed end to end.
 
+The first full annotated run used 20 epochs, latent dimension 32, beta 0.001,
+and 1,000 prior samples on CUDA. Validation loss was best at epoch 10 and then
+rose slightly while train loss kept falling. The epoch-20 prior matched the
+corrected-WIC mean reasonably but underestimated WIC and SI12 dispersion. One
+50-observation joint reconstruction reduced RMSE from 1.400 S to 0.587 S, but
+the unconstrained physical-space update produced values down to -0.213 S.
+Before a longer run, restore the validation-best checkpoint and define a
+positivity-preserving reconstruction formulation. Evaluate reconstruction
+over many held-out frames rather than interpreting this single example.
+
 Still open:
 
 - The Product-2 changes have landed as icBuilder `38b5afb` and icReader

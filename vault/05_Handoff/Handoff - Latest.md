@@ -1,7 +1,7 @@
 # Handoff - Latest
 
 Last updated: 2026-09-28
-Repository snapshot: `vae/wic-si12` at `9a2e5e2`; `main` remains at `7c71591`
+Repository snapshot: `vae/wic-si12` at `61acb57`; `main` remains at `7c71591`
 
 ## Outcome
 
@@ -58,6 +58,23 @@ keV in this baseline.
 The smoke demonstrates execution and interface coherence only. Its one-epoch
 prior samples had strongly collapsed variance and are not a scientific result.
 
+## First full annotated run
+
+The user ran 20 epochs on CUDA with latent dimension 32, beta 0.001, and 1,000
+prior samples. The orbit split was 111/23/23, with 7,556/1,365/807 usable
+train/validation/test frames.
+
+Validation loss was best at epoch 10 (`0.2352`) rather than the saved epoch 20
+(`0.2412`), while final train loss was `0.2025`. Prior samples remained
+underdispersed: corrected-WIC standard deviation was 149 versus 306 observed,
+and SI12 was 4.53 versus 7.65 counts. Means were closer, especially corrected
+WIC (129 versus 124 counts).
+
+For one held-out frame and 50 random joint observations, posterior RMSE fell
+from 1.400 S to 0.587 S. This is encouraging but not yet a validation result.
+The physical-space Gaussian posterior reached -0.213 S, revealing that sparse
+reconstruction needs an explicit positivity-preserving state or method.
+
 ## Important boundaries
 
 - The contract changes are committed as icBuilder `38b5afb` and icReader
@@ -97,13 +114,16 @@ The selected core arrays are estimated at about 0.7 GiB before transformed
 training arrays and model state, making the annotated workflow practical on a
 normal workstation.
 
-Run a representative real-orbit baseline and inspect:
+Next:
 
-1. split counts, finite support, and WIC/SI12 distributions;
-2. tiny-subset overfit and held-out reconstruction;
-3. prior-sample calibration and covariance convergence across seeds/counts;
-4. Hall-only, Pedersen-only, and joint realistic sparse geometries; and
-5. prior-mean and independent-channel baselines.
+1. restore/save the best validation checkpoint and add early stopping before
+   extending training;
+2. measure prior-sample calibration and covariance convergence across seeds;
+3. evaluate many held-out fields and Hall-only, Pedersen-only, and joint
+   realistic sparse geometries;
+4. compare prior-mean and independent-channel baselines; and
+5. implement a positivity-preserving reconstruction formulation without
+   silent clipping.
 
 Annotation conversion is also open. The annotation JSON contains 53 orbit
 records and 469 valid keyframes, but the old 36x36 source grid files are absent
@@ -113,9 +133,10 @@ non-destructive Cubed-Sphere converter; do not rescale pixel indices.
 ## Portfolio impact
 
 - Central update needed: Yes
-- Changes: The production corpus is present and structurally valid. The user
-  confirmed Hardy upstream proton correction; fixed 2 keV applies to electron
-  propagation only. A
+- Changes: The first full annotated baseline completed. It learns useful
+  covariance and substantially improved one sparse reconstruction, but the
+  best validation epoch was 10, samples were underdispersed, and the linear
+  posterior allowed negative conductance. A
   public icPhysics propagation boundary and coordinate-based annotation
   conversion remain explicit follow-up decisions.
 - Priority/deadline: unchanged. The December 2026 paper target remains the

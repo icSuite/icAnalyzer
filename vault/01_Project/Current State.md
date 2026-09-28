@@ -1,7 +1,7 @@
 # Current State
 
 Last reviewed: 2026-09-25
-Repository snapshot: `vae/wic-si12` at `9a2e5e2`; `main` remains at `7c71591`
+Repository snapshot: `vae/wic-si12` at `61acb57`; `main` remains at `7c71591`
 Worktree: clean before this memory checkpoint
 
 ## Current position
@@ -66,6 +66,32 @@ The smoke runs are deliberately tiny. The one-epoch real model showed strongly
 collapsed prior-sample variance, so its numerical errors do not measure
 scientific skill.
 
+## First full annotated baseline
+
+The user completed a 20-epoch CUDA run on the default manual selection and
+1,000 prior samples. All 157 available annotated orbits were split by orbit:
+111 train, 23 validation, and 23 test. After invalid-support filtering, the
+splits contained 7,556, 1,365, and 807 frames respectively.
+
+Verified diagnostics:
+
+- validation total loss reached its minimum at epoch 10 (`0.2352`) and rose to
+  `0.2412` by epoch 20 while train loss continued down to `0.2025`; this is
+  mild overfitting and the saved epoch-20 state is not the best checkpoint;
+- held-out test total loss was `0.3007` with reconstruction loss `0.2600`;
+- sampled corrected-WIC mean was close to observed (`129.3` versus `124.3`
+  counts), while sampled standard deviation was low (`149.2` versus `305.6`);
+- sampled SI12 mean/std were `2.94/4.53` counts versus observed `3.72/7.65`,
+  also showing underdispersion;
+- 50 joint sparse observations reduced RMSE from `1.400` S to `0.587` S and
+  reduced posterior standard deviation everywhere in this example; and
+- the physical-space Gaussian update produced a negative posterior minimum
+  (`-0.213` S), so positivity must be handled explicitly before treating the
+  reconstruction as physical.
+
+This is evidence of useful learned covariance, but it is one held-out frame
+and one random observation geometry, not a quantitative reconstruction result.
+
 ## Production corpus and blockers
 
 - The coordinated product changes are committed as icBuilder `38b5afb` and
@@ -95,13 +121,15 @@ scientific skill.
 
 ## Next actionable work
 
-1. Run the canonical workflow on the default manually selected corpus; inspect
-   fit, prior samples, and covariance convergence before scaling epochs.
-2. Recover the legacy annotation source grid and implement the previously
+1. Add validation-best checkpoint restoration (and preferably early stopping)
+   before another long training run; epoch 10 currently outperforms epoch 20.
+2. Evaluate prior dispersion and sparse reconstruction across many held-out
+   frames, seeds, and Hall-only/Pedersen-only/joint geometries.
+3. Choose an explicit positivity-preserving reconstruction state or method;
+   do not silently clip negative posterior conductance.
+4. Recover the legacy annotation source grid and implement the previously
    agreed non-destructive coordinate conversion before applying annotations.
-3. Decide separately whether to authorize a public icPhysics propagation API.
-4. Add realistic Hall-only, Pedersen-only, and joint sparse geometries plus
-   independent-channel and prior-mean baselines on held-out orbits.
+5. Decide separately whether to authorize a public icPhysics propagation API.
 
 The December 2026 paper target remains the latest recorded publication target.
 The AGU 2026 abstract outcome, target journal, co-authors, and review standard
