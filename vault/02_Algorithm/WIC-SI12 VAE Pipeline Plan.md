@@ -1,9 +1,8 @@
 # WIC/SI12 VAE Pipeline Plan
 
-Last reviewed: 2026-09-25  
-Status: First end-to-end baseline implemented and smoke-tested on the live
-upstream contract; production-data validation and annotation reprojection
-remain open
+Last reviewed: 2026-09-28
+Status: End-to-end baseline and saved-run diagnostics implemented and
+verified; publication-scale validation and annotation reprojection remain open
 
 ## Implementation checkpoint
 
@@ -55,9 +54,21 @@ rose slightly while train loss kept falling. The epoch-20 prior matched the
 corrected-WIC mean reasonably but underestimated WIC and SI12 dispersion. One
 50-observation joint reconstruction reduced RMSE from 1.400 S to 0.587 S, but
 the unconstrained physical-space update produced values down to -0.213 S.
-Before a longer run, restore the validation-best checkpoint and define a
-positivity-preserving reconstruction formulation. Evaluate reconstruction
-over many held-out frames rather than interpreting this single example.
+The implementation now restores the validation-best checkpoint. Before
+treating reconstructions as physical, define a positivity-preserving
+formulation. Evaluate reconstruction over many held-out frames rather than
+interpreting this single example.
+
+Commit `1504b1e` completes the initial analysis layer. The runner now restores
+the lowest-validation-loss state and future artifacts retain latent draws,
+sparse truth and observations, prior uncertainty, and truth-frame identity.
+The standalone headless visualizer produces decoded and propagated sample
+mosaics, latent diagnostics when stored, ensemble moments, joint-channel
+correlation maps, low-rank covariance modes and spectra, and sparse prior /
+posterior / truth panels. It remains compatible with the first full run, while
+explicitly reporting that its unsaved latent draws and truth are unavailable.
+The validation-best restoration is therefore complete; early stopping remains
+an optional efficiency improvement rather than a correctness blocker.
 
 Still open:
 

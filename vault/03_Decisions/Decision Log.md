@@ -1,6 +1,6 @@
 # Decision Log
 
-Last reviewed: 2026-07-27
+Last reviewed: 2026-09-28
 
 ## 2026-07-26 - Use the standard project vault
 
@@ -234,3 +234,15 @@ is an explicit diagnostic override, not the production training default. This
 reduces the copied corpus from 358,439 frames to 10,680 mapped frames before
 materialization and preserves source-frame identity when upstream gating has
 removed frames.
+
+## 2026-09-28 - Select the minimum-validation-loss VAE state
+
+**Implementation decision:** Restore the model state with minimum validation
+total loss before held-out evaluation, latent sampling, physical propagation,
+and artifact saving. Retain the full training history and record the selected
+epoch and validation loss in the artifact configuration.
+
+This prevents a later overfit epoch from silently defining the ensemble, as
+happened in the first 20-epoch artifact where epoch 10 validated better than
+the saved epoch 20. Early stopping may later reduce compute, but it is not
+required for correct checkpoint selection.

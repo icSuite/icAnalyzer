@@ -1,7 +1,7 @@
 # Handoff - Latest
 
 Last updated: 2026-09-28
-Repository snapshot: `vae/wic-si12` at `61acb57`; `main` remains at `7c71591`
+Repository snapshot: `vae/wic-si12` at `1504b1e`; `main` remains at `7c71591`
 
 ## Outcome
 
@@ -13,6 +13,11 @@ committed. The old mixed worktree was preserved on
 The canonical command is documented in
 `scripts/IMAGE/vae_pipeline/README.md` and implemented by
 `scripts/IMAGE/vae_pipeline/run_wic_si12_pipeline.py`.
+
+Saved-run diagnostics are implemented by
+`scripts/IMAGE/vae_pipeline/visualize_wic_si12_run.py`. The script reads an
+existing run without retraining and writes loss, sample, moment, correlation,
+mode, spectrum, and sparse-reconstruction figures plus `diagnostics.json`.
 
 The workflow:
 
@@ -33,9 +38,16 @@ keV in this baseline.
 
 ## Evidence
 
+- Diagnostics commit: `1504b1e Add WIC SI12 VAE diagnostics`.
+- Focused tests: 27 passed; 59 Python files parsed.
+- The existing 1,000-sample full run generated ten figures without a dense
+  state covariance. Its leading four modes explain 55.1% of FUV variance and
+  53.6% of conductance variance.
+- A fresh three-orbit, two-epoch smoke saved latent vectors, sparse truth and
+  observations, restored and recorded the best validation checkpoint, and
+  generated all twelve available figures. Visual inspection caught and fixed
+  nonfinite-pixel error scaling before the checkpoint.
 - icAnalyzer commit: `5f6de08 Implement WIC SI12 VAE baseline`.
-- Focused tests: 18 passed.
-- Syntax: 56 Python files parsed.
 - Live-contract smoke: three generated Product-2 orbits passed through current
   icBuilder and icReader code, one training epoch, held-out evaluation,
   artifact reload, eight latent samples, physical propagation, covariance,
@@ -65,7 +77,9 @@ prior samples. The orbit split was 111/23/23, with 7,556/1,365/807 usable
 train/validation/test frames.
 
 Validation loss was best at epoch 10 (`0.2352`) rather than the saved epoch 20
-(`0.2412`), while final train loss was `0.2025`. Prior samples remained
+(`0.2412`), while final train loss was `0.2025`. That historical artifact still
+contains the epoch-20 model; current training restores the best validation
+state before evaluation, sampling, and saving. Prior samples remained
 underdispersed: corrected-WIC standard deviation was 149 versus 306 observed,
 and SI12 was 4.53 versus 7.65 counts. Means were closer, especially corrected
 WIC (129 versus 124 counts).
@@ -116,13 +130,11 @@ normal workstation.
 
 Next:
 
-1. restore/save the best validation checkpoint and add early stopping before
-   extending training;
-2. measure prior-sample calibration and covariance convergence across seeds;
-3. evaluate many held-out fields and Hall-only, Pedersen-only, and joint
+1. measure prior-sample calibration and covariance convergence across seeds;
+2. evaluate many held-out fields and Hall-only, Pedersen-only, and joint
    realistic sparse geometries;
-4. compare prior-mean and independent-channel baselines; and
-5. implement a positivity-preserving reconstruction formulation without
+3. compare prior-mean and independent-channel baselines;
+4. implement a positivity-preserving reconstruction formulation without
    silent clipping.
 
 Annotation conversion is also open. The annotation JSON contains 53 orbit

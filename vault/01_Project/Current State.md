@@ -1,7 +1,7 @@
 # Current State
 
-Last reviewed: 2026-09-25
-Repository snapshot: `vae/wic-si12` at `61acb57`; `main` remains at `7c71591`
+Last reviewed: 2026-09-28
+Repository snapshot: `vae/wic-si12` at `1504b1e`; `main` remains at `7c71591`
 Worktree: clean before this memory checkpoint
 
 ## Current position
@@ -92,6 +92,29 @@ Verified diagnostics:
 This is evidence of useful learned covariance, but it is one held-out frame
 and one random observation geometry, not a quantitative reconstruction result.
 
+## Reproducible diagnostics
+
+Commit `1504b1e` adds a headless visualization workflow for both the existing
+full run and future artifacts. It reconstructs the saved ensembles exactly
+from their low-rank anomaly factors and produces decoded FUV samples,
+propagated conductance samples, moments, joint-channel correlation maps,
+leading covariance modes, covariance spectra, loss history, and sparse-update
+summaries without constructing a dense 4232-by-4232 covariance.
+
+The existing full run produced ten figures. Its leading four covariance modes
+account for 55.1% of FUV variance and 53.6% of conductance variance. The
+maximum-variance anchors are CS `(row, column) = (10, 13)` for corrected WIC
+and `(27, 7)` for Hall. These are descriptive diagnostics of this run, not yet
+validated physical conclusions.
+
+New runs additionally retain the sampled latent vectors, sparse-validation
+truth, observation indices and values, prior uncertainty, and truth-frame
+identity. They restore the minimum-validation-loss model before evaluation,
+sampling, and artifact saving. A three-orbit, two-epoch smoke verified all of
+these fields and generated twelve figures, including latent-draw and
+truth/error panels. Older runs remain visualizable, but missing latent draws
+and validation truth cannot be recovered after the fact.
+
 ## Production corpus and blockers
 
 - The coordinated product changes are committed as icBuilder `38b5afb` and
@@ -121,12 +144,12 @@ and one random observation geometry, not a quantitative reconstruction result.
 
 ## Next actionable work
 
-1. Add validation-best checkpoint restoration (and preferably early stopping)
-   before another long training run; epoch 10 currently outperforms epoch 20.
-2. Evaluate prior dispersion and sparse reconstruction across many held-out
+1. Evaluate prior dispersion and sparse reconstruction across many held-out
    frames, seeds, and Hall-only/Pedersen-only/joint geometries.
-3. Choose an explicit positivity-preserving reconstruction state or method;
+2. Choose an explicit positivity-preserving reconstruction state or method;
    do not silently clip negative posterior conductance.
+3. Decide whether early stopping is useful now that the best validation state
+   is restored automatically.
 4. Recover the legacy annotation source grid and implement the previously
    agreed non-destructive coordinate conversion before applying annotations.
 5. Decide separately whether to authorize a public icPhysics propagation API.
