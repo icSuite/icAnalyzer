@@ -35,6 +35,13 @@ with the same seed reproduced the metrics exactly. This proves interface and
 execution coherence, not model skill; the one-epoch fixture scores have no
 scientific interpretation.
 
+On 2026-09-28, after the user confirmed Hardy upstream proton correction, a
+real-data smoke used orbits 1720, 0813, and 1734. All 30 frames were usable;
+the workflow trained for one epoch, reloaded the artifact, drew 16 paired
+samples in uneven batches, propagated conductance, and completed a joint
+sparse update. The generated variance was strongly collapsed, as expected for
+this minimal run, so the result validates execution rather than model skill.
+
 Still open:
 
 - The Product-2 changes have landed as icBuilder `38b5afb` and icReader

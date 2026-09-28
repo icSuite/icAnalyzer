@@ -1,7 +1,7 @@
 # Handoff - Latest
 
 Last updated: 2026-09-28
-Repository snapshot: `vae/wic-si12` at `9dbab1e`; `main` remains at `7c71591`
+Repository snapshot: `vae/wic-si12` at `0853e6f`; `main` remains at `7c71591`
 
 ## Outcome
 
@@ -41,6 +41,9 @@ keV in this baseline.
   artifact reload, eight latent samples, physical propagation, covariance,
   and sparse reconstruction.
 - Repeated CPU smoke metrics were identical at the same seed.
+- A real-data smoke on orbits 1720, 0813, and 1734 used all 30 frames and
+  completed one training epoch, held-out evaluation, artifact reload, 16
+  paired samples, conductance propagation, and joint sparse reconstruction.
 - Upstream review found `wic_corrected`, `dwic_corrected`,
   `si13_corrected`, `dsi13_corrected`, `si12`, and `dsi12`, each in counts on
   `(time, 46, 46)`. The earlier synthetic contract fixture used SI12 and
@@ -48,8 +51,8 @@ keV in this baseline.
 - Compatibility review found `hall()` and `ped()` already broadcast arbitrary
   leading dimensions and reproduced the frozen 2 keV reference fixture.
 
-The smoke demonstrates execution and interface coherence only. It is not a
-trained scientific result.
+The smoke demonstrates execution and interface coherence only. Its one-epoch
+prior samples had strongly collapsed variance and are not a scientific result.
 
 ## Important boundaries
 

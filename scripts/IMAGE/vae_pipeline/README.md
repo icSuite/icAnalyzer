@@ -147,7 +147,9 @@ builder, so the policy remains explicit and reproducible.
 schema-1 `precipitation_cs` files through `icreader.load()` and requires all
 six coordinated camera fields: corrected WIC, corrected SI13, SI12, and their
 uncertainties. The input `wic_corrected` field is already proton corrected;
-the workflow never repeats that correction.
+the workflow never repeats that correction. The accepted production contract
+uses the upstream Hardy proton-energy model; the separate downstream electron
+propagation uses fixed 2 keV energy.
 
 The pipeline splits whole orbit files, fits the channel transform using the
 training split only, trains a mask-aware two-channel VAE, samples paired

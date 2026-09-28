@@ -1,7 +1,7 @@
 # Current State
 
 Last reviewed: 2026-09-25
-Repository snapshot: `vae/wic-si12` at `9dbab1e`; `main` remains at `7c71591`
+Repository snapshot: `vae/wic-si12` at `0853e6f`; `main` remains at `7c71591`
 Worktree: clean before this memory checkpoint
 
 ## Current position
@@ -50,12 +50,17 @@ covariance.
   artifact save/reload, eight paired latent samples, fixed-energy propagation,
   joint covariance construction, and sparse reconstruction.
 - Repeating that CPU smoke with the same seed reproduced its metrics exactly.
+- After the Hardy correction was confirmed, three real production orbits
+  (`1720`, `0813`, and `1734`) completed a one-epoch end-to-end smoke with 30
+  usable frames, held-out evaluation, artifact reload, 16 latent samples,
+  fixed-2-keV electron propagation, and joint sparse reconstruction.
 - The live upstream focused suites passed during contract review: 7 icBuilder
   detector-CS tests, 26 icReader detector-first tests, 17 icPhysics tests, and
   30 relevant icBuilder physics-path tests.
 
-The smoke fixture is deliberately tiny and synthetic. Its numerical errors do
-not measure scientific skill.
+The smoke runs are deliberately tiny. The one-epoch real model showed strongly
+collapsed prior-sample variance, so its numerical errors do not measure
+scientific skill.
 
 ## Production corpus and blockers
 
