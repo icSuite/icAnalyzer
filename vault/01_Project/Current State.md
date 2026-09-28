@@ -1,7 +1,7 @@
 # Current State
 
 Last reviewed: 2026-09-25
-Repository snapshot: `vae/wic-si12` at `0853e6f`; `main` remains at `7c71591`
+Repository snapshot: `vae/wic-si12` at `9a2e5e2`; `main` remains at `7c71591`
 Worktree: clean before this memory checkpoint
 
 ## Current position
@@ -23,7 +23,8 @@ Commit `5f6de08` adds:
 - `icanalyzer.wic_si12.data`: strict live Product-2 contract validation,
   eager field/source/grid materialization, orbit splits, channel transforms,
   variance propagation, masks, quality weighting, and explicit unusable-frame
-  accounting;
+  accounting. Manual good intervals are applied through `wic_source_index`
+  before the camera arrays are materialized;
 - `icanalyzer.wic_si12.model`: a mask-aware two-channel convolutional VAE,
   per-sample loss reduction, and a nonnegative physical corrected-WIC output
   constraint;
@@ -54,6 +55,9 @@ covariance.
   (`1720`, `0813`, and `1734`) completed a one-epoch end-to-end smoke with 30
   usable frames, held-out evaluation, artifact reload, 16 latent samples,
   fixed-2-keV electron propagation, and joint sparse reconstruction.
+- The archived manual-selection semantics were ported and verified on orbits
+  85, 86, and 89. Their inclusive source intervals selected 121 frames; 120
+  had valid weighted support and completed an end-to-end smoke.
 - The live upstream focused suites passed during contract review: 7 icBuilder
   detector-CS tests, 26 icReader detector-first tests, 17 icPhysics tests, and
   30 relevant icBuilder physics-path tests.
@@ -76,6 +80,10 @@ scientific skill.
 - In a stratified sample of 32 orbits, 7,011 of 7,960 frames had jointly valid
   support. Corrected WIC was nonnegative. Roughly 17.5% of jointly valid SI12
   cells were negative, confirming that a signed transform is necessary.
+- The segment CSV contains 173 accepted orbit intervals. The copied corpus has
+  157 of those orbits, mapping to 10,680 Product-2 frames; 9,728 frames have
+  valid weighted support. The selected core arrays are estimated at about 0.7
+  GiB before transformed training arrays and model state.
 - No icPhysics source was changed. Existing `hall()` and `ped()` broadcast over
   ensembles, but WIC response currently comes from private `fWm`. The desired
   public, grid-independent batched propagation boundary remains open and must
@@ -87,8 +95,8 @@ scientific skill.
 
 ## Next actionable work
 
-1. Run the canonical workflow on real orbit-separated data; inspect count
-   distributions, missingness, fit, prior samples, and covariance convergence.
+1. Run the canonical workflow on the default manually selected corpus; inspect
+   fit, prior samples, and covariance convergence before scaling epochs.
 2. Recover the legacy annotation source grid and implement the previously
    agreed non-destructive coordinate conversion before applying annotations.
 3. Decide separately whether to authorize a public icPhysics propagation API.

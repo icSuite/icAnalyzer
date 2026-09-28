@@ -1,7 +1,7 @@
 # Handoff - Latest
 
 Last updated: 2026-09-28
-Repository snapshot: `vae/wic-si12` at `0853e6f`; `main` remains at `7c71591`
+Repository snapshot: `vae/wic-si12` at `9a2e5e2`; `main` remains at `7c71591`
 
 ## Outcome
 
@@ -44,6 +44,10 @@ keV in this baseline.
 - A real-data smoke on orbits 1720, 0813, and 1734 used all 30 frames and
   completed one training epoch, held-out evaluation, artifact reload, 16
   paired samples, conductance propagation, and joint sparse reconstruction.
+- The canonical runner now applies archived manual good intervals by default,
+  mapped through Product-2 `wic_source_index` before array reads. An annotated
+  smoke on orbits 85, 86, and 89 selected 121 frames, dropped one frame with no
+  valid support, and completed end to end.
 - Upstream review found `wic_corrected`, `dwic_corrected`,
   `si13_corrected`, `dsi13_corrected`, `si12`, and `dsi12`, each in counts on
   `(time, 46, 46)`. The earlier synthetic contract fixture used SI12 and
@@ -85,6 +89,13 @@ A stratified 32-orbit value audit otherwise supports the implementation:
 7,011 of 7,960 frames had jointly valid cells, corrected WIC was nonnegative,
 uncertainties were nonnegative, and SI12 contained valid negative
 background-subtracted counts requiring the signed transform.
+
+The manual segment CSV contains 173 accepted orbit intervals; 157 are present
+in the copied Product-2 corpus. They map to 10,680 frames, of which 9,728 have
+valid weighted support. Sixteen accepted orbits have no copied Product-2 file.
+The selected core arrays are estimated at about 0.7 GiB before transformed
+training arrays and model state, making the annotated workflow practical on a
+normal workstation.
 
 Run a representative real-orbit baseline and inspect:
 

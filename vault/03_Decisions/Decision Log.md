@@ -221,3 +221,16 @@ VAE baseline. Product-2 `wic_corrected` has already undergone SI12-based proton
 correction using Hardy energy, so icAnalyzer must still never repeat proton
 correction. Require `proton_energy_model="hardy"` in the ingestion contract and
 carry that provenance into saved run artifacts.
+
+## 2026-09-28 - Apply manual intervals through WIC source identity
+
+**Implementation decision:** Reuse the manually accepted inclusive intervals
+from `data/good_orbit_segments.csv`, but do not assume regenerated Product-2
+array positions equal historical frame numbers. Map `good_start:good_stop`
+through each file's `wic_source_index` and read only those positions.
+
+Manual selection is enabled by default in the canonical runner. `--all-frames`
+is an explicit diagnostic override, not the production training default. This
+reduces the copied corpus from 358,439 frames to 10,680 mapped frames before
+materialization and preserves source-frame identity when upstream gating has
+removed frames.

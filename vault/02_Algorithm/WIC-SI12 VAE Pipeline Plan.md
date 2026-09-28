@@ -42,6 +42,13 @@ samples in uneven batches, propagated conductance, and completed a joint
 sparse update. The generated variance was strongly collapsed, as expected for
 this minimal run, so the result validates execution rather than model skill.
 
+The archive's `good_orbit_segments.csv` selection is now part of the canonical
+runner. Inclusive manual intervals are mapped through each file's
+`wic_source_index` before large variables are read. In the copied corpus, 157
+of 173 annotated orbits are present, yielding 10,680 selected frames and 9,728
+frames with valid weighted support. A three-orbit annotation smoke selected
+the exact intended source bounds and completed end to end.
+
 Still open:
 
 - The Product-2 changes have landed as icBuilder `38b5afb` and icReader
