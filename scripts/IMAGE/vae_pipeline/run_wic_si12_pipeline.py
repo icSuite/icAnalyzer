@@ -204,6 +204,7 @@ def run(arguments):
         "products": train_product["metadata"],
         "upstream_wic_is_proton_corrected": True,
         "proton_correction_reapplied": False,
+        "upstream_proton_energy_model": "hardy",
         "electron_energy_keV": 2.0,
     }
     configuration = {

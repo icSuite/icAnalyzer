@@ -35,7 +35,7 @@ def _orbit_from_path(path):
     return int(match.group(1)) if match else None
 
 
-def _require_product_contract(product, proton_energy_keV):
+def _require_product_contract(product):
     if product.product_type != "precipitation_cs":
         raise ValueError(
             f"expected precipitation_cs, got {product.product_type!r}"
@@ -65,18 +65,14 @@ def _require_product_contract(product, proton_energy_keV):
         raise ValueError(
             f"proton_flux_source is {product.proton_flux_source!r}; expected 'SI12'"
         )
-    if product.proton_energy_model != "constant":
+    if product.proton_energy_model != "hardy":
         raise ValueError(
-            "the fixed-energy baseline requires proton_energy_model='constant'"
-        )
-    if not np.isclose(product.proton_energy_constant, proton_energy_keV):
-        raise ValueError(
-            f"proton_energy_constant is {product.proton_energy_constant}; "
-            f"expected {proton_energy_keV} keV"
+            "the accepted Product-2 baseline requires "
+            "proton_energy_model='hardy'"
         )
 
 
-def load_precipitation_cs(filename, proton_energy_keV=2.0, product_loader=None):
+def load_precipitation_cs(filename, product_loader=None):
     """Materialize the VAE fields from one Product-2 Cubed-Sphere file.
 
     Parameters
@@ -84,9 +80,6 @@ def load_precipitation_cs(filename, proton_energy_keV=2.0, product_loader=None):
     filename : path-like
         A schema-1 ``precipitation_cs`` file containing the coordinated camera
         fields.
-    proton_energy_keV : float
-        Required upstream constant-energy provenance.  This does not trigger a
-        proton correction in icAnalyzer.
     product_loader : callable, optional
         Dependency-injection hook used by focused tests.  The default is
         ``icreader.load``.
@@ -97,7 +90,7 @@ def load_precipitation_cs(filename, proton_energy_keV=2.0, product_loader=None):
 
     filename = Path(filename)
     with product_loader(filename) as product:
-        _require_product_contract(product, proton_energy_keV)
+        _require_product_contract(product)
 
         arrays = {
             name: np.asarray(product.read(name), dtype=np.float32)
@@ -119,9 +112,14 @@ def load_precipitation_cs(filename, proton_energy_keV=2.0, product_loader=None):
             "software_version": str(product.software_version),
             "proton_flux_source": str(product.proton_flux_source),
             "proton_energy_model": str(product.proton_energy_model),
-            "proton_energy_constant": float(product.proton_energy_constant),
-            "proton_energy_uncertainty_constant": float(
-                product.attrs.get("proton_energy_uncertainty_constant", np.nan)
+            "proton_energy_uncertainty_method": str(
+                product.attrs.get("proton_energy_uncertainty_method", "unknown")
+            ),
+            "proton_energy_coordinate_note": str(
+                product.attrs.get("proton_energy_coordinate_note", "unknown")
+            ),
+            "proton_operation_order": str(
+                product.attrs.get("proton_operation_order", "unknown")
             ),
             "count_source": str(product.attrs.get("count_source", "unknown")),
             "spatial_smoothing_kernel": str(
@@ -195,11 +193,11 @@ def load_precipitation_cs(filename, proton_energy_keV=2.0, product_loader=None):
     }
 
 
-def load_precipitation_cs_files(filenames, proton_energy_keV=2.0):
+def load_precipitation_cs_files(filenames):
     """Load and concatenate several orbit files with one verified grid."""
 
     products = [
-        load_precipitation_cs(path, proton_energy_keV=proton_energy_keV)
+        load_precipitation_cs(path)
         for path in filenames
     ]
     if not products:

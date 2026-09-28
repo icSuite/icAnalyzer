@@ -21,7 +21,7 @@ Implemented on `vae/wic-si12` at `5f6de08`:
 - reloadable run artifacts containing model, transform, histories, held-out
   metrics, split files, coordinates, provenance, optimizer settings, and seed;
 - reproducible paired latent sampling and low-rank physical-count covariance;
-- a local fixed-2-keV compatibility adapter that never repeats proton
+- a local fixed-2-keV electron-propagation adapter that never repeats proton
   correction and preserves ensemble dimensions;
 - joint Hall/Pedersen anomaly factors and ensemble-space sparse reconstruction
   with Hall-only, Pedersen-only, or joint observation selection; and
@@ -38,12 +38,9 @@ scientific interpretation.
 Still open:
 
 - The Product-2 changes have landed as icBuilder `38b5afb` and icReader
-  `3a3b73f`. A copied production corpus now contains 1,378 files and 358,439
-  frames, but every file declares `proton_energy_model="hardy"` and none has a
-  constant proton-energy attribute. This conflicts with the confirmed 2 keV
-  proton baseline and is correctly rejected by the strict loader. Do not train
-  until the user chooses either a constant-2-keV regeneration or an explicit
-  revision of the scientific baseline.
+  `3a3b73f`. A copied production corpus contains 1,378 files and 358,439
+  frames. The user confirmed on 2026-09-28 that its Hardy proton-energy model
+  is intentional. The strict loader now requires that provenance.
 - The fixed-energy adapter must currently use private `icphysics.image.fWm`
   for the WIC response. No icPhysics code was changed. A public,
   grid-independent batched boundary remains a separately approved upstream
@@ -54,16 +51,14 @@ Still open:
   conversion remains blocked until the source cubed-sphere coordinates can be
   recovered.
 - Prior-sample calibration, covariance convergence, observation geometries,
-  independent-channel baselines, and publication-scale held-out results still
-  require a corpus whose proton-energy provenance matches the selected
-  baseline.
+  independent-channel baselines, and publication-scale held-out results remain
+  to be run on the copied corpus.
 
 Production-corpus audit on 2026-09-28: all 1,378 headers had the six VAE
 fields with the expected dimensions and count units. A stratified 32-orbit
 sample contained 7,960 frames, of which 7,011 had at least one jointly valid
 cell. Corrected WIC was nonnegative; SI12 legitimately included negative
-background-subtracted counts, supporting the signed transform. These checks do
-not override the proton-energy provenance mismatch.
+background-subtracted counts, supporting the signed transform.
 
 ## Objective
 
@@ -82,11 +77,14 @@ after that baseline is verified.
 
 ## Confirmed baseline assumptions
 
-- Mean proton energy is spatially and temporally constant at 2 keV.
-- Mean electron energy is spatially and temporally constant at 2 keV.
+- Upstream proton correction uses the Hardy proton-energy model recorded in
+  Product 2.
+- Mean electron energy is spatially and temporally constant at 2 keV during
+  downstream propagation.
 - Proton and electron energies are not sampled in the first ensemble. The
-  resulting covariance therefore measures variation learned from paired
-  WIC/SI12 fields under fixed energy assumptions.
+  resulting covariance measures variation learned from paired corrected-WIC/
+  SI12 fields after deterministic Hardy proton correction and under fixed
+  downstream electron energy.
 - Detector measurement uncertainty remains separate from latent geophysical
   variability. Use it in data weighting and reconstruction observation error;
   do not silently add it to the learned prior covariance.
@@ -94,9 +92,10 @@ after that baseline is verified.
 - The first sparse reconstruction uses the propagated conductance ensemble,
   not latent optimization through the VAE.
 
-The 2 keV assumptions are deliberate baseline simplifications, not claims that
-the real precipitation energies are constant. Energy models and energy
-uncertainty can be introduced later as controlled sensitivity experiments.
+The fixed 2 keV electron assumption is a deliberate baseline simplification,
+not a claim that electron precipitation energy is constant. Electron-energy
+models and physical-model uncertainty can be introduced later as controlled
+sensitivity experiments.
 
 ## Repository and API boundaries
 
@@ -142,8 +141,8 @@ but it is not a baseline VAE channel.
 
 **Critical invariant:** `wic_corrected` has already undergone SI12-based proton
 correction in icBuilder. icAnalyzer must never call `proton_correct_images()`
-on this field or subtract a proton contribution again. The 2 keV proton-energy
-assumption belongs to the upstream Product-2 provenance.
+on this field or subtract a proton contribution again. The Hardy proton-energy
+model belongs to the upstream Product-2 provenance.
 
 ## icPhysics compatibility gate
 
@@ -237,7 +236,7 @@ as the new canonical implementation.
 4. Verify constant-field reproduction, area-integral behavior, coverage, and
    propagated detector variance on representative frames.
 5. Record exact upstream commits and processing configuration in every file,
-   including the 2 keV proton-energy assumption used for correction.
+   including the Hardy proton-energy model used for correction.
 6. Convert the existing annotation geometry non-destructively from 36x36
    index coordinates to Cubed-Sphere coordinates, then rasterize on 46x46.
 

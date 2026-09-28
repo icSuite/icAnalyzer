@@ -23,8 +23,7 @@ class FakeProduct:
     schema_version = 1
     software_version = "test"
     proton_flux_source = "SI12"
-    proton_energy_model = "constant"
-    proton_energy_constant = 2.0
+    proton_energy_model = "hardy"
     shape = (2, 46, 46)
 
     def __init__(self):
@@ -78,7 +77,7 @@ def test_loads_strong_product2_contract_and_preserves_corrected_wic():
     np.testing.assert_allclose(loaded["values"][:, 0], 477.5)
     np.testing.assert_allclose(loaded["values"][:, 1], 12.0)
     assert loaded["metadata"]["orbit"] == 42
-    assert loaded["metadata"]["proton_energy_constant"] == 2.0
+    assert loaded["metadata"]["proton_energy_model"] == "hardy"
     assert loaded["valid"].all()
     assert loaded["grid"]["mlat"].shape == (46, 46)
     np.testing.assert_array_equal(loaded["source_indices"]["wic"], [0, 1])
@@ -112,15 +111,16 @@ def test_rejects_old_precipitation_cs_without_si12_pair():
         raise AssertionError("old Product-2 contract was accepted")
 
 
-def test_requires_constant_2kev_upstream_proton_energy():
+def test_requires_hardy_upstream_proton_energy():
     product = FakeProduct()
-    product.proton_energy_model = "hardy"
+    product.proton_energy_model = "constant"
+    product.proton_energy_constant = 2.0
     try:
         load_precipitation_cs("or_0042.nc", product_loader=lambda _path: product)
     except ValueError as error:
-        assert "proton_energy_model='constant'" in str(error)
+        assert "proton_energy_model='hardy'" in str(error)
     else:
-        raise AssertionError("nonconstant proton energy was accepted")
+        raise AssertionError("non-Hardy proton energy was accepted")
 
 
 def test_channel_transform_round_trip_and_variance():

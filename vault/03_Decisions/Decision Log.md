@@ -165,6 +165,9 @@ them adds unnecessary complexity.
 
 ## 2026-09-25 - Start WIC/SI12 propagation with fixed 2 keV energies
 
+Superseded for proton energy by the 2026-09-28 Hardy decision below. Fixed
+2 keV electron propagation remains active.
+
 **Decision confirmed by the user:** The first WIC/SI12 VAE propagation
 baseline assumes a spatially and temporally constant proton mean energy of
 2 keV and electron mean energy of 2 keV.
@@ -184,8 +187,8 @@ carried into `precipitation_cs`, which icAnalyzer will ingest through
 icReader. Do not create a separate `fuv_cs` product for this workflow.
 
 The WIC field is already proton corrected upstream. icAnalyzer must not apply
-proton correction again. The fixed 2 keV proton-energy assumption belongs to
-the upstream correction and its product provenance; downstream sample
+proton correction again. The selected proton-energy model belongs to the
+upstream correction and its product provenance; downstream sample
 propagation starts from corrected WIC and uses the fixed 2 keV electron energy
 to obtain electron energy flux and conductance.
 
@@ -206,3 +209,15 @@ reviewed change requiring upstream parity evidence and approval.
 Store covariance as an ensemble mean plus normalized anomaly factor by
 default. This representation is exactly sufficient for the implemented sparse
 Gaussian update and avoids materializing a dense 4232-by-4232 matrix.
+
+## 2026-09-28 - Use Hardy for upstream proton correction
+
+**Decision confirmed by the user:** The production Product-2 corpus is
+supposed to use the Hardy proton-energy model. This supersedes the earlier
+constant-2-keV proton assumption.
+
+Keep the downstream electron-energy propagation fixed at 2 keV for the first
+VAE baseline. Product-2 `wic_corrected` has already undergone SI12-based proton
+correction using Hardy energy, so icAnalyzer must still never repeat proton
+correction. Require `proton_energy_model="hardy"` in the ingestion contract and
+carry that provenance into saved run artifacts.
