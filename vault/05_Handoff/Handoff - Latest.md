@@ -1,7 +1,7 @@
 # Handoff - Latest
 
-Last updated: 2026-09-25
-Repository snapshot: `vae/wic-si12` at `5f6de08`; `main` remains at `7c71591`
+Last updated: 2026-09-28
+Repository snapshot: `vae/wic-si12` at `9dbab1e`; `main` remains at `7c71591`
 
 ## Outcome
 
@@ -42,7 +42,8 @@ Both proton and electron mean energies are fixed at 2 keV in this baseline.
 - Repeated CPU smoke metrics were identical at the same seed.
 - Upstream review found `wic_corrected`, `dwic_corrected`,
   `si13_corrected`, `dsi13_corrected`, `si12`, and `dsi12`, each in counts on
-  `(time, 46, 46)`, with SI12/constant-2-keV proton provenance.
+  `(time, 46, 46)`. The earlier synthetic contract fixture used SI12 and
+  constant-2-keV proton provenance; the copied production files do not.
 - Compatibility review found `hall()` and `ped()` already broadcast arbitrary
   leading dimensions and reproduced the frozen 2 keV reference fixture.
 
@@ -51,9 +52,8 @@ trained scientific result.
 
 ## Important boundaries
 
-- icBuilder and icReader contract changes are still uncommitted in worktrees
-  based at `3f6e460` and `549112a`; do not edit, commit, or overwrite them from
-  icAnalyzer.
+- The contract changes are committed as icBuilder `38b5afb` and icReader
+  `3a3b73f`. The copied files report producer version `38b5afb+worktree`.
 - No icPhysics code was changed. The local adapter freezes the current
   `fWm(2.0) == 477.5` response, then uses public `hall()` and `ped()`. Because
   `fWm` is private, the requested public grid-independent batched propagation
@@ -66,11 +66,28 @@ trained scientific result.
 - Generated corrected WIC is nonnegative by decoder construction. The workflow
   still rejects any negative physical sample rather than clipping silently.
 
-## Open blockers and next action
+## Production-corpus audit and next decision
 
-No production corpus with the complete contract is currently available under
-the local IMAGE data path. Once upstream commits and regenerated files are
-stable, run a representative real-orbit baseline and inspect:
+The copied directory now contains 1,378 `precipitation_cs` files, 358,439
+frames, and about 31 GiB. All files passed a header audit for product type,
+schema, grid, dimensions, count units, and the six coordinated camera fields.
+
+Training has deliberately not started. All 1,378 files declare
+`proton_energy_model="hardy"` and lack `proton_energy_constant`; the confirmed
+baseline requires upstream constant 2 keV proton correction. The strict loader
+therefore raises the expected contract error. The user must choose between:
+
+1. regenerating/copying a constant-2-keV Product-2 corpus; or
+2. explicitly revising the baseline to accept Hardy-corrected WIC while
+   retaining fixed 2 keV electron propagation downstream.
+
+A stratified 32-orbit value audit otherwise supports the implementation:
+7,011 of 7,960 frames had jointly valid cells, corrected WIC was nonnegative,
+uncertainties were nonnegative, and SI12 contained valid negative
+background-subtracted counts requiring the signed transform.
+
+After resolving proton provenance, run a representative real-orbit baseline
+and inspect:
 
 1. split counts, finite support, and WIC/SI12 distributions;
 2. tiny-subset overfit and held-out reconstruction;
@@ -86,9 +103,9 @@ non-destructive Cubed-Sphere converter; do not rescale pixel indices.
 ## Portfolio impact
 
 - Central update needed: Yes
-- Changes: The WIC/SI12 baseline is now implemented on a dedicated branch and
-  has passed a live-contract synthetic smoke. Scientific training remains
-  blocked on stable upstream commits and regenerated production files. A
+- Changes: The production corpus is now present and structurally valid, but it
+  uses Hardy rather than the confirmed constant-2-keV proton model. Scientific
+  training is blocked on that explicit baseline decision. A
   public icPhysics propagation boundary and coordinate-based annotation
   conversion remain explicit follow-up decisions.
 - Priority/deadline: unchanged. The December 2026 paper target remains the

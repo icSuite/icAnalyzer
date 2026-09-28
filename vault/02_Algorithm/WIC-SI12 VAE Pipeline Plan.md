@@ -37,10 +37,13 @@ scientific interpretation.
 
 Still open:
 
-- The required icBuilder and icReader Product-2 changes are present only as
-  uncommitted upstream worktree changes (`3f6e460` and `549112a` are their
-  current base commits). A production icAnalyzer run should wait for stable
-  upstream commits and regenerated orbit files.
+- The Product-2 changes have landed as icBuilder `38b5afb` and icReader
+  `3a3b73f`. A copied production corpus now contains 1,378 files and 358,439
+  frames, but every file declares `proton_energy_model="hardy"` and none has a
+  constant proton-energy attribute. This conflicts with the confirmed 2 keV
+  proton baseline and is correctly rejected by the strict loader. Do not train
+  until the user chooses either a constant-2-keV regeneration or an explicit
+  revision of the scientific baseline.
 - The fixed-energy adapter must currently use private `icphysics.image.fWm`
   for the WIC response. No icPhysics code was changed. A public,
   grid-independent batched boundary remains a separately approved upstream
@@ -52,7 +55,15 @@ Still open:
   recovered.
 - Prior-sample calibration, covariance convergence, observation geometries,
   independent-channel baselines, and publication-scale held-out results still
-  require the regenerated corpus.
+  require a corpus whose proton-energy provenance matches the selected
+  baseline.
+
+Production-corpus audit on 2026-09-28: all 1,378 headers had the six VAE
+fields with the expected dimensions and count units. A stratified 32-orbit
+sample contained 7,960 frames, of which 7,011 had at least one jointly valid
+cell. Corrected WIC was nonnegative; SI12 legitimately included negative
+background-subtracted counts, supporting the signed transform. These checks do
+not override the proton-energy provenance mismatch.
 
 ## Objective
 

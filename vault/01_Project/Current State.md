@@ -1,7 +1,7 @@
 # Current State
 
 Last reviewed: 2026-09-25
-Repository snapshot: `vae/wic-si12` at `5f6de08`; `main` remains at `7c71591`
+Repository snapshot: `vae/wic-si12` at `9dbab1e`; `main` remains at `7c71591`
 Worktree: clean before this memory checkpoint
 
 ## Current position
@@ -57,15 +57,21 @@ covariance.
 The smoke fixture is deliberately tiny and synthetic. Its numerical errors do
 not measure scientific skill.
 
-## Upstream state and blockers
+## Production corpus and blockers
 
-- The coordinated fields are verified in live uncommitted worktree changes in
-  icBuilder (`modular_pipeline`, base `3f6e460`) and icReader
-  (`modular_pipeline`, base `549112a`). Do not treat those hashes alone as the
-  finished interface commits. Another agent owns those worktrees.
-- No production `precipitation_cs` corpus with the complete six-field contract
-  was found locally. Full training and scientific validation must wait for the
-  regenerated files.
+- The coordinated product changes are committed as icBuilder `38b5afb` and
+  icReader `3a3b73f` on their `modular_pipeline` branches.
+- The copied corpus under `precipitation_cs/image_apex_130km_46x46_v1/IR_hardy`
+  contains 1,378 files, 358,439 frames, and about 31 GiB. All headers expose
+  the six required camera fields with the expected shape and count units.
+- Every file declares `proton_energy_model="hardy"`; none declares the
+  constant 2 keV proton energy required by the confirmed baseline. The strict
+  icAnalyzer loader rejects the corpus rather than silently changing the
+  experiment. Full training is blocked pending a user decision: regenerate at
+  constant 2 keV or explicitly revise the baseline to Hardy-corrected WIC.
+- In a stratified sample of 32 orbits, 7,011 of 7,960 frames had jointly valid
+  support. Corrected WIC was nonnegative. Roughly 17.5% of jointly valid SI12
+  cells were negative, confirming that a signed transform is necessary.
 - No icPhysics source was changed. Existing `hall()` and `ped()` broadcast over
   ensembles, but WIC response currently comes from private `fWm`. The desired
   public, grid-independent batched propagation boundary remains open and must
@@ -77,8 +83,8 @@ not measure scientific skill.
 
 ## Next actionable work
 
-1. Land stable icBuilder/icReader commits and regenerate representative
-   production `precipitation_cs` orbits.
+1. Resolve the proton-energy mismatch: regenerate Product 2 at constant 2 keV
+   or explicitly approve Hardy proton correction as a revised baseline.
 2. Run the canonical workflow on real orbit-separated data; inspect count
    distributions, missingness, fit, prior samples, and covariance convergence.
 3. Recover the legacy annotation source grid and implement the previously
