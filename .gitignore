@@ -6,4 +6,5 @@ __pycache__/
 
 # Local generated/reference material
 figures/ncso_new/
+figures/vae_runs/
 literature/*.pdf

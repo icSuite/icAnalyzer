@@ -15,6 +15,7 @@ def sample_decoded_ensemble(
     batch_size=256,
     device="cpu",
     seed=0,
+    return_latent=False,
 ):
     """Decode exactly ``n_samples`` paired corrected-WIC/SI12 fields."""
 
@@ -30,6 +31,7 @@ def sample_decoded_ensemble(
     model.eval()
 
     transformed_batches = []
+    latent_batches = []
     with torch.no_grad():
         for start in range(0, n_samples, batch_size):
             current_size = min(batch_size, n_samples - start)
@@ -39,13 +41,19 @@ def sample_decoded_ensemble(
                 generator=generator,
                 device=device,
             )
+            if return_latent:
+                latent_batches.append(latent.cpu())
             transformed_batches.append(model.decode(latent).cpu())
 
     transformed = torch.cat(transformed_batches, dim=0)
     physical = transform.inverse(transformed).numpy()
     if physical.shape[0] != n_samples:
         raise RuntimeError("latent sampler returned the wrong sample count")
-    return physical.astype(np.float32, copy=False)
+    physical = physical.astype(np.float32, copy=False)
+    if not return_latent:
+        return physical
+    latent = torch.cat(latent_batches, dim=0).numpy()
+    return physical, latent.astype(np.float32, copy=False)
 
 
 #%% Ensemble moments

@@ -197,3 +197,26 @@ dense 4232-by-4232 covariance need not be materialized for reconstruction.
 The propagated covariance represents latent field variability at fixed energy;
 detector uncertainty remains available for weighting and observation-error
 models but is not silently injected into the latent ensemble.
+
+## Visualizing a completed run
+
+Generate the legacy-style model and covariance diagnostics without retraining:
+
+```bash
+python scripts/IMAGE/vae_pipeline/visualize_wic_si12_run.py \
+  outputs/wic_si12_baseline
+```
+
+By default, figures and `diagnostics.json` are written under the run's
+`figures/` directory. Use `--output` to write elsewhere, `--examples` to
+change the sample-mosaic size, or `--anchor ROW,COLUMN` to select the common
+correlation probe. The default probe is the maximum-variance corrected-WIC
+pixel for FUV and Hall pixel for conductance.
+
+The figures cover training history, decoded FUV and propagated-conductance
+samples, ensemble mean and standard deviation, joint-channel correlation
+maps, leading covariance modes, covariance spectra, and the sparse-update
+prior and posterior. Runs produced by the current runner also store the
+sampled latent vectors and sparse-validation truth and observations, enabling
+latent-draw and truth/error reconstruction figures. Older compatible runs
+remain visualizable but cannot recover values that were not saved originally.

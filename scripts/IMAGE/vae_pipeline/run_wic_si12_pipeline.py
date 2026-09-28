@@ -134,6 +134,12 @@ def sparse_validation(
         observed,
         observation_error=float(error_std)**2,
     )
+    reconstruction.update({
+        "truth": truth_state,
+        "observation_indices": selected,
+        "observation_values": observed,
+        "observation_error_variance": float(error_std)**2,
+    })
 
     finite = np.isfinite(truth_state) & np.isfinite(reconstruction["mean"])
     rmse = np.sqrt(np.mean((truth_state[finite] - reconstruction["mean"][finite])**2))
@@ -229,6 +235,11 @@ def run(arguments):
         "device": device,
         "optimizer": "Adam",
         "beta_schedule": "constant",
+        "selected_epoch": (
+            model.best_validation_epoch
+            if model.best_validation_epoch is not None else arguments.epochs
+        ),
+        "selected_validation_total": model.best_validation_total,
         "frame_selection": {
             "train": frame_selection(train_loader),
             "validation": frame_selection(validation_loader),
@@ -249,13 +260,14 @@ def run(arguments):
         output / "wic_si12_vae.pt", device=device
     )
 
-    decoded = sample_decoded_ensemble(
+    decoded, latent_samples = sample_decoded_ensemble(
         model,
         transform,
         n_samples=arguments.samples,
         batch_size=arguments.sample_batch_size,
         device=device,
         seed=arguments.seed + 1,
+        return_latent=True,
     )
     if np.any(decoded[:, 0] < 0):
         fraction = float(np.mean(decoded[:, 0] < 0))
@@ -290,12 +302,21 @@ def run(arguments):
 
     np.savez_compressed(
         output / "ensemble_products.npz",
+        latent_samples=latent_samples,
         fuv_mean=fuv_statistics["mean"],
         fuv_anomaly_factor=fuv_statistics["anomaly_factor"],
         conductance_mean=conductance_statistics["mean"],
         conductance_anomaly_factor=conductance_statistics["anomaly_factor"],
+        reconstruction_truth=reconstruction["truth"],
+        reconstruction_prior_mean=conductance_statistics["mean"],
+        reconstruction_prior_standard_deviation=reconstruction[
+            "prior_standard_deviation"
+        ],
         reconstruction_mean=reconstruction["mean"],
         reconstruction_standard_deviation=reconstruction["standard_deviation"],
+        observation_indices=reconstruction["observation_indices"],
+        observation_values=reconstruction["observation_values"],
+        observation_error_variance=reconstruction["observation_error_variance"],
     )
     (output / "summary.json").write_text(
         json.dumps(
@@ -311,6 +332,13 @@ def run(arguments):
                 "propagation_order": propagated["propagation_order"],
                 "wic_response_counts_per_mw_m2": propagated["wic_response"],
                 "sparse_validation": metrics,
+                "sparse_truth_frame": {
+                    "orbit": int(comparison_product["orbit"][truth_index]),
+                    "time": str(comparison_product["time"][truth_index]),
+                    "wic_source_index": int(
+                        comparison_product["source_indices"]["wic"][truth_index]
+                    ),
+                },
             },
             indent=2,
         ) + "\n"

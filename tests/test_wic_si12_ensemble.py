@@ -14,10 +14,11 @@ def test_prior_sampling_preserves_pairing_and_nonnegative_wic():
     transform = ChannelTransform(scale=[100, 20], center=[0.5, 0], spread=[2, 1])
     floor = float(-transform.center[0] / transform.spread[0])
     model = WICSI12VAE(latent_dim=2, wic_floor_transformed=floor)
-    samples = sample_decoded_ensemble(
-        model, transform, n_samples=5, batch_size=2, seed=4
+    samples, latent = sample_decoded_ensemble(
+        model, transform, n_samples=5, batch_size=2, seed=4, return_latent=True
     )
     assert samples.shape == (5, 2, 46, 46)
+    assert latent.shape == (5, 2)
     assert np.all(samples[:, 0] >= 0)
 
 

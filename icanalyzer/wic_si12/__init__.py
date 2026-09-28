@@ -10,6 +10,14 @@ from .data import (
     select_annotated_orbit_files,
     split_orbit_files,
 )
+from .diagnostics import (
+    best_validation_epoch,
+    covariance_spectrum,
+    joint_correlation_maps,
+    leading_covariance_modes,
+    maximum_variance_anchor,
+    reconstruct_ensemble,
+)
 from .ensemble import (
     ensemble_statistics,
     sample_decoded_ensemble,
@@ -22,12 +30,18 @@ __all__ = [
     "ChannelTransform",
     "WICSI12ArrayDataset",
     "WICSI12VAE",
+    "best_validation_epoch",
     "conductance_from_corrected_wic",
+    "covariance_spectrum",
     "ensemble_statistics",
     "fit_channel_transform",
     "load_good_orbit_intervals",
     "load_precipitation_cs",
     "load_precipitation_cs_files",
+    "joint_correlation_maps",
+    "leading_covariance_modes",
+    "maximum_variance_anchor",
+    "reconstruct_ensemble",
     "select_annotated_orbit_files",
     "sample_decoded_ensemble",
     "sparse_ensemble_reconstruction",

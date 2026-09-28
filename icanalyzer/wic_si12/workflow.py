@@ -84,6 +84,9 @@ def train_vae(
     model = model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     history = []
+    best_validation_total = np.inf
+    best_validation_epoch = None
+    best_state = None
 
     for epoch in range(1, epochs + 1):
         train_metrics = _run_epoch(
@@ -99,7 +102,22 @@ def train_vae(
                 beta=beta,
                 training=False,
             )
+            validation_total = record["validation"]["total"]
+            if validation_total < best_validation_total:
+                best_validation_total = validation_total
+                best_validation_epoch = epoch
+                best_state = {
+                    name: value.detach().cpu().clone()
+                    for name, value in model.state_dict().items()
+                }
         history.append(record)
+
+    if best_state is not None:
+        model.load_state_dict(best_state)
+    model.best_validation_epoch = best_validation_epoch
+    model.best_validation_total = (
+        None if best_validation_epoch is None else float(best_validation_total)
+    )
     return model, history
 
 

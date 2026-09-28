@@ -2,6 +2,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
+import icanalyzer.wic_si12.workflow as workflow
 from icanalyzer.wic_si12.data import (
     ChannelTransform,
     WICSI12ArrayDataset,
@@ -71,6 +72,7 @@ def test_one_epoch_and_artifact_reload(tmp_path):
     )
     assert len(history) == 1
     assert np.isfinite(history[0]["train"]["total"])
+    assert model.best_validation_epoch is None
     evaluation = evaluate_vae(model, loader, beta=1e-4)
     assert np.isfinite(evaluation["total"])
 
@@ -90,3 +92,30 @@ def test_one_epoch_and_artifact_reload(tmp_path):
     assert metadata["artifact_type"] == "wic_si12_vae_run_v1"
     assert np.isfinite(metadata["evaluation"]["test"]["total"])
     assert reloaded_transform.to_dict() == transform.to_dict()
+
+
+def test_training_restores_lowest_validation_loss_checkpoint(monkeypatch):
+    model = torch.nn.Linear(1, 1, bias=False)
+    with torch.no_grad():
+        model.weight.zero_()
+
+    def fake_epoch(model, loader, optimizer, device, beta, training):
+        if training:
+            with torch.no_grad():
+                model.weight.add_(1.0)
+        value = float(model.weight.item())
+        total = value if value == 1.0 else value + 10.0
+        return {"total": total, "reconstruction": total, "kl": 0.0}
+
+    monkeypatch.setattr(workflow, "_run_epoch", fake_epoch)
+    model, history = train_vae(
+        model,
+        train_loader=[None],
+        validation_loader=[None],
+        epochs=2,
+    )
+
+    assert len(history) == 2
+    assert model.best_validation_epoch == 1
+    assert model.best_validation_total == 1.0
+    assert model.weight.item() == 1.0
