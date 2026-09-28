@@ -151,6 +151,12 @@ the workflow never repeats that correction. The accepted production contract
 uses the upstream Hardy proton-energy model; the separate downstream electron
 propagation uses fixed 2 keV energy.
 
+By default, the runner reads `data/good_orbit_segments.csv` and keeps only the
+manually accepted inclusive `good_start:good_stop` interval for each orbit.
+Those bounds are mapped through each Product-2 file's `wic_source_index` before
+the camera arrays are materialized. This preserves the archive workflow while
+remaining valid when regenerated products omit source frames.
+
 The pipeline splits whole orbit files, fits the channel transform using the
 training split only, trains a mask-aware two-channel VAE, samples paired
 corrected-WIC/SI12 fields, propagates corrected WIC to Hall and Pedersen at a
@@ -166,6 +172,16 @@ python scripts/IMAGE/vae_pipeline/run_wic_si12_pipeline.py \
   --samples 1000 \
   --observation-mode joint
 ```
+
+The current copied corpus contains 157 of the 173 manually accepted orbits.
+Their intervals map to 10,680 Product-2 frames, of which 9,728 have valid
+weighted support. The core selected input arrays are approximately 0.7 GiB,
+before transformed training arrays and model state, rather than the full 31
+GiB NetCDF corpus.
+
+Pass a different annotation CSV with `--segments`. `--all-frames` bypasses
+manual selection and is intended only for bounded diagnostics; using it on the
+complete corpus will require substantially more memory.
 
 Use `--observation-mode hall` or `--observation-mode pedersen` for the
 single-channel sparse-observation experiments. The output directory contains:

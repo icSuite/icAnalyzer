@@ -8,6 +8,7 @@ this package; that operation already happened in icBuilder Product 2.
 
 #%% Imports
 
+import csv
 from pathlib import Path
 import re
 
@@ -33,6 +34,83 @@ REQUIRED_CAMERA_FIELDS = (
 def _orbit_from_path(path):
     match = re.search(r"or_(\d+)", Path(path).name)
     return int(match.group(1)) if match else None
+
+
+def load_good_orbit_intervals(filename):
+    """Read inclusive manually accepted WIC-frame intervals from the CSV.
+
+    The historical annotation convention treats a blank good start as frame
+    zero and a blank or zero good stop as no accepted interval.
+    """
+
+    intervals = {}
+    with Path(filename).open(newline="", encoding="utf-8") as stream:
+        for line_number, row in enumerate(csv.reader(stream), start=1):
+            if not row or all(not value.strip() for value in row):
+                continue
+            if len(row) != 5:
+                raise ValueError(
+                    f"annotation row {line_number} has {len(row)} columns; expected 5"
+                )
+            try:
+                orbit = int(row[0])
+                start = int(float(row[3])) if row[3].strip() else 0
+                stop = int(float(row[4])) if row[4].strip() else None
+            except ValueError as error:
+                raise ValueError(
+                    f"annotation row {line_number} contains a nonnumeric value"
+                ) from error
+
+            if stop in (None, 0):
+                continue
+            if start < 0 or stop < start:
+                raise ValueError(
+                    f"annotation row {line_number} has invalid interval {start}:{stop}"
+                )
+            if orbit in intervals:
+                raise ValueError(f"orbit {orbit} occurs more than once in annotations")
+            intervals[orbit] = (start, stop)
+
+    if not intervals:
+        raise ValueError("annotation file contains no accepted orbit intervals")
+    return intervals
+
+
+def select_annotated_orbit_files(filenames, intervals):
+    """Return files whose orbit has one manually accepted interval."""
+
+    selected = []
+    for path in filenames:
+        orbit = _orbit_from_path(path)
+        if orbit in intervals:
+            selected.append(Path(path))
+    if not selected:
+        raise FileNotFoundError(
+            "none of the input files has a manually accepted orbit interval"
+        )
+    return selected
+
+
+def _frame_selection(product, wic_source_interval):
+    if wic_source_interval is None:
+        return slice(None), None
+
+    start, stop = (int(value) for value in wic_source_interval)
+    source_indices = np.asarray(product.source_indices["wic"])
+    positions = np.flatnonzero((source_indices >= start) & (source_indices <= stop))
+    if positions.size == 0:
+        raise ValueError(
+            f"no Product-2 frames map to annotated WIC interval {start}:{stop}"
+        )
+    if np.all(np.diff(positions) == 1):
+        selection = slice(int(positions[0]), int(positions[-1]) + 1)
+    else:
+        selection = positions
+    return selection, {
+        "wic_source_start": start,
+        "wic_source_stop": stop,
+        "selected_product_frames": int(positions.size),
+    }
 
 
 def _require_product_contract(product):
@@ -72,7 +150,11 @@ def _require_product_contract(product):
         )
 
 
-def load_precipitation_cs(filename, product_loader=None):
+def load_precipitation_cs(
+    filename,
+    product_loader=None,
+    wic_source_interval=None,
+):
     """Materialize the VAE fields from one Product-2 Cubed-Sphere file.
 
     Parameters
@@ -83,6 +165,10 @@ def load_precipitation_cs(filename, product_loader=None):
     product_loader : callable, optional
         Dependency-injection hook used by focused tests.  The default is
         ``icreader.load``.
+    wic_source_interval : pair of int, optional
+        Inclusive manually accepted WIC source-frame bounds. Product frames
+        are selected through ``wic_source_index`` before camera arrays are
+        materialized.
     """
 
     if product_loader is None:
@@ -91,23 +177,31 @@ def load_precipitation_cs(filename, product_loader=None):
     filename = Path(filename)
     with product_loader(filename) as product:
         _require_product_contract(product)
+        selection, annotation = _frame_selection(product, wic_source_interval)
 
         arrays = {
-            name: np.asarray(product.read(name), dtype=np.float32)
+            name: np.asarray(product.read(name, selection), dtype=np.float32)
             for name in REQUIRED_CAMERA_FIELDS
         }
-        method_valid = np.asarray(product.read("method_valid"), dtype=bool)
-        method_quality = np.asarray(
-            product.read("method_quality_weight"), dtype=np.float32
+        method_valid = np.asarray(
+            product.read("method_valid", selection), dtype=bool
         )
-        wic_coverage = np.asarray(product.read("wic_coverage"), dtype=np.float32)
-        si12_coverage = np.asarray(product.read("si12_coverage"), dtype=np.float32)
+        method_quality = np.asarray(
+            product.read("method_quality_weight", selection), dtype=np.float32
+        )
+        wic_coverage = np.asarray(
+            product.read("wic_coverage", selection), dtype=np.float32
+        )
+        si12_coverage = np.asarray(
+            product.read("si12_coverage", selection), dtype=np.float32
+        )
 
         metadata = {
             "filename": str(filename),
             "orbit": _orbit_from_path(filename),
             "grid_id": str(product.grid_id),
-            "shape": tuple(int(value) for value in product.shape),
+            "source_shape": tuple(int(value) for value in product.shape),
+            "shape": tuple(int(value) for value in method_valid.shape),
             "schema_version": int(product.schema_version),
             "software_version": str(product.software_version),
             "proton_flux_source": str(product.proton_flux_source),
@@ -131,22 +225,25 @@ def load_precipitation_cs(filename, product_loader=None):
             "source_fuv_detector_sha256": str(
                 product.attrs.get("source_fuv_detector_sha256", "")
             ),
+            "manual_frame_selection": annotation,
         }
-        times = np.asarray(product.time, dtype=object).copy()
+        times = np.asarray(product.time[selection], dtype=object).copy()
         grid = {
             "mlat": np.asarray(product.mlat, dtype=np.float64).copy(),
             "mlt": np.asarray(product.mlt, dtype=np.float64).copy(),
         }
         source_indices = {
-            sensor: np.asarray(product.source_indices[sensor]).copy()
+            sensor: np.asarray(product.source_indices[sensor][selection]).copy()
             for sensor in ("wic", "si12", "si13")
         }
         source_times = {
-            sensor: np.asarray(product.source_times[sensor], dtype=object).copy()
+            sensor: np.asarray(
+                product.source_times[sensor][selection], dtype=object
+            ).copy()
             for sensor in ("wic", "si12", "si13")
         }
         frame_quality = {
-            sensor: np.asarray(product.frame_quality[sensor]).copy()
+            sensor: np.asarray(product.frame_quality[sensor][selection]).copy()
             for sensor in ("wic", "si12", "si13")
         }
 
@@ -193,13 +290,21 @@ def load_precipitation_cs(filename, product_loader=None):
     }
 
 
-def load_precipitation_cs_files(filenames):
+def load_precipitation_cs_files(filenames, wic_source_intervals=None):
     """Load and concatenate several orbit files with one verified grid."""
 
-    products = [
-        load_precipitation_cs(path)
-        for path in filenames
-    ]
+    products = []
+    for path in filenames:
+        orbit = _orbit_from_path(path)
+        if wic_source_intervals is None:
+            interval = None
+        else:
+            if orbit not in wic_source_intervals:
+                raise ValueError(f"orbit {orbit} has no manual frame interval")
+            interval = wic_source_intervals[orbit]
+        products.append(
+            load_precipitation_cs(path, wic_source_interval=interval)
+        )
     if not products:
         raise ValueError("at least one precipitation_cs file is required")
 

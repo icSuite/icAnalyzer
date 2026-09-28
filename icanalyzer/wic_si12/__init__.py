@@ -4,8 +4,10 @@ from .data import (
     ChannelTransform,
     WICSI12ArrayDataset,
     fit_channel_transform,
+    load_good_orbit_intervals,
     load_precipitation_cs,
     load_precipitation_cs_files,
+    select_annotated_orbit_files,
     split_orbit_files,
 )
 from .ensemble import (
@@ -23,8 +25,10 @@ __all__ = [
     "conductance_from_corrected_wic",
     "ensemble_statistics",
     "fit_channel_transform",
+    "load_good_orbit_intervals",
     "load_precipitation_cs",
     "load_precipitation_cs_files",
+    "select_annotated_orbit_files",
     "sample_decoded_ensemble",
     "sparse_ensemble_reconstruction",
     "split_orbit_files",

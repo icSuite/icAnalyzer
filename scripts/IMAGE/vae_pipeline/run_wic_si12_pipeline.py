@@ -18,7 +18,9 @@ from torch.utils.data import DataLoader
 from icanalyzer.wic_si12.data import (
     WICSI12ArrayDataset,
     fit_channel_transform,
+    load_good_orbit_intervals,
     load_precipitation_cs_files,
+    select_annotated_orbit_files,
     split_orbit_files,
 )
 from icanalyzer.wic_si12.ensemble import (
@@ -55,8 +57,11 @@ def discover_files(inputs):
     return files
 
 
-def load_split(paths):
-    return load_precipitation_cs_files(paths) if paths else None
+def load_split(paths, intervals):
+    return (
+        load_precipitation_cs_files(paths, wic_source_intervals=intervals)
+        if paths else None
+    )
 
 
 def make_loader(product, transform, batch_size, shuffle):
@@ -148,15 +153,19 @@ def sparse_validation(
 
 def run(arguments):
     files = discover_files(arguments.inputs)
+    intervals = None
+    if not arguments.all_frames:
+        intervals = load_good_orbit_intervals(arguments.segments)
+        files = select_annotated_orbit_files(files, intervals)
     split = split_orbit_files(
         files,
         validation_fraction=arguments.validation_fraction,
         test_fraction=arguments.test_fraction,
         seed=arguments.seed,
     )
-    train_product = load_split(split["train"])
-    validation_product = load_split(split["validation"])
-    test_product = load_split(split["test"])
+    train_product = load_split(split["train"], intervals)
+    validation_product = load_split(split["validation"], intervals)
+    test_product = load_split(split["test"], intervals)
 
     transform = fit_channel_transform(
         train_product["values"], train_product["valid"]
@@ -206,6 +215,9 @@ def run(arguments):
         "proton_correction_reapplied": False,
         "upstream_proton_energy_model": "hardy",
         "electron_energy_keV": 2.0,
+        "manual_frame_intervals": (
+            None if intervals is None else str(Path(arguments.segments).resolve())
+        ),
     }
     configuration = {
         "epochs": arguments.epochs,
@@ -259,9 +271,16 @@ def run(arguments):
     conductance_samples = np.stack((propagated["H"], propagated["P"]), axis=1)
     conductance_statistics = ensemble_statistics(conductance_samples)
 
-    truth_index = 0
+    usable_truth = np.flatnonzero(
+        np.any(comparison_product["valid"][:, 0], axis=(1, 2))
+    )
+    if usable_truth.size == 0:
+        raise ValueError("comparison split has no valid corrected-WIC frame")
+    truth_index = int(usable_truth[0])
+    truth_wic = comparison_product["values"][truth_index, 0].copy()
+    truth_wic[~comparison_product["valid"][truth_index, 0]] = np.nan
     reconstruction, metrics = sparse_validation(
-        comparison_product["values"][truth_index, 0],
+        truth_wic,
         conductance_statistics,
         arguments.observations,
         arguments.observation_error_std,
@@ -303,6 +322,19 @@ def parse_arguments(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("inputs", nargs="+", help="orbit files, directories, or globs")
     parser.add_argument("--output", required=True)
+    parser.add_argument(
+        "--segments",
+        default=str(
+            Path(__file__).resolve().parents[3]
+            / "data" / "good_orbit_segments.csv"
+        ),
+        help="manual inclusive WIC-frame intervals used by default",
+    )
+    parser.add_argument(
+        "--all-frames",
+        action="store_true",
+        help="ignore manual orbit/frame selection (intended for diagnostics)",
+    )
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--latent-dim", type=int, default=32)

@@ -7,7 +7,9 @@ from icanalyzer.wic_si12.data import (
     ChannelTransform,
     REQUIRED_CAMERA_FIELDS,
     fit_channel_transform,
+    load_good_orbit_intervals,
     load_precipitation_cs,
+    select_annotated_orbit_files,
     split_orbit_files,
 )
 
@@ -54,8 +56,9 @@ class FakeProduct:
         for name in REQUIRED_CAMERA_FIELDS:
             setattr(self, name, FakeField())
 
-    def read(self, name):
-        return self.arrays[name]
+    def read(self, name, index=None):
+        values = self.arrays[name]
+        return values if index is None else values[index]
 
     def __enter__(self):
         return self
@@ -96,6 +99,45 @@ def test_invalid_product_cells_have_zero_quality():
 
     assert not loaded["valid"][:, :, 0, 0].any()
     np.testing.assert_array_equal(loaded["quality"][:, :, 0, 0], 0.0)
+
+
+def test_manual_intervals_select_wic_source_frames_before_loading():
+    product = FakeProduct()
+    product.source_indices = MappingProxyType({
+        "wic": np.array([10, 12]),
+        "si12": np.array([20, 22]),
+        "si13": np.array([30, 32]),
+    })
+
+    loaded = load_precipitation_cs(
+        "or_0042.nc",
+        product_loader=lambda _path: product,
+        wic_source_interval=(12, 15),
+    )
+
+    assert loaded["values"].shape == (1, 2, 46, 46)
+    assert loaded["source_indices"]["wic"].tolist() == [12]
+    assert loaded["metadata"]["source_shape"] == (2, 46, 46)
+    assert loaded["metadata"]["manual_frame_selection"] == {
+        "wic_source_start": 12,
+        "wic_source_stop": 15,
+        "selected_product_frames": 1,
+    }
+
+
+def test_loads_archive_segment_semantics_and_selects_orbit_files(tmp_path):
+    segments = tmp_path / "segments.csv"
+    segments.write_text(
+        "42,,,3,5\n43,,,,8\n44,,,,0\n45,,,,\n",
+        encoding="utf-8",
+    )
+    intervals = load_good_orbit_intervals(segments)
+    assert intervals == {42: (3, 5), 43: (0, 8)}
+
+    selected = select_annotated_orbit_files(
+        [tmp_path / "or_0042.nc", tmp_path / "or_0043.nc"], intervals
+    )
+    assert [path.name for path in selected] == ["or_0042.nc", "or_0043.nc"]
 
 
 def test_rejects_old_precipitation_cs_without_si12_pair():
