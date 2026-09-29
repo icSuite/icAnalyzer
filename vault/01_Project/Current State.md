@@ -1,7 +1,7 @@
 # Current State
 
-Last reviewed: 2026-09-28
-Repository snapshot: `vae/wic-si12` at `1504b1e`; `main` remains at `7c71591`
+Last reviewed: 2026-09-29
+Repository snapshot: `vae/wic-si12` at `52817c6`; `main` remains at `7c71591`
 Worktree: clean before this memory checkpoint
 
 ## Current position
@@ -115,6 +115,33 @@ these fields and generated twelve figures, including latent-draw and
 truth/error panels. Older runs remain visualizable, but missing latent draws
 and validation truth cannot be recovered after the fact.
 
+## Experimental SZA selection
+
+Commit `52817c6` adds the optional `--minimum-sza` input threshold while
+preserving the current CSV/source-index frame selection. The filter is
+inclusive and pixel-level: finite cells with `SZA >= threshold` remain
+eligible, lower or nonfinite-SZA cells become invalid with zero loss weight,
+and frames with no remaining weighted pixels are dropped. The unfiltered
+baseline remains the default when the option is omitted.
+
+For `--minimum-sza 105`, a full read-only corpus audit found that 6,701 of the
+10,680 CSV-selected frames retain weighted support. Across those selected
+frames, 11.8% of spatial grid cells remain. A three-orbit, two-epoch
+end-to-end smoke completed and recorded `105.0` in both data provenance and
+training configuration. This verifies mechanics, not model quality.
+
+The cleaner full-good-only experiment is recorded as deferred: completed JSON
+annotations provide about 1,378 fully good source frames across 34 orbits,
+without requiring conversion of the 36x36 partial-frame masks.
+
+The reason for that proposed comparison is concrete: among the 42 completed
+JSON annotations that overlap the old CSV selection, the CSV selects 1,286
+fully good, 2,822 partial, and 50 bad frames under the newer classification.
+The current VAE runner does not apply the JSON keyframe masks, so partial-frame
+bad regions remain eligible except where upstream validity and coverage happen
+to remove them. The SZA experiment intentionally leaves this selection method
+unchanged so its effect can be isolated.
+
 ## Production corpus and blockers
 
 - The coordinated product changes are committed as icBuilder `38b5afb` and
@@ -144,15 +171,17 @@ and validation truth cannot be recovered after the fact.
 
 ## Next actionable work
 
-1. Evaluate prior dispersion and sparse reconstruction across many held-out
+1. Run and compare the requested `SZA >= 105°` model against the original
+   unfiltered baseline before changing the selection policy further.
+2. Evaluate prior dispersion and sparse reconstruction across many held-out
    frames, seeds, and Hall-only/Pedersen-only/joint geometries.
-2. Choose an explicit positivity-preserving reconstruction state or method;
+3. Choose an explicit positivity-preserving reconstruction state or method;
    do not silently clip negative posterior conductance.
-3. Decide whether early stopping is useful now that the best validation state
+4. Decide whether early stopping is useful now that the best validation state
    is restored automatically.
-4. Recover the legacy annotation source grid and implement the previously
+5. Recover the legacy annotation source grid and implement the previously
    agreed non-destructive coordinate conversion before applying annotations.
-5. Decide separately whether to authorize a public icPhysics propagation API.
+6. Decide separately whether to authorize a public icPhysics propagation API.
 
 The December 2026 paper target remains the latest recorded publication target.
 The AGU 2026 abstract outcome, target journal, co-authors, and review standard

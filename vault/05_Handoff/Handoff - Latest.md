@@ -1,7 +1,7 @@
 # Handoff - Latest
 
-Last updated: 2026-09-28
-Repository snapshot: `vae/wic-si12` at `1504b1e`; `main` remains at `7c71591`
+Last updated: 2026-09-29
+Repository snapshot: `vae/wic-si12` at `52817c6`; `main` remains at `7c71591`
 
 ## Outcome
 
@@ -38,8 +38,19 @@ keV in this baseline.
 
 ## Evidence
 
+- SZA-filter commit: `52817c6 Add configurable SZA filtering to VAE input`.
+- `--minimum-sza 105` retains finite pixels at `SZA >= 105°`; 6,701 of
+  10,680 CSV-selected frames retain weighted support and 11.8% of spatial
+  cells remain over the selected corpus. A three-orbit end-to-end smoke
+  completed and preserved the threshold in configuration and provenance.
+- The current runner still does not apply `partial_image_annotations.json`
+  masks. In the 42 completed annotations overlapping the CSV selection, 2,872
+  of 4,158 selected frames are partial or bad under the newer classification.
+  A full-good-only baseline is recorded as a deferred comparison; the user
+  chose to isolate the SZA-filter effect first.
+- The focused suite now has 29 passing tests.
 - Diagnostics commit: `1504b1e Add WIC SI12 VAE diagnostics`.
-- Focused tests: 27 passed; 59 Python files parsed.
+- Syntax: 59 Python files parsed at the diagnostics checkpoint.
 - The existing 1,000-sample full run generated ten figures without a dense
   state covariance. Its leading four modes explain 55.1% of FUV variance and
   53.6% of conductance variance.
@@ -130,11 +141,13 @@ normal workstation.
 
 Next:
 
-1. measure prior-sample calibration and covariance convergence across seeds;
-2. evaluate many held-out fields and Hall-only, Pedersen-only, and joint
+1. run the requested `SZA >= 105°` experiment and compare its training,
+   sample, and covariance diagnostics with the original baseline;
+2. measure prior-sample calibration and covariance convergence across seeds;
+3. evaluate many held-out fields and Hall-only, Pedersen-only, and joint
    realistic sparse geometries;
-3. compare prior-mean and independent-channel baselines;
-4. implement a positivity-preserving reconstruction formulation without
+4. compare prior-mean and independent-channel baselines;
+5. implement a positivity-preserving reconstruction formulation without
    silent clipping.
 
 Annotation conversion is also open. The annotation JSON contains 53 orbit
