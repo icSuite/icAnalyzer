@@ -38,6 +38,12 @@ keV in this baseline.
 
 ## Evidence
 
+- Full SZA-support audit: across all 1,378 current files and 358,439 frames,
+  only 1,483 of 2,116 grid cells ever satisfy `SZA >= 105°`. Columns 33--45
+  have zero eligible targets; column 32 has only 2,047 cell-times. The current
+  decoder still emits all 46x46 cells and ensemble statistics retain them, so
+  the unsupported region is neural-network extrapolation rather than learned
+  local covariance.
 - Paired comparison commit: `c6bedbf Add paired legacy rerun comparison`.
   The legacy adapter uses Product-2 selection/SZA, exact common timestamps, and
   legacy combined weight `w`. The runner trains `current` or `legacy` on the
@@ -164,8 +170,10 @@ normal workstation.
 
 Next:
 
-1. run the full streaming paired input report and matched 20-epoch current and
-   legacy `SZA >= 105°` VAE runs with identical settings;
+1. choose a scientifically explicit nightside support/domain or revise the SZA
+   threshold; if retaining `SZA >= 105°`, exclude permanently unsupported
+   cells from ensemble statistics, physical propagation, visualization, and
+   reconstruction before full paired training;
 2. measure prior-sample calibration and covariance convergence across seeds;
 3. evaluate many held-out fields and Hall-only, Pedersen-only, and joint
    realistic sparse geometries;
@@ -180,10 +188,12 @@ non-destructive Cubed-Sphere converter; do not rescale pixel indices.
 
 ## Portfolio impact
 
-- Central update needed: No
-- Changes: A controlled legacy/rerun comparison is now executable and
-  verified on one real orbit. This is a technical capability checkpoint; no
-  project priority, deadline, or claimed scientific result changed. The
+- Central update needed: Yes
+- Changes: The controlled legacy/rerun comparison is executable, but the full
+  SZA-only audit shows that columns 33--45 have no training targets while the
+  current VAE and covariance path still emits and uses them. A supported-domain
+  decision and implementation must precede scientific interpretation or full
+  paired SZA-only training. The
   public icPhysics propagation boundary and coordinate-based annotation
   conversion remain explicit follow-up decisions.
 - Priority/deadline: unchanged. The December 2026 paper target remains the

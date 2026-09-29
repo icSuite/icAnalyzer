@@ -97,6 +97,14 @@ Still open:
   261,773 frames and is therefore a substantially larger training experiment
   than the manually selected baseline.
 
+  A later full-grid audit found that this is not a globally supported state:
+  1,483 of 2,116 locations are ever eligible, columns 33--45 are never eligible,
+  and column 32 has only 2,047 eligible cell-times in 358,439 frames. The
+  current full-grid decoder emits finite values there through shared learned
+  parameters, but no local target constrains them. Do not use those outputs in
+  covariance or propagation. Choose an explicit supported-domain state or
+  revise the SZA selection before the full paired VAE experiment.
+
 - The Product-2 changes have landed as icBuilder `38b5afb` and icReader
   `3a3b73f`. A copied production corpus contains 1,378 files and 358,439
   frames. The user confirmed on 2026-09-28 that its Hardy proton-energy model

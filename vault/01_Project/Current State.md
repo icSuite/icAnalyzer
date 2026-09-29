@@ -141,6 +141,16 @@ with no qualifying frame. This experiment is therefore far larger than the
 CSV-selected run even though its pixel support is sparse; training time and
 memory should be monitored during the first full attempt.
 
+A complete per-location audit on 2026-09-29 exposed a stronger limitation:
+only 1,483 of 2,116 grid locations have any `SZA >= 105°` target in the whole
+corpus. Columns 33 through 45 have zero eligible targets in all 358,439 frames;
+column 32 has only 2,047 eligible cell-times. The mask-aware loss gives these
+permanently unsupported outputs zero direct reconstruction gradient, but the
+decoder and prior sampler still emit full 46x46 fields. Current ensemble and
+conductance statistics also retain those outputs. They are structured neural-
+network extrapolation from shared parameters, not learned local distributions,
+and must not be interpreted as measured global covariance.
+
 The first full launch exposed an empty-index edge case in the 193 orbit files
 with no qualifying SZA frame: icReader returned `(0,1,1)` camera fields for an
 empty selection. Commit `9fd9957` fixes this by skipping those files before
@@ -216,9 +226,11 @@ also changed.
 
 ## Next actionable work
 
-1. Run the full streaming paired input report, then matched 20-epoch current
-   and legacy VAE runs with `SZA >= 105°`, `--no-csv-selection`, and identical
-   seeds/model settings.
+1. Before running the full paired VAEs, decide whether the scientific state is
+   the explicitly supported nightside domain or whether the SZA threshold must
+   change. Mask permanently unsupported decoder output out of sampling,
+   propagation, covariance, visualization, and reconstruction if the
+   nightside-only formulation is retained.
 2. Evaluate prior dispersion and sparse reconstruction across many held-out
    frames, seeds, and Hall-only/Pedersen-only/joint geometries.
 3. Choose an explicit positivity-preserving reconstruction state or method;
