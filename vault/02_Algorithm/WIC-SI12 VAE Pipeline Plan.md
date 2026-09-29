@@ -72,6 +72,13 @@ an optional efficiency improvement rather than a correctness blocker.
 
 Still open:
 
+- Deferred clean-selection experiment proposed on 2026-09-29: use only the
+  `full_good_start:full_good_stop` ranges from completed
+  `partial_image_annotations.json` records. This avoids applying unreprojected
+  36x36 masks and would provide about 1,378 source frames across 34 orbits.
+  The user chose to test an exposed SZA threshold with the current CSV
+  selection first.
+
 - The Product-2 changes have landed as icBuilder `38b5afb` and icReader
   `3a3b73f`. A copied production corpus contains 1,378 files and 358,439
   frames. The user confirmed on 2026-09-28 that its Hardy proton-energy model

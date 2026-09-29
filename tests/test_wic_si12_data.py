@@ -19,6 +19,11 @@ class FakeField:
     units = "counts"
 
 
+class FakeSZAField:
+    dimensions = ("time", "dim1", "dim2")
+    units = "degrees"
+
+
 class FakeProduct:
     product_type = "precipitation_cs"
     grid_id = "image_apex_130km_46x46_v1"
@@ -35,6 +40,7 @@ class FakeProduct:
         self.arrays["method_quality_weight"] = image.copy()
         self.arrays["wic_coverage"] = image.copy()
         self.arrays["si12_coverage"] = image.copy()
+        self.arrays["sza"] = np.full(self.shape, 110.0, dtype=np.float32)
         self.time = np.array(["t0", "t1"], dtype=object)
         grid_coordinate = np.zeros((46, 46), dtype=float)
         self.mlat = grid_coordinate
@@ -55,6 +61,7 @@ class FakeProduct:
         }
         for name in REQUIRED_CAMERA_FIELDS:
             setattr(self, name, FakeField())
+        self.sza = FakeSZAField()
 
     def read(self, name, index=None):
         values = self.arrays[name]
@@ -123,6 +130,40 @@ def test_manual_intervals_select_wic_source_frames_before_loading():
         "wic_source_stop": 15,
         "selected_product_frames": 1,
     }
+
+
+def test_minimum_sza_masks_pixels_and_records_filter_provenance():
+    product = FakeProduct()
+    product.arrays["sza"][:, 0, 0] = 104.9
+    product.arrays["sza"][:, 0, 1] = 105.0
+
+    loaded = load_precipitation_cs(
+        "or_0042.nc",
+        product_loader=lambda _path: product,
+        minimum_sza=105.0,
+    )
+
+    assert not loaded["valid"][:, :, 0, 0].any()
+    assert loaded["valid"][:, :, 0, 1].all()
+    np.testing.assert_array_equal(loaded["quality"][:, :, 0, 0], 0.0)
+    assert loaded["metadata"]["minimum_sza_degrees"] == 105.0
+    assert loaded["metadata"]["sza_filter_retained_cells"] == 2 * 46 * 46 - 2
+    assert loaded["metadata"]["sza_filter_total_cells"] == 2 * 46 * 46
+
+
+def test_rejects_invalid_minimum_sza():
+    product = FakeProduct()
+    for minimum_sza in (-1, 181, np.nan):
+        try:
+            load_precipitation_cs(
+                "or_0042.nc",
+                product_loader=lambda _path: product,
+                minimum_sza=minimum_sza,
+            )
+        except ValueError as error:
+            assert "minimum_sza" in str(error)
+        else:
+            raise AssertionError(f"invalid SZA threshold {minimum_sza} was accepted")
 
 
 def test_loads_archive_segment_semantics_and_selects_orbit_files(tmp_path):

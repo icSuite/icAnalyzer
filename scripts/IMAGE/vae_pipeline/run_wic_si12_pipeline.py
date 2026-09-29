@@ -57,9 +57,13 @@ def discover_files(inputs):
     return files
 
 
-def load_split(paths, intervals):
+def load_split(paths, intervals, minimum_sza):
     return (
-        load_precipitation_cs_files(paths, wic_source_intervals=intervals)
+        load_precipitation_cs_files(
+            paths,
+            wic_source_intervals=intervals,
+            minimum_sza=minimum_sza,
+        )
         if paths else None
     )
 
@@ -169,9 +173,15 @@ def run(arguments):
         test_fraction=arguments.test_fraction,
         seed=arguments.seed,
     )
-    train_product = load_split(split["train"], intervals)
-    validation_product = load_split(split["validation"], intervals)
-    test_product = load_split(split["test"], intervals)
+    train_product = load_split(
+        split["train"], intervals, arguments.minimum_sza
+    )
+    validation_product = load_split(
+        split["validation"], intervals, arguments.minimum_sza
+    )
+    test_product = load_split(
+        split["test"], intervals, arguments.minimum_sza
+    )
 
     transform = fit_channel_transform(
         train_product["values"], train_product["valid"]
@@ -221,6 +231,7 @@ def run(arguments):
         "proton_correction_reapplied": False,
         "upstream_proton_energy_model": "hardy",
         "electron_energy_keV": 2.0,
+        "minimum_sza_degrees": arguments.minimum_sza,
         "manual_frame_intervals": (
             None if intervals is None else str(Path(arguments.segments).resolve())
         ),
@@ -235,6 +246,7 @@ def run(arguments):
         "device": device,
         "optimizer": "Adam",
         "beta_schedule": "constant",
+        "minimum_sza_degrees": arguments.minimum_sza,
         "selected_epoch": (
             model.best_validation_epoch
             if model.best_validation_epoch is not None else arguments.epochs
@@ -368,6 +380,14 @@ def parse_arguments(argv=None):
     parser.add_argument("--latent-dim", type=int, default=32)
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--beta", type=float, default=1e-3)
+    parser.add_argument(
+        "--minimum-sza",
+        type=float,
+        help=(
+            "retain only pixels at or above this solar zenith angle in degrees; "
+            "for example, --minimum-sza 105"
+        ),
+    )
     parser.add_argument("--validation-fraction", type=float, default=0.15)
     parser.add_argument("--test-fraction", type=float, default=0.15)
     parser.add_argument("--samples", type=int, default=1000)

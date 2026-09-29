@@ -150,10 +150,33 @@ def _require_product_contract(product):
         )
 
 
+def _validated_minimum_sza(minimum_sza):
+    if minimum_sza is None:
+        return None
+    minimum_sza = float(minimum_sza)
+    if not np.isfinite(minimum_sza) or not 0.0 <= minimum_sza <= 180.0:
+        raise ValueError("minimum_sza must be finite and between 0 and 180 degrees")
+    return minimum_sza
+
+
+def _read_sza(product, selection):
+    if not hasattr(product, "sza"):
+        raise ValueError("precipitation_cs is missing the SZA field")
+    if product.sza.dimensions != EXPECTED_IMAGE_DIMENSIONS:
+        raise ValueError(
+            f"sza dimensions are {product.sza.dimensions}; "
+            f"expected {EXPECTED_IMAGE_DIMENSIONS}"
+        )
+    if product.sza.units != "degrees":
+        raise ValueError(f"sza units are {product.sza.units!r}; expected 'degrees'")
+    return np.asarray(product.read("sza", selection), dtype=np.float32)
+
+
 def load_precipitation_cs(
     filename,
     product_loader=None,
     wic_source_interval=None,
+    minimum_sza=None,
 ):
     """Materialize the VAE fields from one Product-2 Cubed-Sphere file.
 
@@ -169,8 +192,13 @@ def load_precipitation_cs(
         Inclusive manually accepted WIC source-frame bounds. Product frames
         are selected through ``wic_source_index`` before camera arrays are
         materialized.
+    minimum_sza : float, optional
+        Retain only grid cells whose solar zenith angle is at least this many
+        degrees. Frames with no remaining weighted cells are later removed by
+        ``WICSI12ArrayDataset``.
     """
 
+    minimum_sza = _validated_minimum_sza(minimum_sza)
     if product_loader is None:
         from icreader import load as product_loader
 
@@ -195,6 +223,7 @@ def load_precipitation_cs(
         si12_coverage = np.asarray(
             product.read("si12_coverage", selection), dtype=np.float32
         )
+        sza = _read_sza(product, selection) if minimum_sza is not None else None
 
         metadata = {
             "filename": str(filename),
@@ -226,6 +255,7 @@ def load_precipitation_cs(
                 product.attrs.get("source_fuv_detector_sha256", "")
             ),
             "manual_frame_selection": annotation,
+            "minimum_sza_degrees": minimum_sza,
         }
         times = np.asarray(product.time[selection], dtype=object).copy()
         grid = {
@@ -262,6 +292,12 @@ def load_precipitation_cs(
     )
     nonnegative_uncertainty = (dwic >= 0) & (dsi12 >= 0)
     base_valid = method_valid & common_finite & nonnegative_uncertainty
+    if minimum_sza is not None:
+        base_valid &= np.isfinite(sza) & (sza >= minimum_sza)
+        metadata["sza_filter_retained_cells"] = int(
+            np.count_nonzero(np.isfinite(sza) & (sza >= minimum_sza))
+        )
+        metadata["sza_filter_total_cells"] = int(sza.size)
 
     values = np.stack((wic, si12), axis=1)
     standard_deviation = np.stack((dwic, dsi12), axis=1)
@@ -290,7 +326,11 @@ def load_precipitation_cs(
     }
 
 
-def load_precipitation_cs_files(filenames, wic_source_intervals=None):
+def load_precipitation_cs_files(
+    filenames,
+    wic_source_intervals=None,
+    minimum_sza=None,
+):
     """Load and concatenate several orbit files with one verified grid."""
 
     products = []
@@ -303,7 +343,11 @@ def load_precipitation_cs_files(filenames, wic_source_intervals=None):
                 raise ValueError(f"orbit {orbit} has no manual frame interval")
             interval = wic_source_intervals[orbit]
         products.append(
-            load_precipitation_cs(path, wic_source_interval=interval)
+            load_precipitation_cs(
+                path,
+                wic_source_interval=interval,
+                minimum_sza=minimum_sza,
+            )
         )
     if not products:
         raise ValueError("at least one precipitation_cs file is required")

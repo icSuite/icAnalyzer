@@ -170,8 +170,16 @@ python scripts/IMAGE/vae_pipeline/run_wic_si12_pipeline.py \
   --output outputs/wic_si12_baseline \
   --epochs 20 \
   --samples 1000 \
+  --minimum-sza 105 \
   --observation-mode joint
 ```
+
+`--minimum-sza 105` applies an inclusive, per-pixel night-side filter after
+the existing CSV/source-index frame selection: cells with `SZA < 105°` or
+nonfinite SZA become invalid and receive zero training weight. A frame is
+dropped only when no valid positively weighted pixels remain after all
+filters. Omit the option to reproduce the original no-SZA-threshold baseline.
+The threshold is recorded in both model configuration and data provenance.
 
 The current copied corpus contains 157 of the 173 manually accepted orbits.
 Their intervals map to 10,680 Product-2 frames, of which 9,728 have valid
