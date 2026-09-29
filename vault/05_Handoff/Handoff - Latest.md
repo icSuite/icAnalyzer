@@ -1,7 +1,7 @@
 # Handoff - Latest
 
 Last updated: 2026-09-29
-Repository snapshot: `vae/wic-si12` at `6e8a3db`; `main` remains at `7c71591`
+Repository snapshot: `vae/wic-si12` at `9fd9957`; `main` remains at `7c71591`
 
 ## Outcome
 
@@ -38,6 +38,11 @@ keV in this baseline.
 
 ## Evidence
 
+- Empty-orbit fix: `9fd9957 Skip SZA-empty orbit files`. The first full launch
+  found that an empty indexed icReader camera read had shape `(0,1,1)` rather
+  than `(0,46,46)`. Such orbit files are now skipped before camera reads and
+  recorded by split in provenance. A real orbit-113 check, a six-orbit
+  end-to-end smoke containing that empty orbit, and all 31 tests passed.
 - SZA-only commit: `6e8a3db Support scalable SZA-only VAE selection`.
 - `--no-csv-selection --minimum-sza 105` bypasses the CSV while retaining
   technical validity checks. SZA-empty frames are now discarded before camera

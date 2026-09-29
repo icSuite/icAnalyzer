@@ -1,7 +1,7 @@
 # Current State
 
 Last reviewed: 2026-09-29
-Repository snapshot: `vae/wic-si12` at `6e8a3db`; `main` remains at `7c71591`
+Repository snapshot: `vae/wic-si12` at `9fd9957`; `main` remains at `7c71591`
 Worktree: clean before this memory checkpoint
 
 ## Current position
@@ -140,6 +140,13 @@ Across the complete 1,378-file corpus, `SZA >= 105°` alone retains 261,773 of
 with no qualifying frame. This experiment is therefore far larger than the
 CSV-selected run even though its pixel support is sparse; training time and
 memory should be monitored during the first full attempt.
+
+The first full launch exposed an empty-index edge case in the 193 orbit files
+with no qualifying SZA frame: icReader returned `(0,1,1)` camera fields for an
+empty selection. Commit `9fd9957` fixes this by skipping those files before
+camera reads and recording them by split as `sza_excluded_files`. A real-file
+check with empty orbit 113 and a six-orbit end-to-end smoke passed; the focused
+suite now has 31 tests.
 
 The cleaner full-good-only experiment is recorded as deferred: completed JSON
 annotations provide about 1,378 fully good source frames across 34 orbits,
