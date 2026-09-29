@@ -181,6 +181,22 @@ dropped only when no valid positively weighted pixels remain after all
 filters. Omit the option to reproduce the original no-SZA-threshold baseline.
 The threshold is recorded in both model configuration and data provenance.
 
+To use SZA as the only scientific selection criterion and bypass
+`good_orbit_segments.csv`, add `--no-csv-selection` (the older equivalent name
+is `--all-frames`):
+
+```bash
+python scripts/IMAGE/vae_pipeline/run_wic_si12_pipeline.py \
+  /path/to/precipitation_cs/image_apex_130km_46x46_v1/IR_hardy \
+  --output outputs/wic_si12_sza105 \
+  --minimum-sza 105 \
+  --no-csv-selection
+```
+
+This still enforces finite values, nonnegative uncertainties, method validity,
+positive coverage, and positive training weight. Frames with no qualifying
+SZA pixels are removed before the six camera fields are materialized.
+
 The current copied corpus contains 157 of the 173 manually accepted orbits.
 Their intervals map to 10,680 Product-2 frames, of which 9,728 have valid
 weighted support. The core selected input arrays are approximately 0.7 GiB,

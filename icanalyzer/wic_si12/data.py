@@ -172,6 +172,24 @@ def _read_sza(product, selection):
     return np.asarray(product.read("sza", selection), dtype=np.float32)
 
 
+def _apply_sza_frame_selection(product, selection, minimum_sza):
+    if minimum_sza is None:
+        return selection, None, None
+
+    sza = _read_sza(product, selection)
+    eligible_cells = np.isfinite(sza) & (sza >= minimum_sza)
+    eligible_frames = np.any(eligible_cells, axis=(1, 2))
+    selected_positions = np.arange(int(product.shape[0]))[selection]
+    retained_positions = selected_positions[eligible_frames]
+    diagnostics = {
+        "input_frames": int(sza.shape[0]),
+        "retained_frames": int(np.count_nonzero(eligible_frames)),
+        "total_cells": int(sza.size),
+        "retained_cells": int(np.count_nonzero(eligible_cells)),
+    }
+    return retained_positions, sza[eligible_frames], diagnostics
+
+
 def load_precipitation_cs(
     filename,
     product_loader=None,
@@ -206,6 +224,9 @@ def load_precipitation_cs(
     with product_loader(filename) as product:
         _require_product_contract(product)
         selection, annotation = _frame_selection(product, wic_source_interval)
+        selection, sza, sza_diagnostics = _apply_sza_frame_selection(
+            product, selection, minimum_sza
+        )
 
         arrays = {
             name: np.asarray(product.read(name, selection), dtype=np.float32)
@@ -223,8 +244,6 @@ def load_precipitation_cs(
         si12_coverage = np.asarray(
             product.read("si12_coverage", selection), dtype=np.float32
         )
-        sza = _read_sza(product, selection) if minimum_sza is not None else None
-
         metadata = {
             "filename": str(filename),
             "orbit": _orbit_from_path(filename),
@@ -257,6 +276,13 @@ def load_precipitation_cs(
             "manual_frame_selection": annotation,
             "minimum_sza_degrees": minimum_sza,
         }
+        if sza_diagnostics is not None:
+            metadata.update({
+                "sza_filter_input_frames": sza_diagnostics["input_frames"],
+                "sza_filter_retained_frames": sza_diagnostics["retained_frames"],
+                "sza_filter_retained_cells": sza_diagnostics["retained_cells"],
+                "sza_filter_total_cells": sza_diagnostics["total_cells"],
+            })
         times = np.asarray(product.time[selection], dtype=object).copy()
         grid = {
             "mlat": np.asarray(product.mlat, dtype=np.float64).copy(),
@@ -294,10 +320,6 @@ def load_precipitation_cs(
     base_valid = method_valid & common_finite & nonnegative_uncertainty
     if minimum_sza is not None:
         base_valid &= np.isfinite(sza) & (sza >= minimum_sza)
-        metadata["sza_filter_retained_cells"] = int(
-            np.count_nonzero(np.isfinite(sza) & (sza >= minimum_sza))
-        )
-        metadata["sza_filter_total_cells"] = int(sza.size)
 
     values = np.stack((wic, si12), axis=1)
     standard_deviation = np.stack((dwic, dsi12), axis=1)
@@ -384,6 +406,8 @@ def load_precipitation_cs_files(
             [product["metadata"]["orbit"]] * product["values"].shape[0]
         )
     result["orbit"] = np.asarray(orbit_values)
+    if result["values"].shape[0] == 0:
+        raise ValueError("no frames remain after frame and SZA selection")
     return result
 
 

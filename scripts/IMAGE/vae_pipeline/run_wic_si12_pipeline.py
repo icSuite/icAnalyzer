@@ -372,8 +372,13 @@ def parse_arguments(argv=None):
     )
     parser.add_argument(
         "--all-frames",
+        "--no-csv-selection",
+        dest="all_frames",
         action="store_true",
-        help="ignore manual orbit/frame selection (intended for diagnostics)",
+        help=(
+            "bypass good_orbit_segments.csv; technical validity and any "
+            "--minimum-sza threshold still apply"
+        ),
     )
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=32)

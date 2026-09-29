@@ -59,11 +59,13 @@ class FakeProduct:
             "count_source": "background_subtracted",
             "spatial_smoothing_kernel": "none",
         }
+        self.read_log = []
         for name in REQUIRED_CAMERA_FIELDS:
             setattr(self, name, FakeField())
         self.sza = FakeSZAField()
 
     def read(self, name, index=None):
+        self.read_log.append((name, index))
         values = self.arrays[name]
         return values if index is None else values[index]
 
@@ -147,8 +149,28 @@ def test_minimum_sza_masks_pixels_and_records_filter_provenance():
     assert loaded["valid"][:, :, 0, 1].all()
     np.testing.assert_array_equal(loaded["quality"][:, :, 0, 0], 0.0)
     assert loaded["metadata"]["minimum_sza_degrees"] == 105.0
+    assert loaded["metadata"]["sza_filter_input_frames"] == 2
+    assert loaded["metadata"]["sza_filter_retained_frames"] == 2
     assert loaded["metadata"]["sza_filter_retained_cells"] == 2 * 46 * 46 - 2
     assert loaded["metadata"]["sza_filter_total_cells"] == 2 * 46 * 46
+
+
+def test_sza_empty_frames_are_removed_before_camera_fields_are_read():
+    product = FakeProduct()
+    product.arrays["sza"][0] = 104.0
+
+    loaded = load_precipitation_cs(
+        "or_0042.nc",
+        product_loader=lambda _path: product,
+        minimum_sza=105.0,
+    )
+
+    assert loaded["values"].shape == (1, 2, 46, 46)
+    np.testing.assert_array_equal(loaded["source_indices"]["wic"], [1])
+    assert loaded["metadata"]["sza_filter_input_frames"] == 2
+    assert loaded["metadata"]["sza_filter_retained_frames"] == 1
+    wic_reads = [index for name, index in product.read_log if name == "wic_corrected"]
+    np.testing.assert_array_equal(wic_reads[0], [1])
 
 
 def test_rejects_invalid_minimum_sza():
