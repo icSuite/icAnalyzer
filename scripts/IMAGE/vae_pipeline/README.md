@@ -224,6 +224,56 @@ The propagated covariance represents latent field variability at fixed energy;
 detector uncertainty remains available for weighting and observation-error
 models but is not silently injected into the latent ensemble.
 
+## Comparing the legacy and rerun inputs
+
+The legacy `precipitation_IR_hardy_weighted` products can be compared to the
+current Product-2 corpus without changing either upstream repository. Product
+2 remains authoritative for orbit selection and SZA. The comparison keeps
+only same-named orbit files and exact common product timestamps, applies the
+same Product-2 `SZA >= threshold` mask to both versions, and uses the legacy
+combined robust weight `w` as the legacy VAE quality weight.
+
+First generate a streaming field-level report. This reads one orbit pair at a
+time and writes `paired_input_comparison.json` plus mean legacy, rerun, and
+difference maps:
+
+```bash
+PYTHONPATH=. python scripts/IMAGE/vae_pipeline/compare_legacy_current_inputs.py \
+  ~/Dropbox/work/data/IMAGE_FUV/precipitation_cs/image_apex_130km_46x46_v1/IR_hardy \
+  --legacy-directory ~/Dropbox/work/data/IMAGE_FUV/precipitation_IR_hardy_weighted \
+  --output ~/Dropbox/work/data/IMAGE_FUV/vae_runs/input_comparison_sza105 \
+  --minimum-sza 105 \
+  --no-csv-selection
+```
+
+Then train matched current and legacy VAE runs. Both commands use the current
+directory as the positional input because it supplies the common orbit list,
+timestamps, and SZA. Change only `--data-version` and `--output`; keep all
+model, split, and seed settings identical:
+
+```bash
+PYTHONPATH=. python scripts/IMAGE/vae_pipeline/run_wic_si12_pipeline.py \
+  ~/Dropbox/work/data/IMAGE_FUV/precipitation_cs/image_apex_130km_46x46_v1/IR_hardy \
+  --legacy-comparison ~/Dropbox/work/data/IMAGE_FUV/precipitation_IR_hardy_weighted \
+  --data-version current \
+  --output ~/Dropbox/work/data/IMAGE_FUV/vae_runs/wic_si12_paired_current_sza105 \
+  --minimum-sza 105 --no-csv-selection \
+  --epochs 20 --batch-size 32 --latent-dim 32 --samples 1000 --device auto
+
+PYTHONPATH=. python scripts/IMAGE/vae_pipeline/run_wic_si12_pipeline.py \
+  ~/Dropbox/work/data/IMAGE_FUV/precipitation_cs/image_apex_130km_46x46_v1/IR_hardy \
+  --legacy-comparison ~/Dropbox/work/data/IMAGE_FUV/precipitation_IR_hardy_weighted \
+  --data-version legacy \
+  --output ~/Dropbox/work/data/IMAGE_FUV/vae_runs/wic_si12_paired_legacy_sza105 \
+  --minimum-sza 105 --no-csv-selection \
+  --epochs 20 --batch-size 32 --latent-dim 32 --samples 1000 --device auto
+```
+
+The paired experiment measures the net change between the two product
+pipelines. It must not be described as a pure fuvpy effect: source matching,
+detector-to-CS reduction, coregistration, uncertainty propagation, and
+validity handling also changed between the legacy and current products.
+
 ## Visualizing a completed run
 
 Generate the legacy-style model and covariance diagnostics without retraining:

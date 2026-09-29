@@ -23,6 +23,7 @@ from icanalyzer.wic_si12.data import (
     select_annotated_orbit_files,
     split_orbit_files,
 )
+from icanalyzer.wic_si12.comparison import load_paired_files, pair_orbit_files
 from icanalyzer.wic_si12.ensemble import (
     ensemble_statistics,
     sample_decoded_ensemble,
@@ -57,7 +58,28 @@ def discover_files(inputs):
     return files
 
 
-def load_split(paths, intervals, minimum_sza):
+def load_split(
+    paths,
+    intervals,
+    minimum_sza,
+    comparison_pairs=None,
+    data_version="current",
+):
+    if comparison_pairs is not None:
+        pairs_by_current = {
+            Path(current).resolve(): (Path(current), Path(legacy))
+            for current, legacy in comparison_pairs
+        }
+        pairs = [pairs_by_current[Path(path).resolve()] for path in paths]
+        return (
+            load_paired_files(
+                pairs,
+                data_version=data_version,
+                wic_source_intervals=intervals,
+                minimum_sza=minimum_sza,
+            )
+            if pairs else None
+        )
     return (
         load_precipitation_cs_files(
             paths,
@@ -167,6 +189,14 @@ def run(arguments):
     if not arguments.all_frames:
         intervals = load_good_orbit_intervals(arguments.segments)
         files = select_annotated_orbit_files(files, intervals)
+
+    comparison_pairs = None
+    if arguments.legacy_comparison is not None:
+        comparison_pairs = pair_orbit_files(files, arguments.legacy_comparison)
+        files = [current for current, _legacy in comparison_pairs]
+    elif arguments.data_version == "legacy":
+        raise ValueError("--data-version legacy requires --legacy-comparison")
+
     split = split_orbit_files(
         files,
         validation_fraction=arguments.validation_fraction,
@@ -174,13 +204,16 @@ def run(arguments):
         seed=arguments.seed,
     )
     train_product = load_split(
-        split["train"], intervals, arguments.minimum_sza
+        split["train"], intervals, arguments.minimum_sza,
+        comparison_pairs, arguments.data_version
     )
     validation_product = load_split(
-        split["validation"], intervals, arguments.minimum_sza
+        split["validation"], intervals, arguments.minimum_sza,
+        comparison_pairs, arguments.data_version
     )
     test_product = load_split(
-        split["test"], intervals, arguments.minimum_sza
+        split["test"], intervals, arguments.minimum_sza,
+        comparison_pairs, arguments.data_version
     )
 
     transform = fit_channel_transform(
@@ -232,6 +265,17 @@ def run(arguments):
         "upstream_proton_energy_model": "hardy",
         "electron_energy_keV": 2.0,
         "minimum_sza_degrees": arguments.minimum_sza,
+        "comparison_data_version": arguments.data_version,
+        "legacy_comparison_directory": (
+            None if arguments.legacy_comparison is None
+            else str(Path(arguments.legacy_comparison).resolve())
+        ),
+        "paired_orbit_count": (
+            None if comparison_pairs is None else len(comparison_pairs)
+        ),
+        "pairing_rule": (
+            None if comparison_pairs is None else "same orbit filename and exact product time"
+        ),
         "manual_frame_intervals": (
             None if intervals is None else str(Path(arguments.segments).resolve())
         ),
@@ -257,6 +301,7 @@ def run(arguments):
         "optimizer": "Adam",
         "beta_schedule": "constant",
         "minimum_sza_degrees": arguments.minimum_sza,
+        "comparison_data_version": arguments.data_version,
         "selected_epoch": (
             model.best_validation_epoch
             if model.best_validation_epoch is not None else arguments.epochs
@@ -388,6 +433,23 @@ def parse_arguments(argv=None):
         help=(
             "bypass good_orbit_segments.csv; technical validity and any "
             "--minimum-sza threshold still apply"
+        ),
+    )
+    parser.add_argument(
+        "--legacy-comparison",
+        "--legacy-reference",
+        help=(
+            "legacy precipitation_IR_hardy_weighted directory; restrict to "
+            "same-named orbits and exact Product-2 timestamps"
+        ),
+    )
+    parser.add_argument(
+        "--data-version",
+        choices=("current", "legacy"),
+        default="current",
+        help=(
+            "train on the current Product-2 fields or paired legacy fields; "
+            "legacy requires --legacy-comparison"
         ),
     )
     parser.add_argument("--epochs", type=int, default=20)

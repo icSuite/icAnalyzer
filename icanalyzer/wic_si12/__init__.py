@@ -10,6 +10,12 @@ from .data import (
     select_annotated_orbit_files,
     split_orbit_files,
 )
+from .comparison import (
+    exact_time_indices,
+    load_paired_files,
+    load_paired_orbit,
+    pair_orbit_files,
+)
 from .diagnostics import (
     best_validation_epoch,
     covariance_spectrum,
@@ -35,12 +41,16 @@ __all__ = [
     "covariance_spectrum",
     "ensemble_statistics",
     "fit_channel_transform",
+    "exact_time_indices",
     "load_good_orbit_intervals",
     "load_precipitation_cs",
     "load_precipitation_cs_files",
+    "load_paired_files",
+    "load_paired_orbit",
     "joint_correlation_maps",
     "leading_covariance_modes",
     "maximum_variance_anchor",
+    "pair_orbit_files",
     "reconstruct_ensemble",
     "select_annotated_orbit_files",
     "sample_decoded_ensemble",

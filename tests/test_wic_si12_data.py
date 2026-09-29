@@ -13,6 +13,11 @@ from icanalyzer.wic_si12.data import (
     select_annotated_orbit_files,
     split_orbit_files,
 )
+from icanalyzer.wic_si12.comparison import (
+    exact_time_indices,
+    load_paired_orbit,
+    pair_orbit_files,
+)
 
 
 class FakeField:
@@ -75,6 +80,32 @@ class FakeProduct:
 
     def __exit__(self, *args):
         return False
+
+
+class FakeLegacyProduct:
+    product_type = "precipitation"
+    schema_version = 2
+    precipitation_method = "image_ratio"
+    proton_flux_source = "SI12"
+    proton_energy_model = "hardy"
+    shape = (2, 46, 46)
+
+    def __init__(self):
+        image = np.ones(self.shape, dtype=np.float32)
+        for name in REQUIRED_CAMERA_FIELDS:
+            setattr(self, name, image.copy())
+        self.wic_corrected[0] = 21.0
+        self.wic_corrected[1] = 10.0
+        self.si12[0] = 4.0
+        self.si12[1] = 2.0
+        self.w = np.full(self.shape, 0.25, dtype=np.float32)
+        self.time = np.array(["t1", "t0"], dtype=object)
+        self.mlat = np.zeros((46, 46), dtype=float)
+        self.mlt = np.zeros((46, 46), dtype=float)
+        self.source_indices = {
+            sensor: np.array([101, 100])
+            for sensor in ("wic", "si12", "si13")
+        }
 
 
 def test_loads_strong_product2_contract_and_preserves_corrected_wic():
@@ -275,3 +306,53 @@ def test_orbit_split_has_no_overlap():
     assert len(split["test"]) == 2
     all_paths = split["train"] + split["validation"] + split["test"]
     assert len(set(all_paths)) == len(paths)
+
+
+def test_exact_time_pairing_follows_current_order():
+    current, legacy = exact_time_indices(
+        ["t0", "t1", "t2"], ["t2", "t0", "t3"]
+    )
+    np.testing.assert_array_equal(current, [0, 2])
+    np.testing.assert_array_equal(legacy, [1, 0])
+
+
+def test_pair_orbit_files_uses_only_common_filenames(tmp_path):
+    current = tmp_path / "current"
+    legacy = tmp_path / "legacy"
+    current.mkdir()
+    legacy.mkdir()
+    for directory, names in (
+        (current, ("or_0001.nc", "or_0002.nc")),
+        (legacy, ("or_0002.nc", "or_0003.nc")),
+    ):
+        for name in names:
+            (directory / name).touch()
+
+    pairs = pair_orbit_files(sorted(current.glob("*.nc")), legacy)
+
+    assert [(left.name, right.name) for left, right in pairs] == [
+        ("or_0002.nc", "or_0002.nc")
+    ]
+
+
+def test_paired_legacy_uses_current_time_sza_and_legacy_weight():
+    current = FakeProduct()
+    current.arrays["sza"][0] = 104.0
+    legacy = FakeLegacyProduct()
+
+    paired = load_paired_orbit(
+        "or_0042.nc",
+        "legacy/or_0042.nc",
+        data_version="both",
+        minimum_sza=105.0,
+        current_loader=lambda _path: current,
+        legacy_loader=lambda _path: legacy,
+    )
+
+    assert paired["current"]["time"].tolist() == ["t1"]
+    assert paired["legacy"]["time"].tolist() == ["t1"]
+    np.testing.assert_allclose(paired["legacy"]["values"][:, 0], 21.0)
+    np.testing.assert_allclose(paired["legacy"]["values"][:, 1], 4.0)
+    np.testing.assert_allclose(paired["legacy"]["quality"], 0.25)
+    assert paired["legacy"]["metadata"]["quality_weight_source"] == "legacy_combined_w"
+    assert paired["legacy"]["metadata"]["paired_frames"] == 1

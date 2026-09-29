@@ -198,118 +198,91 @@ def _apply_sza_frame_selection(product, selection, minimum_sza):
     return retained_positions, sza[eligible_frames], diagnostics
 
 
-def load_precipitation_cs(
+def _materialize_precipitation_cs(
+    product,
     filename,
-    product_loader=None,
-    wic_source_interval=None,
-    minimum_sza=None,
+    selection,
+    annotation,
+    minimum_sza,
+    sza,
+    sza_diagnostics,
 ):
-    """Materialize the VAE fields from one Product-2 Cubed-Sphere file.
+    """Read one already-validated current product at selected frame positions."""
 
-    Parameters
-    ----------
-    filename : path-like
-        A schema-1 ``precipitation_cs`` file containing the coordinated camera
-        fields.
-    product_loader : callable, optional
-        Dependency-injection hook used by focused tests.  The default is
-        ``icreader.load``.
-    wic_source_interval : pair of int, optional
-        Inclusive manually accepted WIC source-frame bounds. Product frames
-        are selected through ``wic_source_index`` before camera arrays are
-        materialized.
-    minimum_sza : float, optional
-        Retain only grid cells whose solar zenith angle is at least this many
-        degrees. Frames with no remaining weighted cells are later removed by
-        ``WICSI12ArrayDataset``.
-    """
-
-    minimum_sza = _validated_minimum_sza(minimum_sza)
-    if product_loader is None:
-        from icreader import load as product_loader
-
-    filename = Path(filename)
-    with product_loader(filename) as product:
-        _require_product_contract(product)
-        selection, annotation = _frame_selection(product, wic_source_interval)
-        selection, sza, sza_diagnostics = _apply_sza_frame_selection(
-            product, selection, minimum_sza
-        )
-
-        arrays = {
-            name: np.asarray(product.read(name, selection), dtype=np.float32)
-            for name in REQUIRED_CAMERA_FIELDS
-        }
-        method_valid = np.asarray(
-            product.read("method_valid", selection), dtype=bool
-        )
-        method_quality = np.asarray(
-            product.read("method_quality_weight", selection), dtype=np.float32
-        )
-        wic_coverage = np.asarray(
-            product.read("wic_coverage", selection), dtype=np.float32
-        )
-        si12_coverage = np.asarray(
-            product.read("si12_coverage", selection), dtype=np.float32
-        )
-        metadata = {
-            "filename": str(filename),
-            "orbit": _orbit_from_path(filename),
-            "grid_id": str(product.grid_id),
-            "source_shape": tuple(int(value) for value in product.shape),
-            "shape": tuple(int(value) for value in method_valid.shape),
-            "schema_version": int(product.schema_version),
-            "software_version": str(product.software_version),
-            "proton_flux_source": str(product.proton_flux_source),
-            "proton_energy_model": str(product.proton_energy_model),
-            "proton_energy_uncertainty_method": str(
-                product.attrs.get("proton_energy_uncertainty_method", "unknown")
-            ),
-            "proton_energy_coordinate_note": str(
-                product.attrs.get("proton_energy_coordinate_note", "unknown")
-            ),
-            "proton_operation_order": str(
-                product.attrs.get("proton_operation_order", "unknown")
-            ),
-            "count_source": str(product.attrs.get("count_source", "unknown")),
-            "spatial_smoothing_kernel": str(
-                product.attrs.get("spatial_smoothing_kernel", "unknown")
-            ),
-            "source_precipitation_detector_sha256": str(
-                product.attrs.get("source_precipitation_detector_sha256", "")
-            ),
-            "source_fuv_detector_sha256": str(
-                product.attrs.get("source_fuv_detector_sha256", "")
-            ),
-            "manual_frame_selection": annotation,
-            "minimum_sza_degrees": minimum_sza,
-        }
-        if sza_diagnostics is not None:
-            metadata.update({
-                "sza_filter_input_frames": sza_diagnostics["input_frames"],
-                "sza_filter_retained_frames": sza_diagnostics["retained_frames"],
-                "sza_filter_retained_cells": sza_diagnostics["retained_cells"],
-                "sza_filter_total_cells": sza_diagnostics["total_cells"],
-            })
-        times = np.asarray(product.time[selection], dtype=object).copy()
-        grid = {
-            "mlat": np.asarray(product.mlat, dtype=np.float64).copy(),
-            "mlt": np.asarray(product.mlt, dtype=np.float64).copy(),
-        }
-        source_indices = {
-            sensor: np.asarray(product.source_indices[sensor][selection]).copy()
-            for sensor in ("wic", "si12", "si13")
-        }
-        source_times = {
-            sensor: np.asarray(
-                product.source_times[sensor][selection], dtype=object
-            ).copy()
-            for sensor in ("wic", "si12", "si13")
-        }
-        frame_quality = {
-            sensor: np.asarray(product.frame_quality[sensor][selection]).copy()
-            for sensor in ("wic", "si12", "si13")
-        }
+    arrays = {
+        name: np.asarray(product.read(name, selection), dtype=np.float32)
+        for name in REQUIRED_CAMERA_FIELDS
+    }
+    method_valid = np.asarray(
+        product.read("method_valid", selection), dtype=bool
+    )
+    method_quality = np.asarray(
+        product.read("method_quality_weight", selection), dtype=np.float32
+    )
+    wic_coverage = np.asarray(
+        product.read("wic_coverage", selection), dtype=np.float32
+    )
+    si12_coverage = np.asarray(
+        product.read("si12_coverage", selection), dtype=np.float32
+    )
+    metadata = {
+        "filename": str(filename),
+        "orbit": _orbit_from_path(filename),
+        "grid_id": str(product.grid_id),
+        "source_shape": tuple(int(value) for value in product.shape),
+        "shape": tuple(int(value) for value in method_valid.shape),
+        "schema_version": int(product.schema_version),
+        "software_version": str(product.software_version),
+        "proton_flux_source": str(product.proton_flux_source),
+        "proton_energy_model": str(product.proton_energy_model),
+        "proton_energy_uncertainty_method": str(
+            product.attrs.get("proton_energy_uncertainty_method", "unknown")
+        ),
+        "proton_energy_coordinate_note": str(
+            product.attrs.get("proton_energy_coordinate_note", "unknown")
+        ),
+        "proton_operation_order": str(
+            product.attrs.get("proton_operation_order", "unknown")
+        ),
+        "count_source": str(product.attrs.get("count_source", "unknown")),
+        "spatial_smoothing_kernel": str(
+            product.attrs.get("spatial_smoothing_kernel", "unknown")
+        ),
+        "source_precipitation_detector_sha256": str(
+            product.attrs.get("source_precipitation_detector_sha256", "")
+        ),
+        "source_fuv_detector_sha256": str(
+            product.attrs.get("source_fuv_detector_sha256", "")
+        ),
+        "manual_frame_selection": annotation,
+        "minimum_sza_degrees": minimum_sza,
+    }
+    if sza_diagnostics is not None:
+        metadata.update({
+            "sza_filter_input_frames": sza_diagnostics["input_frames"],
+            "sza_filter_retained_frames": sza_diagnostics["retained_frames"],
+            "sza_filter_retained_cells": sza_diagnostics["retained_cells"],
+            "sza_filter_total_cells": sza_diagnostics["total_cells"],
+        })
+    times = np.asarray(product.time[selection], dtype=object).copy()
+    grid = {
+        "mlat": np.asarray(product.mlat, dtype=np.float64).copy(),
+        "mlt": np.asarray(product.mlt, dtype=np.float64).copy(),
+    }
+    source_indices = {
+        sensor: np.asarray(product.source_indices[sensor][selection]).copy()
+        for sensor in ("wic", "si12", "si13")
+    }
+    source_times = {
+        sensor: np.asarray(
+            product.source_times[sensor][selection], dtype=object
+        ).copy()
+        for sensor in ("wic", "si12", "si13")
+    }
+    frame_quality = {
+        sensor: np.asarray(product.frame_quality[sensor][selection]).copy()
+        for sensor in ("wic", "si12", "si13")
+    }
 
     wic = arrays["wic_corrected"]
     si12 = arrays["si12"]
@@ -354,6 +327,55 @@ def load_precipitation_cs(
         "frame_quality": frame_quality,
         "metadata": metadata,
     }
+
+
+def load_precipitation_cs(
+    filename,
+    product_loader=None,
+    wic_source_interval=None,
+    minimum_sza=None,
+):
+    """Materialize the VAE fields from one Product-2 Cubed-Sphere file.
+
+    Parameters
+    ----------
+    filename : path-like
+        A schema-1 ``precipitation_cs`` file containing the coordinated camera
+        fields.
+    product_loader : callable, optional
+        Dependency-injection hook used by focused tests.  The default is
+        ``icreader.load``.
+    wic_source_interval : pair of int, optional
+        Inclusive manually accepted WIC source-frame bounds. Product frames
+        are selected through ``wic_source_index`` before camera arrays are
+        materialized.
+    minimum_sza : float, optional
+        Retain only grid cells whose solar zenith angle is at least this many
+        degrees. Frames with no remaining weighted cells are later removed by
+        ``WICSI12ArrayDataset``.
+    """
+
+    minimum_sza = _validated_minimum_sza(minimum_sza)
+    if product_loader is None:
+        from icreader import load as product_loader
+
+    filename = Path(filename)
+    with product_loader(filename) as product:
+        _require_product_contract(product)
+        selection, annotation = _frame_selection(product, wic_source_interval)
+        selection, sza, sza_diagnostics = _apply_sza_frame_selection(
+            product, selection, minimum_sza
+        )
+
+        return _materialize_precipitation_cs(
+            product,
+            filename,
+            selection,
+            annotation,
+            minimum_sza,
+            sza,
+            sza_diagnostics,
+        )
 
 
 def load_precipitation_cs_files(
