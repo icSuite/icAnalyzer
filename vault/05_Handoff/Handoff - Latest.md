@@ -1,7 +1,7 @@
 # Handoff - Latest
 
 Last updated: 2026-09-29
-Repository snapshot: `vae/wic-si12` at `9fd9957`; `main` remains at `7c71591`
+Repository snapshot: `vae/wic-si12` implementation at `c6bedbf`; `main` remains at `7c71591`
 
 ## Outcome
 
@@ -38,6 +38,18 @@ keV in this baseline.
 
 ## Evidence
 
+- Paired comparison commit: `c6bedbf Add paired legacy rerun comparison`.
+  The legacy adapter uses Product-2 selection/SZA, exact common timestamps, and
+  legacy combined weight `w`. The runner trains `current` or `legacy` on the
+  same common orbit split. The streaming comparison emits JSON field/support/
+  weight statistics and spatial mean/difference maps.
+- Corpus identity audit: 1,371 common orbit filenames and 326,739 exact common
+  timestamps; 243,282 common frames retain at least one `SZA >= 105°` cell.
+- Real orbit-85 verification retained 112 exact timestamps. Both sides
+  completed independent one-epoch VAE runs through artifact reload, sampling,
+  conductance propagation, covariance, and sparse reconstruction. The direct
+  report and figure were also generated. The focused suite has 34 passing
+  tests and 61 Python files parse.
 - Empty-orbit fix: `9fd9957 Skip SZA-empty orbit files`. The first full launch
   found that an empty indexed icReader camera read had shape `(0,1,1)` rather
   than `(0,46,46)`. Such orbit files are now skipped before camera reads and
@@ -152,8 +164,8 @@ normal workstation.
 
 Next:
 
-1. run the requested SZA-only `SZA >= 105°` experiment and compare its
-   training, sample, and covariance diagnostics with the original baseline;
+1. run the full streaming paired input report and matched 20-epoch current and
+   legacy `SZA >= 105°` VAE runs with identical settings;
 2. measure prior-sample calibration and covariance convergence across seeds;
 3. evaluate many held-out fields and Hall-only, Pedersen-only, and joint
    realistic sparse geometries;
@@ -168,11 +180,10 @@ non-destructive Cubed-Sphere converter; do not rescale pixel indices.
 
 ## Portfolio impact
 
-- Central update needed: Yes
-- Changes: The first full annotated baseline completed. It learns useful
-  covariance and substantially improved one sparse reconstruction, but the
-  best validation epoch was 10, samples were underdispersed, and the linear
-  posterior allowed negative conductance. A
+- Central update needed: No
+- Changes: A controlled legacy/rerun comparison is now executable and
+  verified on one real orbit. This is a technical capability checkpoint; no
+  project priority, deadline, or claimed scientific result changed. The
   public icPhysics propagation boundary and coordinate-based annotation
   conversion remain explicit follow-up decisions.
 - Priority/deadline: unchanged. The December 2026 paper target remains the

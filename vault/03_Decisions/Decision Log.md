@@ -246,3 +246,18 @@ This prevents a later overfit epoch from silently defining the ensemble, as
 happened in the first 20-epoch artifact where epoch 10 validated better than
 the saved epoch 20. Early stopping may later reduce compute, but it is not
 required for correct checkpoint selection.
+
+## 2026-09-29 - Compare legacy and rerun products on Product-2 identity
+
+**Implementation decision accepted by the user:** Compare the legacy
+`precipitation_IR_hardy_weighted` data with the rerun Product-2 data on
+same-named orbit files and exact common product timestamps. Product 2 owns the
+manual source-frame selection and the SZA mask for both sides. Use the legacy
+combined robust weight `w` for the legacy VAE and retain the current Product-2
+quality/coverage weighting for the rerun VAE.
+
+Use the same common orbit list, split seed, and model settings for matched VAE
+runs. Accompany model comparisons with direct paired field, uncertainty,
+quality, and support diagnostics. Describe the result as a net product-pipeline
+change rather than a pure fuvpy effect because matching, coregistration,
+gridding, validity, and uncertainty propagation also changed.

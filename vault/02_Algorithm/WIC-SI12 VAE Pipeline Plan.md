@@ -1,8 +1,8 @@
 # WIC/SI12 VAE Pipeline Plan
 
-Last reviewed: 2026-09-28
-Status: End-to-end baseline and saved-run diagnostics implemented and
-verified; publication-scale validation and annotation reprojection remain open
+Last reviewed: 2026-09-29
+Status: End-to-end baseline, saved-run diagnostics, and paired legacy/rerun
+comparison implemented; full comparison runs and publication validation remain
 
 ## Implementation checkpoint
 
@@ -69,6 +69,17 @@ posterior / truth panels. It remains compatible with the first full run, while
 explicitly reporting that its unsaved latent draws and truth are unavailable.
 The validation-best restoration is therefore complete; early stopping remains
 an optional efficiency improvement rather than a correctness blocker.
+
+Commit `c6bedbf` implements the legacy/rerun comparison requested after the
+SZA work. It intersects same-named orbit files, aligns exact product times,
+and applies Product-2 manual selection and SZA to both sides. The legacy
+adapter maps `wic_corrected`, `si12`, their uncertainties, and combined robust
+weight `w` into the VAE contract. The current path keeps its existing validity,
+coverage, and method-quality semantics. The VAE runner can train either side
+on the same orbit split; a streaming direct comparison reports fields,
+uncertainties, quality weights, support, and spatial mean/difference maps.
+Treat its result as a net old-versus-new product-pipeline change, not as an
+isolated fuvpy effect.
 
 Still open:
 
