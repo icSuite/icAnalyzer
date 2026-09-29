@@ -1,7 +1,7 @@
 # Current State
 
 Last reviewed: 2026-09-29
-Repository snapshot: `vae/wic-si12` at `52817c6`; `main` remains at `7c71591`
+Repository snapshot: `vae/wic-si12` at `6e8a3db`; `main` remains at `7c71591`
 Worktree: clean before this memory checkpoint
 
 ## Current position
@@ -130,6 +130,17 @@ frames, 11.8% of spatial grid cells remain. A three-orbit, two-epoch
 end-to-end smoke completed and recorded `105.0` in both data provenance and
 training configuration. This verifies mechanics, not model quality.
 
+Commit `6e8a3db` adds the explicit `--no-csv-selection` alias for the existing
+`--all-frames` bypass and makes SZA-only loading practical at the file-read
+boundary: frames with no qualifying SZA cell are removed before the six camera
+fields are materialized. A three-orbit SZA-only smoke completed end to end.
+
+Across the complete 1,378-file corpus, `SZA >= 105°` alone retains 261,773 of
+358,439 frames (73.0%) and 19.6% of all grid cells. There are 193 orbit files
+with no qualifying frame. This experiment is therefore far larger than the
+CSV-selected run even though its pixel support is sparse; training time and
+memory should be monitored during the first full attempt.
+
 The cleaner full-good-only experiment is recorded as deferred: completed JSON
 annotations provide about 1,378 fully good source frames across 34 orbits,
 without requiring conversion of the 36x36 partial-frame masks.
@@ -171,8 +182,8 @@ unchanged so its effect can be isolated.
 
 ## Next actionable work
 
-1. Run and compare the requested `SZA >= 105°` model against the original
-   unfiltered baseline before changing the selection policy further.
+1. Run and compare the requested SZA-only `SZA >= 105°` model against the
+   original CSV-selected baseline before changing the selection policy further.
 2. Evaluate prior dispersion and sparse reconstruction across many held-out
    frames, seeds, and Hall-only/Pedersen-only/joint geometries.
 3. Choose an explicit positivity-preserving reconstruction state or method;

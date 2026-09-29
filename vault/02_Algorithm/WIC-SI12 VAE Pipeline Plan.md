@@ -76,8 +76,15 @@ Still open:
   `full_good_start:full_good_stop` ranges from completed
   `partial_image_annotations.json` records. This avoids applying unreprojected
   36x36 masks and would provide about 1,378 source frames across 34 orbits.
-  The user chose to test an exposed SZA threshold with the current CSV
-  selection first.
+  The user initially chose an exposed SZA threshold with the current CSV
+  selection, then requested an SZA-only experiment without the CSV.
+
+- The SZA experiment was extended to permit SZA-only selection. Use
+  `--no-csv-selection --minimum-sza 105`; ordinary finite-value, uncertainty,
+  method-validity, coverage, and positive-weight checks still apply. Empty-SZA
+  frames are removed before camera fields are read. The full corpus retains
+  261,773 frames and is therefore a substantially larger training experiment
+  than the manually selected baseline.
 
 - The Product-2 changes have landed as icBuilder `38b5afb` and icReader
   `3a3b73f`. A copied production corpus contains 1,378 files and 358,439

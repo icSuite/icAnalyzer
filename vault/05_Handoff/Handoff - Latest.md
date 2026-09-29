@@ -1,7 +1,7 @@
 # Handoff - Latest
 
 Last updated: 2026-09-29
-Repository snapshot: `vae/wic-si12` at `52817c6`; `main` remains at `7c71591`
+Repository snapshot: `vae/wic-si12` at `6e8a3db`; `main` remains at `7c71591`
 
 ## Outcome
 
@@ -38,6 +38,12 @@ keV in this baseline.
 
 ## Evidence
 
+- SZA-only commit: `6e8a3db Support scalable SZA-only VAE selection`.
+- `--no-csv-selection --minimum-sza 105` bypasses the CSV while retaining
+  technical validity checks. SZA-empty frames are now discarded before camera
+  fields are read. The full corpus retains 261,773 of 358,439 frames (73.0%),
+  19.6% of grid cells, and excludes all frames from 193 files. A three-orbit
+  SZA-only run completed end to end; the full focused suite has 30 tests.
 - SZA-filter commit: `52817c6 Add configurable SZA filtering to VAE input`.
 - `--minimum-sza 105` retains finite pixels at `SZA >= 105°`; 6,701 of
   10,680 CSV-selected frames retain weighted support and 11.8% of spatial
@@ -48,7 +54,7 @@ keV in this baseline.
   of 4,158 selected frames are partial or bad under the newer classification.
   A full-good-only baseline is recorded as a deferred comparison; the user
   chose to isolate the SZA-filter effect first.
-- The focused suite now has 29 passing tests.
+- The earlier CSV-plus-SZA checkpoint had 29 passing tests.
 - Diagnostics commit: `1504b1e Add WIC SI12 VAE diagnostics`.
 - Syntax: 59 Python files parsed at the diagnostics checkpoint.
 - The existing 1,000-sample full run generated ten figures without a dense
@@ -141,8 +147,8 @@ normal workstation.
 
 Next:
 
-1. run the requested `SZA >= 105°` experiment and compare its training,
-   sample, and covariance diagnostics with the original baseline;
+1. run the requested SZA-only `SZA >= 105°` experiment and compare its
+   training, sample, and covariance diagnostics with the original baseline;
 2. measure prior-sample calibration and covariance convergence across seeds;
 3. evaluate many held-out fields and Hall-only, Pedersen-only, and joint
    realistic sparse geometries;
