@@ -9,6 +9,7 @@ from icanalyzer.wic_si12.data import (
     fit_channel_transform,
     load_good_orbit_intervals,
     load_precipitation_cs,
+    load_precipitation_cs_files,
     select_annotated_orbit_files,
     split_orbit_files,
 )
@@ -171,6 +172,23 @@ def test_sza_empty_frames_are_removed_before_camera_fields_are_read():
     assert loaded["metadata"]["sza_filter_retained_frames"] == 1
     wic_reads = [index for name, index in product.read_log if name == "wic_corrected"]
     np.testing.assert_array_equal(wic_reads[0], [1])
+
+
+def test_sza_empty_orbit_is_skipped_before_camera_fields_are_read():
+    empty = FakeProduct()
+    empty.arrays["sza"][:] = 104.0
+    retained = FakeProduct()
+    products = {"or_0041.nc": empty, "or_0042.nc": retained}
+
+    loaded = load_precipitation_cs_files(
+        ["or_0041.nc", "or_0042.nc"],
+        minimum_sza=105.0,
+        product_loader=lambda path: products[Path(path).name],
+    )
+
+    assert loaded["values"].shape == (2, 2, 46, 46)
+    assert loaded["excluded_files"] == ["or_0041.nc"]
+    assert [name for name, _index in empty.read_log] == ["sza"]
 
 
 def test_rejects_invalid_minimum_sza():

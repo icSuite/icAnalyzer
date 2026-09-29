@@ -31,6 +31,10 @@ REQUIRED_CAMERA_FIELDS = (
 )
 
 
+class _NoFramesRemainError(ValueError):
+    """Internal signal for an orbit removed entirely by input selection."""
+
+
 def _orbit_from_path(path):
     match = re.search(r"or_(\d+)", Path(path).name)
     return int(match.group(1)) if match else None
@@ -187,6 +191,10 @@ def _apply_sza_frame_selection(product, selection, minimum_sza):
         "total_cells": int(sza.size),
         "retained_cells": int(np.count_nonzero(eligible_cells)),
     }
+    if retained_positions.size == 0:
+        raise _NoFramesRemainError(
+            f"no frames contain SZA >= {minimum_sza:g} degrees"
+        )
     return retained_positions, sza[eligible_frames], diagnostics
 
 
@@ -352,10 +360,12 @@ def load_precipitation_cs_files(
     filenames,
     wic_source_intervals=None,
     minimum_sza=None,
+    product_loader=None,
 ):
     """Load and concatenate several orbit files with one verified grid."""
 
     products = []
+    excluded_files = []
     for path in filenames:
         orbit = _orbit_from_path(path)
         if wic_source_intervals is None:
@@ -364,15 +374,19 @@ def load_precipitation_cs_files(
             if orbit not in wic_source_intervals:
                 raise ValueError(f"orbit {orbit} has no manual frame interval")
             interval = wic_source_intervals[orbit]
-        products.append(
-            load_precipitation_cs(
+        try:
+            product = load_precipitation_cs(
                 path,
+                product_loader=product_loader,
                 wic_source_interval=interval,
                 minimum_sza=minimum_sza,
             )
-        )
+        except _NoFramesRemainError:
+            excluded_files.append(str(Path(path)))
+            continue
+        products.append(product)
     if not products:
-        raise ValueError("at least one precipitation_cs file is required")
+        raise ValueError("no precipitation_cs frames remain after input selection")
 
     grid_ids = {product["metadata"]["grid_id"] for product in products}
     if len(grid_ids) != 1:
@@ -392,6 +406,7 @@ def load_precipitation_cs_files(
         result[name] = np.concatenate([product[name] for product in products], axis=0)
 
     result["metadata"] = [product["metadata"] for product in products]
+    result["excluded_files"] = excluded_files
     result["grid"] = grid
     for group in ("source_indices", "source_times", "frame_quality"):
         result[group] = {
@@ -406,8 +421,6 @@ def load_precipitation_cs_files(
             [product["metadata"]["orbit"]] * product["values"].shape[0]
         )
     result["orbit"] = np.asarray(orbit_values)
-    if result["values"].shape[0] == 0:
-        raise ValueError("no frames remain after frame and SZA selection")
     return result
 
 

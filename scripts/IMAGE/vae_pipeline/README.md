@@ -195,7 +195,9 @@ python scripts/IMAGE/vae_pipeline/run_wic_si12_pipeline.py \
 
 This still enforces finite values, nonnegative uncertainties, method validity,
 positive coverage, and positive training weight. Frames with no qualifying
-SZA pixels are removed before the six camera fields are materialized.
+SZA pixels are removed before the six camera fields are materialized. Orbit
+files with no qualifying frame are skipped and listed by split under
+`sza_excluded_files` in the saved data provenance.
 
 The current copied corpus contains 157 of the 173 manually accepted orbits.
 Their intervals map to 10,680 Product-2 frames, of which 9,728 have valid

@@ -235,6 +235,16 @@ def run(arguments):
         "manual_frame_intervals": (
             None if intervals is None else str(Path(arguments.segments).resolve())
         ),
+        "sza_excluded_files": {
+            "train": train_product.get("excluded_files", []),
+            "validation": (
+                [] if validation_product is None
+                else validation_product.get("excluded_files", [])
+            ),
+            "test": (
+                [] if test_product is None else test_product.get("excluded_files", [])
+            ),
+        },
     }
     configuration = {
         "epochs": arguments.epochs,
