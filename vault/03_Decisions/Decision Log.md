@@ -287,3 +287,9 @@ After that baseline is evaluated:
 3. do not make measurement uncertainty additional decoder outputs in the
    baseline, because that would entangle observing-system uncertainty with the
    intended geophysical latent covariance.
+
+**Implementation checkpoint:** Commit `23afaeb` implements the first step with
+training-only median precision scales, transformed-variance floors, relative-
+precision caps, and valid-support reduction. The fitted configuration is
+mandatory for training/evaluation and is saved in the artifact. The old beta
+value is not automatically accepted as calibrated under the new loss.

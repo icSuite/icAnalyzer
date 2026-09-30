@@ -1,7 +1,7 @@
 # Handoff - Latest
 
 Last updated: 2026-09-30
-Repository snapshot: `vae/wic-si12` implementation at `c6bedbf`; `main` remains at `7c71591`
+Repository snapshot: `vae/wic-si12` implementation at `23afaeb`; `main` remains at `7c71591`
 
 ## Outcome
 
@@ -38,6 +38,16 @@ keV in this baseline.
 
 ## Evidence
 
+- Absolute-uncertainty commit: `23afaeb Preserve absolute uncertainty in VAE
+  loss`. Training fits one transformed median precision per channel from the
+  training split, uses explicit floor/cap safeguards, and reduces weighted
+  error by valid support rather than weight sum. Absolute uncertainty and
+  quality differences between frames therefore no longer cancel. The complete
+  configuration is stored in artifacts and required for evaluation.
+- Verification: 39 focused tests and 61 parsed Python files. Current and
+  legacy orbit-85 smokes plus a three-orbit held-out smoke completed through
+  training, artifact reload, sampling, propagation, covariance, and sparse
+  reconstruction. Existing saved scientific runs predate this loss change.
 - Full SZA-support audit: across all 1,378 current files and 358,439 frames,
   only 1,483 of 2,116 grid cells ever satisfy `SZA >= 105°`. Columns 33--45
   have zero eligible targets; column 32 has only 2,047 cell-times. The current
@@ -170,10 +180,10 @@ normal workstation.
 
 Next:
 
-1. implement the confirmed uncertainty-loss revision: fit one precision scale
-   per channel on training data, preserve absolute uncertainty differences
-   across frames, use uncertainty floors/caps and valid-support reduction, and
-   recalibrate the KL balance; keep only WIC/SI12 decoder outputs;
+1. calibrate the new loss with training-split precision diagnostics and a beta
+   sweep; compare physical held-out residuals and sample dispersion because
+   old/new and independently scaled current/legacy weighted losses are not
+   directly comparable;
 2. choose a scientifically explicit nightside support/domain or revise the SZA
    threshold; if retaining `SZA >= 105°`, exclude permanently unsupported
    cells from ensemble statistics, physical propagation, visualization, and
@@ -200,9 +210,9 @@ non-destructive Cubed-Sphere converter; do not rescale pixel indices.
   SZA-only audit shows that columns 33--45 have no training targets while the
   current VAE and covariance path still emits and uses them. A supported-domain
   decision and implementation must precede scientific interpretation or full
-  paired SZA-only training. The user also confirmed that absolute
-  measurement-uncertainty weighting in the loss is the next implementation
-  step, followed by encoder-context and downstream covariance experiments. The
+  paired SZA-only training. Absolute measurement-uncertainty weighting is now
+  implemented, with beta calibration followed by encoder-context and
+  downstream covariance experiments still open. The
   public icPhysics propagation boundary and coordinate-based annotation
   conversion remain explicit follow-up decisions.
 - Priority/deadline: unchanged. The December 2026 paper target remains the

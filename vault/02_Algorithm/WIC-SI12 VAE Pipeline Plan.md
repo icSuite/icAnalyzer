@@ -2,7 +2,8 @@
 
 Last reviewed: 2026-09-30
 Status: End-to-end baseline, saved-run diagnostics, and paired legacy/rerun
-comparison implemented; full comparison runs and publication validation remain
+comparison implemented; absolute uncertainty weighting is implemented but
+requires loss calibration before full comparison runs
 
 ## Implementation checkpoint
 
@@ -96,6 +97,15 @@ latent/background covariance and measurement/observation covariance separate
 and explicitly named. Do not make `dwic` and `dsi12` decoder outputs in the
 baseline because that would mix instrument/processing uncertainty into the
 geophysical latent state.
+
+Commit `23afaeb` completes the first implementation step. The runner fits
+median transformed precision on training data only, applies a variance floor
+and relative-precision cap, reduces by valid support, and stores complete
+weighting provenance. Both absolute uncertainty and absolute quality now
+affect frame contribution. Current, legacy, and held-out-path smokes passed.
+The previous `beta=1e-3` is not considered calibrated under the new loss;
+perform a controlled beta sweep before a full scientific run. Existing run
+artifacts predate this loss and are not uncertainty-revision results.
 
 Still open:
 
