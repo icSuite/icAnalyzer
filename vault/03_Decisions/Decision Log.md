@@ -261,3 +261,29 @@ runs. Accompany model comparisons with direct paired field, uncertainty,
 quality, and support diagnostics. Describe the result as a net product-pipeline
 change rather than a pure fuvpy effect because matching, coregistration,
 gridding, validity, and uncertainty propagation also changed.
+
+## 2026-09-30 - Sequence VAE uncertainty modeling through the loss first
+
+**Decision confirmed by the user:** Implement absolute measurement-uncertainty
+weighting in the reconstruction loss before experimenting with uncertainty as
+encoder context or downstream covariance composition.
+
+The current VAE already propagates `dwic` and `dsi12` into transformed-space
+variance, but normalizes precision independently within every sample and
+channel and divides by the weight sum. This retains spatially relative weights
+while largely cancelling absolute uncertainty differences between frames.
+
+Implement the first revision with one training-set precision scale per WIC and
+SI12 channel, explicit uncertainty floors/caps, and valid-support reduction so
+globally uncertain frames contribute less than precise frames. Keep corrected
+WIC and SI12 as the only decoder outputs and recalibrate the KL balance.
+
+After that baseline is evaluated:
+
+1. test transformed/log `dwic` and `dsi12` as auxiliary encoder inputs;
+2. keep latent/background covariance and measurement/observation covariance
+   separate downstream, combining them only for an explicitly defined
+   predictive-observation quantity; and
+3. do not make measurement uncertainty additional decoder outputs in the
+   baseline, because that would entangle observing-system uncertainty with the
+   intended geophysical latent covariance.

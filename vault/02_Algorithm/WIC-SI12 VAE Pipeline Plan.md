@@ -1,6 +1,6 @@
 # WIC/SI12 VAE Pipeline Plan
 
-Last reviewed: 2026-09-29
+Last reviewed: 2026-09-30
 Status: End-to-end baseline, saved-run diagnostics, and paired legacy/rerun
 comparison implemented; full comparison runs and publication validation remain
 
@@ -80,6 +80,22 @@ on the same orbit split; a streaming direct comparison reports fields,
 uncertainties, quality weights, support, and spatial mean/difference maps.
 Treat its result as a net old-versus-new product-pipeline change, not as an
 isolated fuvpy effect.
+
+On 2026-09-30 the user confirmed the uncertainty-modeling sequence. First,
+replace the current per-sample/per-channel relative-precision normalization
+with a loss that preserves absolute `dwic`/`dsi12` differences between frames.
+Use one fitted training-set precision scale per science channel, explicit
+uncertainty floors/caps, and reduction by valid support rather than by the sum
+of precision weights. Keep corrected WIC and SI12 as the only decoder outputs
+and recalibrate the KL weight after the loss scale changes.
+
+Only after that baseline is evaluated, test transformed/log uncertainty maps
+as auxiliary encoder inputs. This is additional observation context, not an
+uncertainty output and not a substitute for loss weighting. Downstream, keep
+latent/background covariance and measurement/observation covariance separate
+and explicitly named. Do not make `dwic` and `dsi12` decoder outputs in the
+baseline because that would mix instrument/processing uncertainty into the
+geophysical latent state.
 
 Still open:
 

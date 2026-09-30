@@ -1,6 +1,6 @@
 # Current State
 
-Last reviewed: 2026-09-29
+Last reviewed: 2026-09-30
 Repository snapshot: `vae/wic-si12` implementation at `c6bedbf`; `main` remains at `7c71591`
 Worktree: clean before this memory checkpoint
 
@@ -226,20 +226,29 @@ also changed.
 
 ## Next actionable work
 
-1. Before running the full paired VAEs, decide whether the scientific state is
+1. Implement the agreed uncertainty-loss revision: preserve absolute
+   `dwic`/`dsi12` differences between frames using one training-set precision
+   scale per channel, an uncertainty floor/cap, and valid-pixel rather than
+   weight-sum reduction. Keep WIC and SI12 as the only decoder outputs and
+   retune the KL balance against the changed reconstruction scale.
+2. Before running the full paired VAEs, decide whether the scientific state is
    the explicitly supported nightside domain or whether the SZA threshold must
    change. Mask permanently unsupported decoder output out of sampling,
    propagation, covariance, visualization, and reconstruction if the
    nightside-only formulation is retained.
-2. Evaluate prior dispersion and sparse reconstruction across many held-out
+3. After the revised loss is evaluated, test uncertainty maps as auxiliary
+   encoder inputs. Separately preserve latent/background covariance and
+   measurement/observation covariance as named downstream quantities. Do not
+   make `dwic` and `dsi12` decoder outputs.
+4. Evaluate prior dispersion and sparse reconstruction across many held-out
    frames, seeds, and Hall-only/Pedersen-only/joint geometries.
-3. Choose an explicit positivity-preserving reconstruction state or method;
+5. Choose an explicit positivity-preserving reconstruction state or method;
    do not silently clip negative posterior conductance.
-4. Decide whether early stopping is useful now that the best validation state
+6. Decide whether early stopping is useful now that the best validation state
    is restored automatically.
-5. Recover the legacy annotation source grid and implement the previously
+7. Recover the legacy annotation source grid and implement the previously
    agreed non-destructive coordinate conversion before applying annotations.
-6. Decide separately whether to authorize a public icPhysics propagation API.
+8. Decide separately whether to authorize a public icPhysics propagation API.
 
 The December 2026 paper target remains the latest recorded publication target.
 The AGU 2026 abstract outcome, target journal, co-authors, and review standard

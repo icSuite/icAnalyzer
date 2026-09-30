@@ -1,6 +1,6 @@
 # Handoff - Latest
 
-Last updated: 2026-09-29
+Last updated: 2026-09-30
 Repository snapshot: `vae/wic-si12` implementation at `c6bedbf`; `main` remains at `7c71591`
 
 ## Outcome
@@ -170,15 +170,22 @@ normal workstation.
 
 Next:
 
-1. choose a scientifically explicit nightside support/domain or revise the SZA
+1. implement the confirmed uncertainty-loss revision: fit one precision scale
+   per channel on training data, preserve absolute uncertainty differences
+   across frames, use uncertainty floors/caps and valid-support reduction, and
+   recalibrate the KL balance; keep only WIC/SI12 decoder outputs;
+2. choose a scientifically explicit nightside support/domain or revise the SZA
    threshold; if retaining `SZA >= 105°`, exclude permanently unsupported
    cells from ensemble statistics, physical propagation, visualization, and
    reconstruction before full paired training;
-2. measure prior-sample calibration and covariance convergence across seeds;
-3. evaluate many held-out fields and Hall-only, Pedersen-only, and joint
+3. then test uncertainty maps as auxiliary encoder inputs and implement clear
+   downstream separation of latent/background covariance from measurement/
+   observation covariance; do not decode uncertainty fields;
+4. measure prior-sample calibration and covariance convergence across seeds;
+5. evaluate many held-out fields and Hall-only, Pedersen-only, and joint
    realistic sparse geometries;
-4. compare prior-mean and independent-channel baselines;
-5. implement a positivity-preserving reconstruction formulation without
+6. compare prior-mean and independent-channel baselines;
+7. implement a positivity-preserving reconstruction formulation without
    silent clipping.
 
 Annotation conversion is also open. The annotation JSON contains 53 orbit
@@ -193,7 +200,9 @@ non-destructive Cubed-Sphere converter; do not rescale pixel indices.
   SZA-only audit shows that columns 33--45 have no training targets while the
   current VAE and covariance path still emits and uses them. A supported-domain
   decision and implementation must precede scientific interpretation or full
-  paired SZA-only training. The
+  paired SZA-only training. The user also confirmed that absolute
+  measurement-uncertainty weighting in the loss is the next implementation
+  step, followed by encoder-context and downstream covariance experiments. The
   public icPhysics propagation boundary and coordinate-based annotation
   conversion remain explicit follow-up decisions.
 - Priority/deadline: unchanged. The December 2026 paper target remains the
