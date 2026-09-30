@@ -579,6 +579,103 @@ def fit_channel_transform(values, valid):
     return ChannelTransform(scale, center, spread)
 
 
+def fit_precision_weighting(
+    product_data,
+    transform,
+    variance_floor=1e-3,
+    maximum_relative_precision=100.0,
+    maximum_scale_samples=2_000_000,
+):
+    """Fit one transformed-space precision scale per channel on training data.
+
+    The scale is the median valid precision from a deterministic frame sample.
+    It is fitted once, rather than independently for every image, so absolute
+    uncertainty differences between training frames remain in the loss.
+    """
+
+    values = np.asarray(product_data["values"], dtype=np.float32)
+    standard_deviation = np.asarray(
+        product_data["standard_deviation"], dtype=np.float32
+    )
+    valid = np.asarray(product_data["valid"], dtype=bool)
+    quality = np.asarray(product_data["quality"], dtype=np.float32)
+    if values.ndim != 4 or values.shape[1] != 2:
+        raise ValueError("training values must have shape (sample, 2, y, x)")
+    for name, array in (
+        ("standard_deviation", standard_deviation),
+        ("valid", valid),
+        ("quality", quality),
+    ):
+        if array.shape != values.shape:
+            raise ValueError(f"{name} shape {array.shape} does not match {values.shape}")
+
+    variance_floor = float(variance_floor)
+    maximum_relative_precision = float(maximum_relative_precision)
+    maximum_scale_samples = int(maximum_scale_samples)
+    if not np.isfinite(variance_floor) or variance_floor <= 0:
+        raise ValueError("variance_floor must be finite and positive")
+    if not np.isfinite(maximum_relative_precision) or maximum_relative_precision <= 0:
+        raise ValueError("maximum_relative_precision must be finite and positive")
+    if maximum_scale_samples <= 0:
+        raise ValueError("maximum_scale_samples must be positive")
+
+    possible_values_per_channel = int(values.shape[0] * np.prod(values.shape[2:]))
+    frame_stride = max(
+        1,
+        int(np.ceil(possible_values_per_channel / maximum_scale_samples)),
+    )
+    selection = slice(None, None, frame_stride)
+    sampled_variance = transform.variance(
+        values[selection], standard_deviation[selection]
+    )
+    sampled_valid = valid[selection]
+    sampled_quality = quality[selection]
+
+    precision_scale = np.empty(2, dtype=np.float32)
+    scale_sample_count = []
+    relative_precision_diagnostics = []
+    for channel in range(2):
+        support = (
+            sampled_valid[:, channel]
+            & np.isfinite(sampled_quality[:, channel])
+            & (sampled_quality[:, channel] > 0)
+            & np.isfinite(sampled_variance[:, channel])
+            & (sampled_variance[:, channel] >= 0)
+        )
+        variance = sampled_variance[:, channel][support]
+        if variance.size == 0:
+            raise ValueError(f"channel {channel} has no valid uncertainty samples")
+        precision = 1.0 / np.maximum(variance, variance_floor)
+        precision_scale[channel] = np.median(precision)
+        if not np.isfinite(precision_scale[channel]) or precision_scale[channel] <= 0:
+            raise ValueError(f"channel {channel} has invalid fitted precision scale")
+        scale_sample_count.append(int(precision.size))
+        relative_precision = precision / precision_scale[channel]
+        clipped_precision = np.minimum(
+            relative_precision, maximum_relative_precision
+        )
+        relative_precision_diagnostics.append({
+            "median": float(np.median(relative_precision)),
+            "mean_before_cap": float(np.mean(relative_precision)),
+            "mean_after_cap": float(np.mean(clipped_precision)),
+            "fraction_capped": float(np.mean(
+                relative_precision > maximum_relative_precision
+            )),
+        })
+
+    return {
+        "kind": "training_median_precision_v1",
+        "precision_scale": precision_scale.tolist(),
+        "variance_floor": variance_floor,
+        "maximum_relative_precision": maximum_relative_precision,
+        "maximum_scale_samples": maximum_scale_samples,
+        "frame_stride": frame_stride,
+        "scale_sample_count": scale_sample_count,
+        "relative_precision_diagnostics": relative_precision_diagnostics,
+        "loss_reduction": "mean_valid_support_per_sample_channel",
+    }
+
+
 #%% Torch dataset
 
 class WICSI12ArrayDataset(Dataset):

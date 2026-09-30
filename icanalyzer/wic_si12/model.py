@@ -111,15 +111,23 @@ def vae_loss(
     mu,
     logvar,
     beta=1.0,
+    precision_scale=(1.0, 1.0),
     variance_floor=1e-3,
     maximum_relative_precision=100.0,
 ):
-    """Return consistently reduced reconstruction and KL losses.
+    """Return uncertainty-weighted reconstruction and KL losses.
 
-    Inverse-variance precision is normalized independently for each sample and
-    channel.  This uses measurement uncertainty without allowing its absolute
-    units or the number of valid pixels to change the effective KL weight.
+    ``precision_scale`` is fitted once on the training split for each channel.
+    Reduction uses valid support rather than the weight sum, preserving
+    absolute uncertainty differences between images.
     """
+
+    variance_floor = float(variance_floor)
+    maximum_relative_precision = float(maximum_relative_precision)
+    if not 0 < variance_floor < float("inf"):
+        raise ValueError("variance_floor must be finite and positive")
+    if not 0 < maximum_relative_precision < float("inf"):
+        raise ValueError("maximum_relative_precision must be finite and positive")
 
     valid = valid.to(dtype=torch.bool)
     quality = torch.where(
@@ -127,30 +135,41 @@ def vae_loss(
         quality.to(dtype=reconstructed.dtype),
         torch.zeros_like(quality, dtype=reconstructed.dtype),
     )
+    quality = torch.clamp(quality, min=0.0)
     variance = transformed_variance.to(dtype=reconstructed.dtype)
+    finite_variance = torch.isfinite(variance) & (variance >= 0)
+    support = valid & (quality > 0) & finite_variance
     variance = torch.where(
-        valid & torch.isfinite(variance),
+        finite_variance,
         variance,
         torch.full_like(variance, float(variance_floor)),
     )
 
     precision = 1.0 / torch.clamp(variance, min=variance_floor)
-    precision = torch.clamp(precision, max=maximum_relative_precision)
-    support = valid.to(reconstructed.dtype) * (quality > 0).to(reconstructed.dtype)
+    precision_scale = torch.as_tensor(
+        precision_scale,
+        dtype=reconstructed.dtype,
+        device=reconstructed.device,
+    )
+    if precision_scale.shape != (2,):
+        raise ValueError("precision_scale must contain one value per channel")
+    if not torch.all(torch.isfinite(precision_scale) & (precision_scale > 0)):
+        raise ValueError("precision_scale values must be finite and positive")
+    relative_precision = precision / precision_scale.reshape(1, 2, 1, 1)
+    relative_precision = torch.clamp(
+        relative_precision, max=maximum_relative_precision
+    )
 
-    precision_sum = (precision * support).sum(dim=(-2, -1), keepdim=True)
-    support_count = support.sum(dim=(-2, -1), keepdim=True)
-    mean_precision = precision_sum / torch.clamp(support_count, min=1.0)
-    relative_precision = precision / torch.clamp(mean_precision, min=1e-12)
-
-    weights = valid.to(reconstructed.dtype) * quality * relative_precision
+    support_float = support.to(reconstructed.dtype)
+    weights = support_float * quality * relative_precision
     squared_error = (reconstructed - target)**2
-    weighted_error = (weights * squared_error).sum(dim=(1, 2, 3))
-    weight_sum = weights.sum(dim=(1, 2, 3))
-    active = weight_sum > 0
+    weighted_error = (weights * squared_error).sum(dim=(-2, -1))
+    support_count = support_float.sum(dim=(-2, -1))
+    active = support_count > 0
     if not torch.any(active):
         raise ValueError("batch contains no valid weighted pixels")
-    reconstruction_loss = (weighted_error[active] / weight_sum[active]).mean()
+    channel_loss = weighted_error / torch.clamp(support_count, min=1.0)
+    reconstruction_loss = channel_loss[active].mean()
 
     kl_per_sample = -0.5 * torch.sum(
         1.0 + logvar - mu.pow(2) - logvar.exp(), dim=1

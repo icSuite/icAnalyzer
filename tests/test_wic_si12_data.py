@@ -7,6 +7,7 @@ from icanalyzer.wic_si12.data import (
     ChannelTransform,
     REQUIRED_CAMERA_FIELDS,
     fit_channel_transform,
+    fit_precision_weighting,
     load_good_orbit_intervals,
     load_precipitation_cs,
     load_precipitation_cs_files,
@@ -296,6 +297,41 @@ def test_channel_transform_round_trip_and_variance():
 
     rebuilt = ChannelTransform.from_dict(transform.to_dict())
     np.testing.assert_allclose(rebuilt.inverse(transformed), values, atol=1e-5)
+
+
+def test_fits_one_training_precision_scale_per_channel():
+    values = np.zeros((2, 2, 2, 2), dtype=np.float32)
+    standard_deviation = np.empty_like(values)
+    standard_deviation[0, 0] = 1.0
+    standard_deviation[1, 0] = 2.0
+    standard_deviation[0, 1] = 2.0
+    standard_deviation[1, 1] = 4.0
+    product = {
+        "values": values,
+        "standard_deviation": standard_deviation,
+        "valid": np.ones_like(values, dtype=bool),
+        "quality": np.ones_like(values),
+    }
+    transform = ChannelTransform(
+        scale=[1.0, 1.0], center=[0.0, 0.0], spread=[1.0, 1.0]
+    )
+
+    weighting = fit_precision_weighting(
+        product,
+        transform,
+        variance_floor=1e-6,
+        maximum_scale_samples=100,
+    )
+
+    assert weighting["kind"] == "training_median_precision_v1"
+    np.testing.assert_allclose(weighting["precision_scale"], [0.625, 0.15625])
+    assert weighting["frame_stride"] == 1
+    assert weighting["scale_sample_count"] == [8, 8]
+    np.testing.assert_allclose(
+        [item["median"] for item in weighting["relative_precision_diagnostics"]],
+        [1.0, 1.0],
+    )
+    assert weighting["loss_reduction"] == "mean_valid_support_per_sample_channel"
 
 
 def test_orbit_split_has_no_overlap():

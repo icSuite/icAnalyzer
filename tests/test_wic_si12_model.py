@@ -16,6 +16,14 @@ from icanalyzer.wic_si12.workflow import (
 )
 
 
+FIXED_WEIGHTING = {
+    "kind": "fixed_precision_scale_v1",
+    "precision_scale": [1.0, 1.0],
+    "variance_floor": 1e-3,
+    "maximum_relative_precision": 100.0,
+}
+
+
 def synthetic_product(n_samples=6):
     generator = np.random.default_rng(3)
     values = np.empty((n_samples, 2, 46, 46), dtype=np.float32)
@@ -51,6 +59,79 @@ def test_model_forward_and_consistent_loss_reduction():
     assert torch.isfinite(losses["total"])
 
 
+def test_absolute_uncertainty_changes_frame_contribution():
+    reconstructed = torch.ones(2, 2, 1, 1)
+    target = torch.zeros_like(reconstructed)
+    valid = torch.ones_like(reconstructed, dtype=torch.bool)
+    quality = torch.ones_like(reconstructed)
+    variance = torch.ones_like(reconstructed)
+    variance[1] = 4.0
+    mu = torch.zeros(2, 1)
+    logvar = torch.zeros_like(mu)
+
+    losses = vae_loss(
+        reconstructed,
+        target,
+        valid,
+        quality,
+        variance,
+        mu,
+        logvar,
+        beta=0.0,
+        precision_scale=[1.0, 1.0],
+    )
+
+    assert torch.isclose(losses["reconstruction"], torch.tensor(0.625))
+
+
+def test_training_channel_precision_scales_balance_typical_uncertainty():
+    reconstructed = torch.ones(1, 2, 1, 1)
+    target = torch.zeros_like(reconstructed)
+    valid = torch.ones_like(reconstructed, dtype=torch.bool)
+    quality = torch.ones_like(reconstructed)
+    variance = torch.tensor([[[[0.25]], [[4.0]]]])
+    mu = torch.zeros(1, 1)
+    logvar = torch.zeros_like(mu)
+
+    losses = vae_loss(
+        reconstructed,
+        target,
+        valid,
+        quality,
+        variance,
+        mu,
+        logvar,
+        beta=0.0,
+        precision_scale=[4.0, 0.25],
+    )
+
+    assert torch.isclose(losses["reconstruction"], torch.tensor(1.0))
+
+
+def test_quality_scale_is_not_cancelled_by_loss_reduction():
+    reconstructed = torch.ones(1, 2, 1, 1)
+    target = torch.zeros_like(reconstructed)
+    valid = torch.ones_like(reconstructed, dtype=torch.bool)
+    quality = torch.full_like(reconstructed, 0.5)
+    variance = torch.ones_like(reconstructed)
+    mu = torch.zeros(1, 1)
+    logvar = torch.zeros_like(mu)
+
+    losses = vae_loss(
+        reconstructed,
+        target,
+        valid,
+        quality,
+        variance,
+        mu,
+        logvar,
+        beta=0.0,
+        precision_scale=[1.0, 1.0],
+    )
+
+    assert torch.isclose(losses["reconstruction"], torch.tensor(0.5))
+
+
 def test_one_epoch_and_artifact_reload(tmp_path):
     product = synthetic_product()
     product["valid"][0] = False
@@ -69,6 +150,7 @@ def test_one_epoch_and_artifact_reload(tmp_path):
         learning_rate=1e-3,
         beta=1e-4,
         seed=5,
+        loss_configuration=FIXED_WEIGHTING,
     )
     assert len(history) == 1
     assert np.isfinite(history[0]["train"]["total"])
@@ -82,7 +164,11 @@ def test_one_epoch_and_artifact_reload(tmp_path):
         model,
         transform,
         history,
-        training_configuration={"epochs": 1, "seed": 5},
+        training_configuration={
+            "epochs": 1,
+            "seed": 5,
+            "uncertainty_weighting": model.loss_configuration,
+        },
         data_provenance={"grid_id": "image_apex_130km_46x46_v1"},
         split_files={"train": ["or_0001.nc"], "validation": [], "test": []},
         evaluation={"test": evaluation},
@@ -92,6 +178,7 @@ def test_one_epoch_and_artifact_reload(tmp_path):
     assert metadata["artifact_type"] == "wic_si12_vae_run_v1"
     assert np.isfinite(metadata["evaluation"]["test"]["total"])
     assert reloaded_transform.to_dict() == transform.to_dict()
+    assert reloaded.loss_configuration == model.loss_configuration
 
 
 def test_training_restores_lowest_validation_loss_checkpoint(monkeypatch):
@@ -99,7 +186,15 @@ def test_training_restores_lowest_validation_loss_checkpoint(monkeypatch):
     with torch.no_grad():
         model.weight.zero_()
 
-    def fake_epoch(model, loader, optimizer, device, beta, training):
+    def fake_epoch(
+        model,
+        loader,
+        optimizer,
+        device,
+        beta,
+        training,
+        loss_configuration=None,
+    ):
         if training:
             with torch.no_grad():
                 model.weight.add_(1.0)
@@ -113,9 +208,20 @@ def test_training_restores_lowest_validation_loss_checkpoint(monkeypatch):
         train_loader=[None],
         validation_loader=[None],
         epochs=2,
+        loss_configuration=FIXED_WEIGHTING,
     )
 
     assert len(history) == 2
     assert model.best_validation_epoch == 1
     assert model.best_validation_total == 1.0
     assert model.weight.item() == 1.0
+
+
+def test_training_requires_explicit_uncertainty_weighting():
+    model = WICSI12VAE(latent_dim=2)
+    try:
+        train_vae(model, train_loader=[None], epochs=1)
+    except ValueError as error:
+        assert "loss_configuration is required" in str(error)
+    else:
+        raise AssertionError("training accepted an implicit uncertainty loss")

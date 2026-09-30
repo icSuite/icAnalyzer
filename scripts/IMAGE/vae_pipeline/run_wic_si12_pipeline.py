@@ -18,6 +18,7 @@ from torch.utils.data import DataLoader
 from icanalyzer.wic_si12.data import (
     WICSI12ArrayDataset,
     fit_channel_transform,
+    fit_precision_weighting,
     load_good_orbit_intervals,
     load_precipitation_cs_files,
     select_annotated_orbit_files,
@@ -219,6 +220,13 @@ def run(arguments):
     transform = fit_channel_transform(
         train_product["values"], train_product["valid"]
     )
+    uncertainty_weighting = fit_precision_weighting(
+        train_product,
+        transform,
+        variance_floor=arguments.variance_floor,
+        maximum_relative_precision=arguments.maximum_relative_precision,
+        maximum_scale_samples=arguments.precision_scale_samples,
+    )
     train_loader = make_loader(
         train_product, transform, arguments.batch_size, shuffle=True
     )
@@ -247,11 +255,16 @@ def run(arguments):
         beta=arguments.beta,
         device=device,
         seed=arguments.seed,
+        loss_configuration=uncertainty_weighting,
     )
     evaluation = {}
     if test_loader is not None:
         evaluation["test"] = evaluate_vae(
-            model, test_loader, beta=arguments.beta, device=device
+            model,
+            test_loader,
+            beta=arguments.beta,
+            device=device,
+            loss_configuration=uncertainty_weighting,
         )
 
     output = Path(arguments.output)
@@ -300,6 +313,7 @@ def run(arguments):
         "device": device,
         "optimizer": "Adam",
         "beta_schedule": "constant",
+        "uncertainty_weighting": uncertainty_weighting,
         "minimum_sza_degrees": arguments.minimum_sza,
         "comparison_data_version": arguments.data_version,
         "selected_epoch": (
@@ -457,6 +471,24 @@ def parse_arguments(argv=None):
     parser.add_argument("--latent-dim", type=int, default=32)
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--beta", type=float, default=1e-3)
+    parser.add_argument(
+        "--variance-floor",
+        type=float,
+        default=1e-3,
+        help="minimum transformed measurement variance used by the VAE loss",
+    )
+    parser.add_argument(
+        "--maximum-relative-precision",
+        type=float,
+        default=100.0,
+        help="cap on precision divided by its fitted training-channel scale",
+    )
+    parser.add_argument(
+        "--precision-scale-samples",
+        type=int,
+        default=2_000_000,
+        help="maximum candidate grid cells per channel used to fit median precision",
+    )
     parser.add_argument(
         "--minimum-sza",
         type=float,

@@ -25,7 +25,49 @@ def set_random_seed(seed):
 
 #%% Training
 
-def _run_epoch(model, loader, optimizer, device, beta, training):
+def _validated_loss_configuration(loss_configuration):
+    if loss_configuration is None:
+        raise ValueError(
+            "loss_configuration is required so uncertainty weighting is explicit"
+        )
+    if loss_configuration.get("kind") not in (
+        "training_median_precision_v1", "fixed_precision_scale_v1"
+    ):
+        raise ValueError(
+            f"unsupported loss configuration {loss_configuration.get('kind')!r}"
+        )
+    required = (
+        "precision_scale", "variance_floor", "maximum_relative_precision"
+    )
+    missing = [name for name in required if name not in loss_configuration]
+    if missing:
+        raise ValueError(
+            "loss configuration is missing: " + ", ".join(missing)
+        )
+    precision_scale = np.asarray(
+        loss_configuration["precision_scale"], dtype=float
+    )
+    if precision_scale.shape != (2,) or np.any(~np.isfinite(precision_scale)):
+        raise ValueError("loss precision_scale must contain two finite values")
+    if np.any(precision_scale <= 0):
+        raise ValueError("loss precision_scale values must be positive")
+    for name in ("variance_floor", "maximum_relative_precision"):
+        value = float(loss_configuration[name])
+        if not np.isfinite(value) or value <= 0:
+            raise ValueError(f"loss {name} must be finite and positive")
+    return dict(loss_configuration)
+
+
+def _run_epoch(
+    model,
+    loader,
+    optimizer,
+    device,
+    beta,
+    training,
+    loss_configuration=None,
+):
+    loss_configuration = _validated_loss_configuration(loss_configuration)
     model.train(training)
     totals = {"total": 0.0, "reconstruction": 0.0, "kl": 0.0}
     sample_count = 0
@@ -50,6 +92,11 @@ def _run_epoch(model, loader, optimizer, device, beta, training):
                 mu,
                 logvar,
                 beta=beta,
+                precision_scale=loss_configuration["precision_scale"],
+                variance_floor=loss_configuration["variance_floor"],
+                maximum_relative_precision=loss_configuration[
+                    "maximum_relative_precision"
+                ],
             )
             if training:
                 losses["total"].backward()
@@ -74,11 +121,13 @@ def train_vae(
     beta=1e-3,
     device="cpu",
     seed=0,
+    loss_configuration=None,
 ):
     """Train with separate, consistently reduced reconstruction and KL logs."""
 
     if epochs <= 0:
         raise ValueError("epochs must be positive")
+    loss_configuration = _validated_loss_configuration(loss_configuration)
     set_random_seed(seed)
     device = torch.device(device)
     model = model.to(device)
@@ -90,7 +139,13 @@ def train_vae(
 
     for epoch in range(1, epochs + 1):
         train_metrics = _run_epoch(
-            model, train_loader, optimizer, device, beta, training=True
+            model,
+            train_loader,
+            optimizer,
+            device,
+            beta,
+            training=True,
+            loss_configuration=loss_configuration,
         )
         record = {"epoch": epoch, "train": train_metrics}
         if validation_loader is not None:
@@ -101,6 +156,7 @@ def train_vae(
                 device=device,
                 beta=beta,
                 training=False,
+                loss_configuration=loss_configuration,
             )
             validation_total = record["validation"]["total"]
             if validation_total < best_validation_total:
@@ -118,11 +174,21 @@ def train_vae(
     model.best_validation_total = (
         None if best_validation_epoch is None else float(best_validation_total)
     )
+    model.loss_configuration = loss_configuration
     return model, history
 
 
-def evaluate_vae(model, loader, beta=1e-3, device="cpu"):
+def evaluate_vae(
+    model,
+    loader,
+    beta=1e-3,
+    device="cpu",
+    loss_configuration=None,
+):
     """Evaluate the same reduced loss without changing model parameters."""
+
+    if loss_configuration is None:
+        loss_configuration = getattr(model, "loss_configuration", None)
 
     return _run_epoch(
         model,
@@ -131,6 +197,7 @@ def evaluate_vae(model, loader, beta=1e-3, device="cpu"):
         device=torch.device(device),
         beta=beta,
         training=False,
+        loss_configuration=loss_configuration,
     )
 
 
@@ -173,6 +240,9 @@ def load_run_artifact(filename, device="cpu"):
         raise ValueError("unsupported run artifact")
     model = WICSI12VAE.from_configuration(artifact["model_configuration"])
     model.load_state_dict(artifact["model_state"])
+    model.loss_configuration = artifact.get("training_configuration", {}).get(
+        "uncertainty_weighting"
+    )
     model.to(device)
     model.eval()
     transform = ChannelTransform.from_dict(artifact["transform"])

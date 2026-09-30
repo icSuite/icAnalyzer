@@ -164,6 +164,29 @@ fixed 2 keV electron energy, and performs an ensemble-space sparse update.
 The decoder constrains corrected WIC to be nonnegative without clipping
 generated fields.
 
+Measurement uncertainty enters the reconstruction loss through `dwic` and
+`dsi12`; it is not decoded as an additional science field. The runner fits one
+median transformed-space precision scale per channel from the training split.
+Each pixel is weighted by quality times precision relative to that fixed
+channel scale. Loss reduction divides by valid support, not by the sum of
+weights, so an image whose uncertainties are uniformly larger contributes
+less than a precise image. The transformed variance floor defaults to `1e-3`
+and relative precision is capped at `100`; both values and the fitted scales
+are stored under `uncertainty_weighting` in the run configuration.
+
+This loss is not numerically comparable to runs made before the absolute
+uncertainty revision. In particular, `beta` must be treated as a new tuning
+parameter rather than copied from an older run solely because its value was
+previously adequate. Override the safeguards with `--variance-floor`,
+`--maximum-relative-precision`, and `--precision-scale-samples` only as an
+explicit sensitivity experiment.
+
+Matched legacy and current runs fit their precision scales independently, so
+their raw weighted reconstruction losses are also not direct measures of which
+physical fields are closer to truth. Compare physical-space held-out residuals,
+sample calibration, covariance, and reconstruction skill; use each weighted
+loss for optimization and within-run checkpoint selection.
+
 ```bash
 python scripts/IMAGE/vae_pipeline/run_wic_si12_pipeline.py \
   /path/to/precipitation_cs/image_apex_130km_46x46_v1/IR_hardy \
