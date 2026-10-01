@@ -412,8 +412,9 @@ tensor-product basis onto the 46-by-46 grid.
 
 Restore the legacy-lineage defaults: latent dimension 36, batch size 8,
 learning rate `1e-4`, 1,000 epochs, seed 1, constant `beta=1`, and
-`ReduceLROnPlateau(factor=0.5, patience=10)`. The scheduler monitors validation
-total loss when available. Because the absolute-uncertainty loss differs from
+`ReduceLROnPlateau(factor=0.5, patience=10)`. The scheduler monitors training
+total loss as in the old script; validation independently selects the saved
+checkpoint. Because the absolute-uncertainty loss differs from
 the historical loss, `beta=1` is an experiment setting rather than a calibrated
 scientific choice.
 

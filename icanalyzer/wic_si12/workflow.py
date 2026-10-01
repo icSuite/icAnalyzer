@@ -189,11 +189,7 @@ def train_vae(
                     name: value.detach().cpu().clone()
                     for name, value in model.state_dict().items()
                 }
-        scheduler_metric = (
-            record["validation"]["total"]
-            if "validation" in record else record["train"]["total"]
-        )
-        scheduler.step(scheduler_metric)
+        scheduler.step(record["train"]["total"])
         record["learning_rate"] = float(optimizer.param_groups[0]["lr"])
         history.append(record)
 

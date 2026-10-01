@@ -54,8 +54,9 @@ The canonical runner now uses:
 - a training-only standardized `log10(value + 1)` transform;
 - latent dimension 36, batch size 8, learning rate `1e-4`, constant `beta=1`,
   seed 1, and 1,000 epochs by default; and
-- `ReduceLROnPlateau` with factor 0.5 and patience 10, monitoring validation
-  total loss when available and recording learning rate in every epoch.
+- `ReduceLROnPlateau` with factor 0.5 and patience 10, monitoring training
+  total loss as in the old script and recording learning rate in every epoch;
+  validation loss independently selects the saved checkpoint.
 
 The 46-by-46 grid's `xi` and `eta` axes are uniformly spaced with equal extent,
 so the normalized tensor-product basis is equivalent to evaluating the old

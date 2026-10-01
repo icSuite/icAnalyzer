@@ -172,8 +172,9 @@ enters the reconstruction loss together with measurement precision.
 
 The restored legacy-lineage defaults are 36 latent dimensions, batch size 8,
 Adam learning rate `1e-4`, `beta=1`, seed 1, and 1,000 epochs. A
-`ReduceLROnPlateau` scheduler monitors validation total loss (training total
-when there is no validation split), with factor 0.5 and patience 10. The
+`ReduceLROnPlateau` scheduler monitors training total loss, matching the old
+script, with factor 0.5 and patience 10. Validation loss independently selects
+the saved checkpoint. The
 decoder uses 30-by-30 cubic-spline control points and projects them onto the
 46-by-46 product grid. These values are command-line options and are saved in
 the run artifact.

@@ -43,8 +43,9 @@ keV in this baseline.
   The canonical model uses three propagated-mask partial convolutions, a
   30-by-30 tensor-product cubic-spline decoder on the 46-by-46 grid, and the
   old defaults: latent 36, batch 8, learning rate `1e-4`, `beta=1`, seed 1,
-  and 1,000 epochs. `ReduceLROnPlateau` uses factor 0.5 and patience 10; the
-  visualizer now plots its recorded learning-rate history.
+  and 1,000 epochs. `ReduceLROnPlateau` uses training total loss, factor 0.5,
+  and patience 10; validation independently selects the saved checkpoint, and
+  the visualizer plots the recorded learning-rate history.
 - Quality weight is intentionally absent from the encoder for this first
   controlled restoration. Corrected WIC/SI12 and binary validity enter the
   encoder; inverted background-fit weight, coverage, and `dwic`/`dsi12`

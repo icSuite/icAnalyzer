@@ -291,3 +291,36 @@ def test_training_requires_explicit_uncertainty_weighting():
         assert "loss_configuration is required" in str(error)
     else:
         raise AssertionError("training accepted an implicit uncertainty loss")
+
+
+def test_plateau_scheduler_monitors_training_loss_not_validation(monkeypatch):
+    model = torch.nn.Linear(1, 1, bias=False)
+    train_totals = iter((1.0, 2.0, 3.0))
+    validation_totals = iter((3.0, 2.0, 1.0))
+
+    def fake_epoch(
+        model,
+        loader,
+        optimizer,
+        device,
+        beta,
+        training,
+        loss_configuration=None,
+    ):
+        total = next(train_totals if training else validation_totals)
+        return {"total": total, "reconstruction": total, "kl": 0.0}
+
+    monkeypatch.setattr(workflow, "_run_epoch", fake_epoch)
+    _model, history = train_vae(
+        model,
+        train_loader=[None],
+        validation_loader=[None],
+        epochs=3,
+        learning_rate=1e-2,
+        scheduler_factor=0.5,
+        scheduler_patience=0,
+        loss_configuration=FIXED_WEIGHTING,
+    )
+
+    assert history[1]["learning_rate"] == 5e-3
+    assert history[2]["learning_rate"] == 2.5e-3

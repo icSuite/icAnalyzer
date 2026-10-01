@@ -464,7 +464,7 @@ def run(arguments):
             "optimizer": "Adam",
             "beta_schedule": "constant",
             "learning_rate_scheduler": "ReduceLROnPlateau",
-            "scheduler_monitor": "validation_total_or_train_total",
+            "scheduler_monitor": "train_total",
             "scheduler_factor": arguments.scheduler_factor,
             "scheduler_patience": arguments.scheduler_patience,
             "scheduler_minimum_learning_rate": (
