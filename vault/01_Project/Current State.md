@@ -1,7 +1,7 @@
 # Current State
 
 Last reviewed: 2026-10-01
-Repository snapshot: `vae/wic-si12` implementation at `e923875`; `main` remains at `7c71591`
+Repository snapshot: `vae/wic-si12` implementation at `a68ffaa`; `main` remains at `7c71591`
 Worktree: clean before this memory checkpoint
 
 ## Current position
