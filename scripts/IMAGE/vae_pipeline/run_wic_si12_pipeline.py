@@ -277,6 +277,12 @@ def run(arguments):
         "proton_correction_reapplied": False,
         "upstream_proton_energy_model": "hardy",
         "electron_energy_keV": 2.0,
+        "loss_quality_weight_source": train_product["metadata"][0][
+            "quality_weight_source"
+        ],
+        "upstream_quality_weight_interpretation": train_product["metadata"][0][
+            "upstream_quality_weight_interpretation"
+        ],
         "minimum_sza_degrees": arguments.minimum_sza,
         "comparison_data_version": arguments.data_version,
         "legacy_comparison_directory": (

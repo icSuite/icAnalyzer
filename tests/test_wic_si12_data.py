@@ -44,7 +44,7 @@ class FakeProduct:
         image = np.ones(self.shape, dtype=np.float32)
         self.arrays = {name: image.copy() for name in REQUIRED_CAMERA_FIELDS}
         self.arrays["method_valid"] = np.ones(self.shape, dtype=bool)
-        self.arrays["method_quality_weight"] = image.copy()
+        self.arrays["method_quality_weight"] = np.zeros(self.shape, dtype=np.float32)
         self.arrays["wic_coverage"] = image.copy()
         self.arrays["si12_coverage"] = image.copy()
         self.arrays["sza"] = np.full(self.shape, 110.0, dtype=np.float32)
@@ -141,6 +141,28 @@ def test_invalid_product_cells_have_zero_quality():
 
     assert not loaded["valid"][:, :, 0, 0].any()
     np.testing.assert_array_equal(loaded["quality"][:, :, 0, 0], 0.0)
+
+
+def test_inverts_upstream_background_fit_weight_before_applying_coverage():
+    product = FakeProduct()
+    product.arrays["method_quality_weight"][:, 0, 0] = 0.0
+    product.arrays["method_quality_weight"][:, 0, 1] = 1.0
+    product.arrays["wic_coverage"][:, 0, 0] = 0.5
+
+    loaded = load_precipitation_cs(
+        "or_0042.nc", product_loader=lambda _path: product
+    )
+
+    assert loaded["valid"][:, :, 0, :2].all()
+    np.testing.assert_allclose(loaded["quality"][:, 0, 0, 0], 0.5)
+    np.testing.assert_allclose(loaded["quality"][:, 1, 0, 0], 1.0)
+    np.testing.assert_allclose(loaded["quality"][:, :, 0, 1], 0.0)
+    assert loaded["metadata"]["quality_weight_source"] == (
+        "one_minus_method_quality_weight_times_channel_coverage"
+    )
+    assert loaded["metadata"]["upstream_quality_weight_interpretation"] == (
+        "background_fit_weight"
+    )
 
 
 def test_manual_intervals_select_wic_source_frames_before_loading():
@@ -371,7 +393,7 @@ def test_pair_orbit_files_uses_only_common_filenames(tmp_path):
     ]
 
 
-def test_paired_legacy_uses_current_time_sza_and_legacy_weight():
+def test_paired_legacy_uses_current_time_sza_and_inverted_legacy_weight():
     current = FakeProduct()
     current.arrays["sza"][0] = 104.0
     legacy = FakeLegacyProduct()
@@ -389,6 +411,11 @@ def test_paired_legacy_uses_current_time_sza_and_legacy_weight():
     assert paired["legacy"]["time"].tolist() == ["t1"]
     np.testing.assert_allclose(paired["legacy"]["values"][:, 0], 21.0)
     np.testing.assert_allclose(paired["legacy"]["values"][:, 1], 4.0)
-    np.testing.assert_allclose(paired["legacy"]["quality"], 0.25)
-    assert paired["legacy"]["metadata"]["quality_weight_source"] == "legacy_combined_w"
+    np.testing.assert_allclose(paired["legacy"]["quality"], 0.75)
+    assert paired["legacy"]["metadata"]["quality_weight_source"] == (
+        "one_minus_legacy_combined_w"
+    )
+    assert paired["legacy"]["metadata"]["upstream_quality_weight_interpretation"] == (
+        "background_fit_weight"
+    )
     assert paired["legacy"]["metadata"]["paired_frames"] == 1

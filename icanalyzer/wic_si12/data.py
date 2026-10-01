@@ -256,6 +256,10 @@ def _materialize_precipitation_cs(
         ),
         "manual_frame_selection": annotation,
         "minimum_sza_degrees": minimum_sza,
+        "quality_weight_source": (
+            "one_minus_method_quality_weight_times_channel_coverage"
+        ),
+        "upstream_quality_weight_interpretation": "background_fit_weight",
     }
     if sza_diagnostics is not None:
         metadata.update({
@@ -309,8 +313,8 @@ def _materialize_precipitation_cs(
         (base_valid & (wic_coverage > 0), base_valid & (si12_coverage > 0)),
         axis=1,
     )
-    quality = np.clip(method_quality[:, None, :, :], 0.0, None)
-    quality = quality * np.clip(coverage, 0.0, 1.0)
+    auroral_weight = np.clip(1.0 - method_quality[:, None, :, :], 0.0, 1.0)
+    quality = auroral_weight * np.clip(coverage, 0.0, 1.0)
     quality = np.where(valid & np.isfinite(quality), quality, 0.0)
 
     return {

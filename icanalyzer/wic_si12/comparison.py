@@ -145,8 +145,9 @@ def _materialize_legacy(product, filename, selection, sza, current_grid, metadat
         valid_pixels &= np.isfinite(sza) & (sza >= metadata["minimum_sza_degrees"])
 
     valid = np.stack((valid_pixels, valid_pixels), axis=1)
-    quality = np.broadcast_to(robust_weight[:, None], valid.shape).copy()
-    quality = np.where(valid & np.isfinite(quality), np.clip(quality, 0.0, None), 0.0)
+    auroral_weight = np.clip(1.0 - robust_weight, 0.0, 1.0)
+    quality = np.broadcast_to(auroral_weight[:, None], valid.shape).copy()
+    quality = np.where(valid & np.isfinite(quality), quality, 0.0)
     times = np.asarray(product.time[selection], dtype=object).copy()
     source_indices = {
         sensor: np.asarray(product.source_indices[sensor][selection]).copy()
@@ -163,7 +164,8 @@ def _materialize_legacy(product, filename, selection, sza, current_grid, metadat
         "proton_flux_source": str(product.proton_flux_source),
         "proton_energy_model": str(product.proton_energy_model),
         "legacy_precipitation_method": str(product.precipitation_method),
-        "quality_weight_source": "legacy_combined_w",
+        "quality_weight_source": "one_minus_legacy_combined_w",
+        "upstream_quality_weight_interpretation": "background_fit_weight",
         "source_time_proxy": "matched_product_time",
     })
     return {

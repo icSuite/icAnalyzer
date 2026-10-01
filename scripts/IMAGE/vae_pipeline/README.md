@@ -174,6 +174,14 @@ less than a precise image. The transformed variance floor defaults to `1e-3`
 and relative precision is capped at `100`; both values and the fitted scales
 are stored under `uncertainty_weighting` in the run configuration.
 
+The upstream `method_quality_weight` is a background-fit weight, not a measure
+of confidence that a pixel is scientifically useful. A value of zero means
+the background method could not fit the data and commonly identifies aurora;
+a value of one means the data are explained by the background fit. icAnalyzer
+therefore uses `1 - method_quality_weight` as the auroral-interest weight,
+then multiplies it by the WIC or SI12 channel coverage. This convention and
+its source field are saved in the run provenance.
+
 This loss is not numerically comparable to runs made before the absolute
 uncertainty revision. In particular, `beta` must be treated as a new tuning
 parameter rather than copied from an older run solely because its value was
@@ -254,7 +262,14 @@ current Product-2 corpus without changing either upstream repository. Product
 2 remains authoritative for orbit selection and SZA. The comparison keeps
 only same-named orbit files and exact common product timestamps, applies the
 same Product-2 `SZA >= threshold` mask to both versions, and uses the legacy
-combined robust weight `w` as the legacy VAE quality weight.
+auroral-interest weight `1 - w` as the legacy VAE quality weight. The legacy
+`w` has the same background-fit orientation as the current Product-2 method
+weight.
+
+VAE artifacts created before the `1 - w` correction used the opposite loss
+orientation and are not valid auroral-model results. Retrain them. Existing
+direct comparison maps of the physical camera fields are unaffected, but
+quality-weight statistics must be regenerated.
 
 First generate a streaming field-level report. This reads one orbit pair at a
 time and writes `paired_input_comparison.json` plus mean legacy, rerun, and

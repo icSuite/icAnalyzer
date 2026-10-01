@@ -269,8 +269,14 @@ def run(arguments):
             "minimum_sza_degrees": arguments.minimum_sza,
             "pairing_rule": "same orbit filename and exact product timestamp",
             "quality_weights": {
-                "legacy": "combined robust weight w",
-                "current": "method_quality_weight times channel coverage",
+                "legacy": "one minus combined robust weight w",
+                "current": (
+                    "one minus method_quality_weight, times channel coverage"
+                ),
+                "interpretation": (
+                    "upstream weights measure background-fit conformity and are "
+                    "inverted to weight auroral-interest pixels"
+                ),
             },
         },
         "totals": totals,
