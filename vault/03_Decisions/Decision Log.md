@@ -312,3 +312,23 @@ Real-data VAE artifacts made before this correction optimized the reversed
 scientific target and must be retrained. Physical camera-field mean maps from
 the direct legacy/rerun comparison remain usable, but its quality statistics
 must be regenerated.
+
+## 2026-10-01 - Restore the spline VAE lineage and clip negative inputs
+
+**Decision confirmed by the user:** Replace the simplified convolutional
+baseline with the architecture inherited from
+`scripts/IMAGE/doing_it_manually_log_spline.py`: a partial-convolution encoder,
+a tensor-product cubic-spline decoder, standardized `log10(value + 1)` input,
+legacy hyperparameter defaults, and a `ReduceLROnPlateau` scheduler.
+
+For the first controlled run, keep the continuous auroral-interest quality
+weight out of the encoder. Continue using it, channel coverage, and propagated
+`dwic`/`dsi12` precision in the reconstruction loss. This isolates the restored
+architecture before testing quality or uncertainty maps as encoder context.
+
+Clip finite negative corrected-WIC and SI12 counts to zero at the ingestion
+boundary and record the counts in warnings and artifacts. Also clip decoded
+physical fields at zero after the inverse log transform. The complete manual-
+selection audit found zero negative WIC cells but 3,482,898 negative SI12 cells
+among 14,030,013 finite cells, so negative SI12 is an upstream processing issue
+to report and investigate rather than a reason to retain the signed transform.

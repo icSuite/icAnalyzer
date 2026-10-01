@@ -1,15 +1,14 @@
 # WIC/SI12 VAE Pipeline Plan
 
 Last reviewed: 2026-10-01
-Status: End-to-end baseline, saved-run diagnostics, and paired legacy/rerun
-comparison implemented; upstream background-fit weights are now correctly
-inverted, so pre-correction VAEs require retraining before loss calibration
-and full comparison runs
+Status: Legacy-lineage spline/partial-convolution architecture restored in the
+current Product-2 pipeline; input negatives are clipped and reported; a new
+full run is pending
 
-Commit `ad44da0` makes the nonnegative corrected-WIC boundary robust to
-float32 cancellation and adds validated post-training recovery through
-`--reuse-artifact`. Roundoff-scale corrections are recorded; materially
-negative WIC remains an error.
+Commit `e923875` restores the model lineage that had been lost in the first
+rewrite: partial convolution, the tensor-product spline decoder,
+`log10(value + 1)`, the old hyperparameter defaults, and the plateau scheduler.
+Quality weight `w` remains out of the encoder for the first controlled test.
 
 ## Implementation checkpoint
 
@@ -19,11 +18,10 @@ Implemented on `vae/wic-si12` at `5f6de08`:
   SI12, their uncertainties, support, source identity, grid, and provenance;
 - orbit-level train/validation/test splitting and explicit reporting of frames
   excluded for having no valid weighted pixels;
-- training-only signed-asinh channel transforms and propagated transformed
-  measurement variance;
-- a mask-aware 46x46 convolutional VAE with consistently per-sample reduced
-  reconstruction and KL losses;
-- an architectural nonnegative corrected-WIC decoder constraint;
+- training-only channel transforms and propagated transformed measurement
+  variance;
+- a mask-aware 46x46 VAE with consistently per-sample reduced reconstruction
+  and KL losses;
 - reloadable run artifacts containing model, transform, histories, held-out
   metrics, split files, coordinates, provenance, optimizer settings, and seed;
 - reproducible paired latent sampling and low-rank physical-count covariance;
@@ -65,6 +63,10 @@ The implementation now restores the validation-best checkpoint. Before
 treating reconstructions as physical, define a positivity-preserving
 formulation. Evaluate reconstruction over many held-out frames rather than
 interpreting this single example.
+
+That run is now historical only: it predates the restored spline/partial-
+convolution architecture, input clipping, corrected weight orientation, and
+absolute-uncertainty loss.
 
 Commit `1504b1e` completes the initial analysis layer. The runner now restores
 the lowest-validation-loss state and future artifacts retain latent draws,
@@ -109,8 +111,9 @@ median transformed precision on training data only, applies a variance floor
 and relative-precision cap, reduces by valid support, and stores complete
 weighting provenance. Both absolute uncertainty and absolute quality now
 affect frame contribution. Current, legacy, and held-out-path smokes passed.
-The previous `beta=1e-3` is not considered calibrated under the new loss;
-perform a controlled beta sweep before a full scientific run. Existing run
+Neither the previous `beta=1e-3` nor the restored legacy-lineage `beta=1` is
+calibrated under the new loss; perform a controlled beta sweep before a full
+scientific run. Existing run
 artifacts predate this loss and are not uncertainty-revision results.
 
 Still open:
@@ -157,8 +160,15 @@ Still open:
 Production-corpus audit on 2026-09-28: all 1,378 headers had the six VAE
 fields with the expected dimensions and count units. A stratified 32-orbit
 sample contained 7,960 frames, of which 7,011 had at least one jointly valid
-cell. Corrected WIC was nonnegative; SI12 legitimately included negative
-background-subtracted counts, supporting the signed transform.
+cell. That sample established that SI12 could be negative but did not establish
+that those values were scientifically valid.
+
+The complete 2026-10-01 audit of all 157 manually selected files is now the
+authority: WIC had no finite negative cells; SI12 had 3,482,898 negatives among
+14,030,013 finite selected cells (24.82%). With `SZA >= 105`, 390,848 of
+2,718,083 technically valid SI12 cells remained negative (14.38%). Per the user's
+decision, both input channels are clipped at zero before transformation and
+the counts are warned and saved as upstream-problem provenance.
 
 ## Objective
 
@@ -377,10 +387,10 @@ Create a versioned artifact containing:
 - train/validation/test assignment by orbit; and
 - upstream product identifiers and repository commits.
 
-Do not use the legacy first-10,000-frame split. Do not use
-`log10(value + 1)` until the new background-subtracted value range is
-inspected; negative values may require a linear standardization or signed
-transform.
+Do not use the legacy first-10,000-frame split. Clip finite negative WIC and
+SI12 counts to zero at ingestion, report the clipped counts, and use a
+training-only standardized `log10(value + 1)` transform. This is the explicit
+baseline policy, not evidence that upstream negative SI12 is correct.
 
 For current Product 2, define the loss quality as
 `(1 - method_quality_weight) * channel_coverage`. For the matched legacy
@@ -394,8 +404,18 @@ identity, and annotation alignment reproduce on reload.
 
 ## Phase 4: train a defensible WIC/SI12 VAE
 
-Use a two-channel, mask-aware model with dynamically derived grid shape.
-Retain the readable spline decoder only if its 46x46 basis is verified.
+Use corrected WIC and SI12 as the two encoder science channels. Pass validity
+separately through the three-layer partial-convolution encoder; do not add the
+continuous quality weight as an encoder channel in this first restoration.
+Decode 30-by-30 cubic-spline coefficients and project them with the verified
+tensor-product basis onto the 46-by-46 grid.
+
+Restore the legacy-lineage defaults: latent dimension 36, batch size 8,
+learning rate `1e-4`, 1,000 epochs, seed 1, constant `beta=1`, and
+`ReduceLROnPlateau(factor=0.5, patience=10)`. The scheduler monitors validation
+total loss when available. Because the absolute-uncertainty loss differs from
+the historical loss, `beta=1` is an experiment setting rather than a calibrated
+scientific choice.
 
 The saved run artifact must contain:
 

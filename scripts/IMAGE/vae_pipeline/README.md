@@ -157,12 +157,26 @@ Those bounds are mapped through each Product-2 file's `wic_source_index` before
 the camera arrays are materialized. This preserves the archive workflow while
 remaining valid when regenerated products omit source frames.
 
-The pipeline splits whole orbit files, fits the channel transform using the
-training split only, trains a mask-aware two-channel VAE, samples paired
-corrected-WIC/SI12 fields, propagates corrected WIC to Hall and Pedersen at a
-fixed 2 keV electron energy, and performs an ensemble-space sparse update.
-The decoder constrains corrected WIC to be nonnegative without clipping
-generated fields.
+The pipeline splits whole orbit files, clips finite negative WIC/SI12 input
+counts to zero, and fits a standardized `log10(value + 1)` transform using the
+training split only. It trains a partial-convolution encoder with a
+tensor-product cubic-spline decoder, samples paired corrected-WIC/SI12 fields,
+propagates corrected WIC to Hall and Pedersen at a fixed 2 keV electron energy,
+and performs an ensemble-space sparse update. The inverse transform clips
+decoded values below the physical zero boundary to zero.
+
+The encoder receives only corrected WIC and SI12 plus the separate binary
+validity mask required by partial convolution. The continuous auroral-interest
+quality weight is deliberately not an encoder channel in this experiment; it
+enters the reconstruction loss together with measurement precision.
+
+The restored legacy-lineage defaults are 36 latent dimensions, batch size 8,
+Adam learning rate `1e-4`, `beta=1`, seed 1, and 1,000 epochs. A
+`ReduceLROnPlateau` scheduler monitors validation total loss (training total
+when there is no validation split), with factor 0.5 and patience 10. The
+decoder uses 30-by-30 cubic-spline control points and projects them onto the
+46-by-46 product grid. These values are command-line options and are saved in
+the run artifact.
 
 Measurement uncertainty enters the reconstruction loss through `dwic` and
 `dsi12`; it is not decoded as an additional science field. The runner fits one
@@ -183,9 +197,9 @@ then multiplies it by the WIC or SI12 channel coverage. This convention and
 its source field are saved in the run provenance.
 
 This loss is not numerically comparable to runs made before the absolute
-uncertainty revision. In particular, `beta` must be treated as a new tuning
-parameter rather than copied from an older run solely because its value was
-previously adequate. Override the safeguards with `--variance-floor`,
+uncertainty revision. The restored `beta=1` is therefore an architectural
+comparison setting, not a calibrated value for the revised loss. Override the
+safeguards with `--variance-floor`,
 `--maximum-relative-precision`, and `--precision-scale-samples` only as an
 explicit sensitivity experiment.
 
@@ -196,14 +210,16 @@ sample calibration, covariance, and reconstruction skill; use each weighted
 loss for optimization and within-run checkpoint selection.
 
 ```bash
-python scripts/IMAGE/vae_pipeline/run_wic_si12_pipeline.py \
+PYTHONPATH=. python scripts/IMAGE/vae_pipeline/run_wic_si12_pipeline.py \
   /path/to/precipitation_cs/image_apex_130km_46x46_v1/IR_hardy \
   --output outputs/wic_si12_baseline \
-  --epochs 20 \
   --samples 1000 \
   --minimum-sza 105 \
   --observation-mode joint
 ```
+
+This uses the 1,000-epoch restored default. Add `--epochs 20` only for a short
+diagnostic run, not as the canonical training setting.
 
 If training completed and `wic_si12_vae.pt` was saved but a later sampling or
 propagation stage failed, rerun the same command with `--reuse-artifact`. The
@@ -213,13 +229,20 @@ then regenerates `ensemble_products.npz` and `summary.json` from the saved
 model. This is a recovery option, not a way to reuse a model with different
 scientific selection settings.
 
-The nonnegative corrected-WIC boundary is constructed one float32 value above
-the transformed representation of physical zero. Older artifacts can still
-invert to a few approximately `1e-6`-count negative values through floating-
-point cancellation. Postprocessing converts only values within an explicit
-roundoff tolerance to zero, records the count and tolerance under
-`wic_nonnegative_boundary` in `summary.json`, and continues to reject any
-materially negative decoded WIC.
+New log-transform artifacts clip decoded WIC and SI12 below physical zero to
+zero during inverse transformation. The older signed-asinh convolutional
+artifacts remain loadable; for those artifacts only, the prior roundoff
+recovery still records approximately `1e-6`-count WIC boundary corrections and
+rejects materially negative corrected WIC.
+
+Input clipping is not silent. Every run emits a warning and stores finite,
+technically valid, and clipped counts under `input_negative_clipping` in both the artifact
+provenance and `summary.json`. A complete audit of the 157 manually selected
+Product-2 files found no negative WIC cells but 3,482,898 negative SI12 cells
+among 14,030,013 finite selected cells (24.82%). With `SZA >= 105`, 390,848 of
+2,718,083 technically valid SI12 cells were negative (14.38%). This is an upstream
+data-processing issue; clipping makes the requested VAE experiment runnable
+but does not resolve its cause.
 
 `--minimum-sza 105` applies an inclusive, per-pixel night-side filter after
 the existing CSV/source-index frame selection: cells with `SZA < 105°` or
@@ -312,7 +335,7 @@ PYTHONPATH=. python scripts/IMAGE/vae_pipeline/run_wic_si12_pipeline.py \
   --data-version current \
   --output ~/Dropbox/work/data/IMAGE_FUV/vae_runs/wic_si12_paired_current_sza105 \
   --minimum-sza 105 --no-csv-selection \
-  --epochs 20 --batch-size 32 --latent-dim 32 --samples 1000 --device auto
+  --samples 1000 --device auto
 
 PYTHONPATH=. python scripts/IMAGE/vae_pipeline/run_wic_si12_pipeline.py \
   ~/Dropbox/work/data/IMAGE_FUV/precipitation_cs/image_apex_130km_46x46_v1/IR_hardy \
@@ -320,7 +343,7 @@ PYTHONPATH=. python scripts/IMAGE/vae_pipeline/run_wic_si12_pipeline.py \
   --data-version legacy \
   --output ~/Dropbox/work/data/IMAGE_FUV/vae_runs/wic_si12_paired_legacy_sza105 \
   --minimum-sza 105 --no-csv-selection \
-  --epochs 20 --batch-size 32 --latent-dim 32 --samples 1000 --device auto
+  --samples 1000 --device auto
 ```
 
 The paired experiment measures the net change between the two product
@@ -333,7 +356,7 @@ validity handling also changed between the legacy and current products.
 Generate the legacy-style model and covariance diagnostics without retraining:
 
 ```bash
-python scripts/IMAGE/vae_pipeline/visualize_wic_si12_run.py \
+PYTHONPATH=. python scripts/IMAGE/vae_pipeline/visualize_wic_si12_run.py \
   outputs/wic_si12_baseline
 ```
 
@@ -343,7 +366,8 @@ change the sample-mosaic size, or `--anchor ROW,COLUMN` to select the common
 correlation probe. The default probe is the maximum-variance corrected-WIC
 pixel for FUV and Hall pixel for conductance.
 
-The figures cover training history, decoded FUV and propagated-conductance
+The figures cover training history (including the recorded learning-rate
+schedule), decoded FUV and propagated-conductance
 samples, ensemble mean and standard deviation, joint-channel correlation
 maps, leading covariance modes, covariance spectra, and the sparse-update
 prior and posterior. Runs produced by the current runner also store the

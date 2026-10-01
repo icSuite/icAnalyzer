@@ -1,12 +1,12 @@
 # Handoff - Latest
 
 Last updated: 2026-10-01
-Repository snapshot: `vae/wic-si12` implementation at `ad44da0`; `main` remains at `7c71591`
+Repository snapshot: `vae/wic-si12` implementation at `e923875`; `main` remains at `7c71591`
 
 ## Outcome
 
-The first coherent WIC/SI12-to-conductance VAE baseline is implemented and
-committed. The old mixed worktree was preserved on
+The WIC/SI12-to-conductance pipeline now uses the restored legacy-lineage
+spline/partial-convolution VAE. The old mixed worktree was preserved on
 `archive/pre-wic-si12-vae-2026-09-25`; development now lives on
 `vae/wic-si12`.
 
@@ -24,7 +24,8 @@ The workflow:
 ```text
 icreader.load(precipitation_cs)
   -> corrected-WIC/SI12 tensors, masks, uncertainty, grid, provenance
-  -> orbit-held-out mask-aware VAE training and artifact reload
+  -> zero clipping and training-only standardized log10(value + 1)
+  -> orbit-held-out partial-convolution/spline VAE and artifact reload
   -> paired prior latent samples and WIC/SI12 anomaly factor
   -> corrected WIC only, fixed 2 keV electron propagation
   -> joint Hall/Pedersen anomaly factor
@@ -38,12 +39,34 @@ keV in this baseline.
 
 ## Evidence
 
+- Architecture restoration: `e923875 Restore spline partial-convolution VAE`.
+  The canonical model uses three propagated-mask partial convolutions, a
+  30-by-30 tensor-product cubic-spline decoder on the 46-by-46 grid, and the
+  old defaults: latent 36, batch 8, learning rate `1e-4`, `beta=1`, seed 1,
+  and 1,000 epochs. `ReduceLROnPlateau` uses factor 0.5 and patience 10; the
+  visualizer now plots its recorded learning-rate history.
+- Quality weight is intentionally absent from the encoder for this first
+  controlled restoration. Corrected WIC/SI12 and binary validity enter the
+  encoder; inverted background-fit weight, coverage, and `dwic`/`dsi12`
+  precision remain in the reconstruction loss.
+- New models clip finite negative WIC/SI12 inputs before log transformation,
+  emit a warning, and save clipped/finite/technically-valid counts. The complete
+  manual-selection audit found zero negative WIC cells and 3,482,898 negative
+  SI12 cells among 14,030,013 finite cells (24.82%). With `SZA >= 105`,
+  390,848 of 2,718,083 technically valid SI12 cells were negative (14.38%). This is
+  an unresolved upstream processing issue.
+- Current verification: all 47 tests under `tests/` pass; all 61 Python files
+  parse. A fresh two-epoch real-orbit run completed training, best-checkpoint
+  restore, artifact reload, eight latent samples, propagation, covariance,
+  sparse reconstruction, and all twelve figures. Reuse of the new spline
+  artifact and a separate `SZA >= 105` smoke also passed.
 - Nonnegative-boundary recovery: `ad44da0 Recover VAE runs from WIC boundary
   roundoff`. The reported 0.003% negative sample fraction was 66 values, all
   exactly `-1.2899104e-6` counts, caused by float32 inversion of the
   mathematical zero boundary. The corrected sampler maps only values within
   an explicit roundoff tolerance to zero and records diagnostics; substantive
-  negatives still fail. New models use a safe next-representable boundary.
+  negatives still fail. This path now applies to old signed-asinh artifacts;
+  new log-transform artifacts clamp both decoded physical channels to zero.
 - `--reuse-artifact` now validates split, seed, latent dimension, SZA/manual
   selection, data version, legacy directory, and corrected quality-weight
   provenance before skipping training. A reused-artifact end-to-end smoke and
@@ -146,7 +169,7 @@ keV in this baseline.
 The smoke demonstrates execution and interface coherence only. Its one-epoch
 prior samples had strongly collapsed variance and are not a scientific result.
 
-## First full annotated run
+## Historical first full annotated run
 
 The user ran 20 epochs on CUDA with latent dimension 32, beta 0.001, and 1,000
 prior samples. The orbit split was 111/23/23, with 7,556/1,365/807 usable
@@ -165,6 +188,10 @@ from 1.400 S to 0.587 S. This is encouraging but not yet a validation result.
 The physical-space Gaussian posterior reached -0.213 S, revealing that sparse
 reconstruction needs an explicit positivity-preserving state or method.
 
+This artifact used the simplified convolutional architecture, signed-asinh
+transform, reversed quality weight, and pre-revision loss. It is not a valid
+comparison result for the restored model.
+
 ## Important boundaries
 
 - The contract changes are committed as icBuilder `38b5afb` and icReader
@@ -178,8 +205,9 @@ reconstruction needs an explicit positivity-preserving state or method.
   products is neither expected nor a valid regression criterion.
 - Measurement uncertainty is used for loss weighting and observation error;
   latent covariance remains a separately named geophysical component.
-- Generated corrected WIC is nonnegative by decoder construction. The workflow
-  still rejects any negative physical sample rather than clipping silently.
+- New log-transform artifacts clip decoded WIC and SI12 at physical zero.
+  Input clipping is warned and recorded. Old signed-asinh artifacts retain the
+  narrow WIC roundoff recovery and reject substantive negative WIC.
 
 ## Production-corpus audit
 
@@ -192,10 +220,10 @@ All 1,378 files declare `proton_energy_model="hardy"`. The user confirmed on
 upstream proton correction while retaining fixed 2 keV electron propagation
 downstream.
 
-A stratified 32-orbit value audit otherwise supports the implementation:
-7,011 of 7,960 frames had jointly valid cells, corrected WIC was nonnegative,
-uncertainties were nonnegative, and SI12 contained valid negative
-background-subtracted counts requiring the signed transform.
+The complete manual-selection value audit supersedes the earlier stratified
+sample for sign policy: WIC has no negative finite cells, while 24.82% of
+finite SI12 cells are negative. These values are now clipped and reported;
+their upstream cause remains unresolved.
 
 The manual segment CSV contains 173 accepted orbit intervals; 157 are present
 in the copied Product-2 corpus. They map to 10,680 frames, of which 9,728 have
@@ -206,22 +234,23 @@ normal workstation.
 
 Next:
 
-1. calibrate the new loss with training-split precision diagnostics and a beta
-   sweep; compare physical held-out residuals and sample dispersion because
-   old/new and independently scaled current/legacy weighted losses are not
-   directly comparable;
-2. choose a scientifically explicit nightside support/domain or revise the SZA
+1. identify and fix the upstream source of negative SI12; treat zero-clipped
+   runs as experiments until that is resolved;
+2. run and inspect the restored spline/partial-convolution model, then sweep
+   beta around the restored `beta=1` setting using held-out physical residuals
+   and sample dispersion;
+3. choose a scientifically explicit nightside support/domain or revise the SZA
    threshold; if retaining `SZA >= 105°`, exclude permanently unsupported
    cells from ensemble statistics, physical propagation, visualization, and
    reconstruction before full paired training;
-3. then test uncertainty maps as auxiliary encoder inputs and implement clear
+4. then test uncertainty maps as auxiliary encoder inputs and implement clear
    downstream separation of latent/background covariance from measurement/
    observation covariance; do not decode uncertainty fields;
-4. measure prior-sample calibration and covariance convergence across seeds;
-5. evaluate many held-out fields and Hall-only, Pedersen-only, and joint
+5. measure prior-sample calibration and covariance convergence across seeds;
+6. evaluate many held-out fields and Hall-only, Pedersen-only, and joint
    realistic sparse geometries;
-6. compare prior-mean and independent-channel baselines;
-7. implement a positivity-preserving reconstruction formulation without
+7. compare prior-mean and independent-channel baselines;
+8. implement a positivity-preserving reconstruction formulation without
    silent clipping.
 
 Annotation conversion is also open. The annotation JSON contains 53 orbit
@@ -232,7 +261,11 @@ non-destructive Cubed-Sphere converter; do not rescale pixel indices.
 ## Portfolio impact
 
 - Central update needed: Yes
-- Changes: The controlled legacy/rerun comparison is executable, but the full
+- Changes: The legacy-lineage spline/partial-convolution VAE is restored and
+  verified end to end. A complete audit exposed negative SI12 in 24.82% of
+  finite manually selected cells; icAnalyzer now clips and reports it, but the
+  upstream cause requires investigation. The controlled legacy/rerun
+  comparison is executable, but the full
   SZA-only audit shows that columns 33--45 have no training targets while the
   current VAE and covariance path still emits and uses them. A supported-domain
   decision and implementation must precede scientific interpretation or full
