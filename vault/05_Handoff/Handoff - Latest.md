@@ -1,7 +1,7 @@
 # Handoff - Latest
 
-Last updated: 2026-09-30
-Repository snapshot: `vae/wic-si12` implementation at `23afaeb`; `main` remains at `7c71591`
+Last updated: 2026-10-01
+Repository snapshot: `vae/wic-si12` implementation at `2e5ff4d`; `main` remains at `7c71591`
 
 ## Outcome
 
@@ -38,16 +38,32 @@ keV in this baseline.
 
 ## Evidence
 
+- Weight-orientation correction: `2e5ff4d Invert background fit weights for
+  VAE`. Current Product 2 now loads
+  `(1 - method_quality_weight) * channel_coverage`; the legacy adapter loads
+  `1 - w`. Both transformations and the upstream background-fit meaning are
+  preserved in product metadata, run artifacts, and comparison reports.
+- In a deterministic 64-file Product-2 sample, all 138,394 exact zero-weight
+  cells had `method_valid=True`. The validity mask therefore preserves these
+  likely-auroral pixels and the inversion restores their training weight.
+- Verification after the correction: 40 focused tests, 61 parsed Python
+  files, a two-orbit direct comparison, and matched three-orbit current and
+  legacy end-to-end smokes through training, reload, latent sampling,
+  propagation, covariance construction, and sparse reconstruction.
+- All real-data VAE artifacts predating `2e5ff4d` used the reversed weight
+  orientation and require retraining. Physical-field mean maps in the earlier
+  direct comparison are unchanged; quality-weight statistics require rerun.
 - Absolute-uncertainty commit: `23afaeb Preserve absolute uncertainty in VAE
   loss`. Training fits one transformed median precision per channel from the
   training split, uses explicit floor/cap safeguards, and reduces weighted
   error by valid support rather than weight sum. Absolute uncertainty and
   quality differences between frames therefore no longer cancel. The complete
   configuration is stored in artifacts and required for evaluation.
-- Verification: 39 focused tests and 61 parsed Python files. Current and
-  legacy orbit-85 smokes plus a three-orbit held-out smoke completed through
-  training, artifact reload, sampling, propagation, covariance, and sparse
-  reconstruction. Existing saved scientific runs predate this loss change.
+- Previous absolute-uncertainty verification: 39 focused tests and 61 parsed
+  Python files. Current and legacy orbit-85 smokes plus a three-orbit held-out
+  smoke completed through training, artifact reload, sampling, propagation,
+  covariance, and sparse reconstruction. Existing saved scientific runs
+  predate this loss change.
 - Full SZA-support audit: across all 1,378 current files and 358,439 frames,
   only 1,483 of 2,116 grid cells ever satisfy `SZA >= 105°`. Columns 33--45
   have zero eligible targets; column 32 has only 2,047 cell-times. The current
@@ -56,9 +72,9 @@ keV in this baseline.
   local covariance.
 - Paired comparison commit: `c6bedbf Add paired legacy rerun comparison`.
   The legacy adapter uses Product-2 selection/SZA, exact common timestamps, and
-  legacy combined weight `w`. The runner trains `current` or `legacy` on the
-  same common orbit split. The streaming comparison emits JSON field/support/
-  weight statistics and spatial mean/difference maps.
+  now-inverted legacy combined weight `1 - w`. The runner trains `current` or
+  `legacy` on the same common orbit split. The streaming comparison emits JSON
+  field/support/weight statistics and spatial mean/difference maps.
 - Corpus identity audit: 1,371 common orbit filenames and 326,739 exact common
   timestamps; 243,282 common frames retain at least one `SZA >= 105°` cell.
 - Real orbit-85 verification retained 112 exact timestamps. Both sides
@@ -212,7 +228,9 @@ non-destructive Cubed-Sphere converter; do not rescale pixel indices.
   decision and implementation must precede scientific interpretation or full
   paired SZA-only training. Absolute measurement-uncertainty weighting is now
   implemented, with beta calibration followed by encoder-context and
-  downstream covariance experiments still open. The
+  downstream covariance experiments still open. Upstream background-fit
+  weights are now correctly inverted for auroral-interest training; all
+  pre-correction real-data VAE artifacts require retraining. The
   public icPhysics propagation boundary and coordinate-based annotation
   conversion remain explicit follow-up decisions.
 - Priority/deadline: unchanged. The December 2026 paper target remains the

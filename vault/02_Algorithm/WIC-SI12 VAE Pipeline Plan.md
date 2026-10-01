@@ -1,9 +1,10 @@
 # WIC/SI12 VAE Pipeline Plan
 
-Last reviewed: 2026-09-30
+Last reviewed: 2026-10-01
 Status: End-to-end baseline, saved-run diagnostics, and paired legacy/rerun
-comparison implemented; absolute uncertainty weighting is implemented but
-requires loss calibration before full comparison runs
+comparison implemented; upstream background-fit weights are now correctly
+inverted, so pre-correction VAEs require retraining before loss calibration
+and full comparison runs
 
 ## Implementation checkpoint
 
@@ -182,6 +183,9 @@ after that baseline is verified.
 - Detector measurement uncertainty remains separate from latent geophysical
   variability. Use it in data weighting and reconstruction observation error;
   do not silently add it to the learned prior covariance.
+- Upstream robust/method quality weights measure background-fit conformity:
+  zero means the background cannot fit the data and commonly identifies
+  aurora. Convert them to auroral-interest weights as `1 - w` at ingestion.
 - WIC and SI12 samples remain paired through every processing stage.
 - The first sparse reconstruction uses the propagated conductance ensemble,
   not latent optimization through the VAE.
@@ -372,6 +376,13 @@ Do not use the legacy first-10,000-frame split. Do not use
 `log10(value + 1)` until the new background-subtracted value range is
 inspected; negative values may require a linear standardization or signed
 transform.
+
+For current Product 2, define the loss quality as
+`(1 - method_quality_weight) * channel_coverage`. For the matched legacy
+product, define it as `1 - w`. Clip these weights to `[0, 1]`, set them to zero
+outside technical validity, and preserve their exact source and interpretation
+in the run artifact. Do not reinterpret the upstream background-fit weight as
+confidence: doing so suppresses the aurora the model is intended to learn.
 
 Exit criterion: saved split counts, shapes, units, finite fractions, grid
 identity, and annotation alignment reproduce on reload.

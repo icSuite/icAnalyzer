@@ -1,6 +1,6 @@
 # Decision Log
 
-Last reviewed: 2026-09-28
+Last reviewed: 2026-10-01
 
 ## 2026-07-26 - Use the standard project vault
 
@@ -256,6 +256,9 @@ manual source-frame selection and the SZA mask for both sides. Use the legacy
 combined robust weight `w` for the legacy VAE and retain the current Product-2
 quality/coverage weighting for the rerun VAE.
 
+The direct-pairing decision remains active, but the stated weight orientation
+was corrected on 2026-10-01: both upstream weights must be inverted.
+
 Use the same common orbit list, split seed, and model settings for matched VAE
 runs. Accompany model comparisons with direct paired field, uncertainty,
 quality, and support diagnostics. Describe the result as a net product-pipeline
@@ -293,3 +296,19 @@ training-only median precision scales, transformed-variance floors, relative-
 precision caps, and valid-support reduction. The fitted configuration is
 mandatory for training/evaluation and is saved in the artifact. The old beta
 value is not automatically accepted as calibrated under the new loss.
+
+## 2026-10-01 - Invert upstream background-fit weights for VAE training
+
+**Scientific correction confirmed by the user:** Upstream zero weight means
+that the background method could not fit the data, and those data tend to be
+aurora. The weight is therefore not a confidence score for VAE training.
+
+At ingestion, use `1 - method_quality_weight` for current Product 2 and
+`1 - w` for the matched legacy product. Apply per-channel coverage afterward
+for current data. Keep technical validity independent from this continuous
+weight. Record the transformation in comparison reports and run provenance.
+
+Real-data VAE artifacts made before this correction optimized the reversed
+scientific target and must be retrained. Physical camera-field mean maps from
+the direct legacy/rerun comparison remain usable, but its quality statistics
+must be regenerated.
