@@ -165,6 +165,26 @@ def test_inverts_upstream_background_fit_weight_before_applying_coverage():
     )
 
 
+def test_negative_camera_values_are_clipped_and_reported_as_upstream_problem():
+    product = FakeProduct()
+    product.arrays["wic_corrected"][0, 0, 0] = -2.0
+    product.arrays["si12"][0, 0, 1] = -3.0
+
+    loaded = load_precipitation_cs(
+        "or_0042.nc", product_loader=lambda _path: product
+    )
+
+    assert loaded["values"][0, 0, 0, 0] == 0.0
+    assert loaded["values"][0, 1, 0, 1] == 0.0
+    assert loaded["metadata"]["negative_input_policy"] == "clip_to_zero"
+    assert loaded["metadata"]["negative_wic_clipped_cells"] == 1
+    assert loaded["metadata"]["negative_si12_clipped_cells"] == 1
+    assert loaded["metadata"]["negative_wic_clipped_valid_cells"] == 1
+    assert loaded["metadata"]["negative_si12_clipped_valid_cells"] == 1
+    assert loaded["metadata"]["wic_valid_input_cells"] == int(np.prod(product.shape))
+    assert loaded["metadata"]["si12_valid_input_cells"] == int(np.prod(product.shape))
+
+
 def test_manual_intervals_select_wic_source_frames_before_loading():
     product = FakeProduct()
     product.source_indices = MappingProxyType({
@@ -303,13 +323,14 @@ def test_requires_hardy_upstream_proton_energy():
 def test_channel_transform_round_trip_and_variance():
     values = np.array(
         [
-            [[[0.0, 10.0], [20.0, 30.0]], [[-2.0, 0.0], [2.0, 4.0]]],
-            [[[5.0, 15.0], [25.0, 35.0]], [[-1.0, 1.0], [3.0, 5.0]]],
+            [[[0.0, 10.0], [20.0, 30.0]], [[2.0, 0.0], [2.0, 4.0]]],
+            [[[5.0, 15.0], [25.0, 35.0]], [[1.0, 1.0], [3.0, 5.0]]],
         ],
         dtype=np.float32,
     )
     valid = np.ones_like(values, dtype=bool)
     transform = fit_channel_transform(values, valid)
+    assert transform.kind == ChannelTransform.LOG10_KIND
     transformed = transform.transform(values)
     restored = transform.inverse(transformed)
     np.testing.assert_allclose(restored, values, rtol=1e-5, atol=1e-5)
@@ -319,6 +340,31 @@ def test_channel_transform_round_trip_and_variance():
 
     rebuilt = ChannelTransform.from_dict(transform.to_dict())
     np.testing.assert_allclose(rebuilt.inverse(transformed), values, atol=1e-5)
+
+
+def test_log10_transform_rejects_unclipped_negative_inputs():
+    values = np.zeros((1, 2, 1, 1), dtype=np.float32)
+    values[0, 1, 0, 0] = -1.0
+    valid = np.ones_like(values, dtype=bool)
+
+    try:
+        fit_channel_transform(values, valid)
+    except ValueError as error:
+        assert "clip them at the ingestion boundary" in str(error)
+    else:
+        raise AssertionError("negative physical input reached the log10 transform")
+
+
+def test_log10_inverse_clips_decoded_values_below_physical_zero():
+    transform = ChannelTransform(
+        scale=[1.0, 1.0], center=[0.0, 0.0], spread=[1.0, 1.0],
+        kind=ChannelTransform.LOG10_KIND
+    )
+    transformed = np.full((1, 2, 1, 1), -1.0, dtype=np.float32)
+
+    restored = transform.inverse(transformed)
+
+    np.testing.assert_array_equal(restored, np.zeros_like(restored))
 
 
 def test_fits_one_training_precision_scale_per_channel():

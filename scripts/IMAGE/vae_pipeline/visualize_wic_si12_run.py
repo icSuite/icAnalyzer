@@ -81,7 +81,11 @@ def save_figure(figure, output, name, created):
 
 def plot_loss_history(history, output, created):
     epochs = np.array([record["epoch"] for record in history])
-    figure, axes = plt.subplots(1, 2, figsize=(12, 4.5), layout="constrained")
+    has_learning_rate = all("learning_rate" in record for record in history)
+    columns = 3 if has_learning_rate else 2
+    figure, axes = plt.subplots(
+        1, columns, figsize=(6 * columns, 4.5), layout="constrained"
+    )
 
     for split, style in (("train", "-"), ("validation", "--")):
         if split not in history[0]:
@@ -111,9 +115,19 @@ def plot_loss_history(history, output, created):
 
     axes[0].set(title="VAE loss", xlabel="epoch", ylabel="per-sample loss")
     axes[1].set(title="KL term before beta weighting", xlabel="epoch", ylabel="KL")
+    if has_learning_rate:
+        learning_rates = [record["learning_rate"] for record in history]
+        axes[2].semilogy(epochs, learning_rates, color="tab:green")
+        axes[2].set(
+            title="ReduceLROnPlateau schedule",
+            xlabel="epoch",
+            ylabel="learning rate",
+        )
     for axis in axes:
         axis.grid(alpha=0.25)
-        axis.legend(fontsize=8)
+        handles, _labels = axis.get_legend_handles_labels()
+        if handles:
+            axis.legend(fontsize=8)
     save_figure(figure, output, "loss_history.png", created)
     return best_epoch, best_metrics
 
@@ -132,7 +146,7 @@ def plot_sample_mosaic(samples, family, output, created, n_examples):
     )
 
     for channel in range(2):
-        signed = family == "fuv" and channel == 1
+        signed = bool(np.any(selected[:, channel] < 0))
         limits = robust_limits(selected[:, channel], signed=signed)
         cmap = "coolwarm" if signed else "viridis"
         for column, sample_index in enumerate(sample_indices):
@@ -168,7 +182,7 @@ def plot_ensemble_moments(products, output, created):
     )
     figure, axes = plt.subplots(2, 4, figsize=(17, 7.5), layout="constrained")
     for column, (mean, std, name, unit) in enumerate(fields):
-        signed = name == "SI12"
+        signed = bool(np.any(mean < 0))
         image_panel(
             axes[0, column], mean, f"mean {name}", unit,
             cmap="coolwarm" if signed else "viridis",

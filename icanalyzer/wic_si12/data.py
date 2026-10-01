@@ -293,6 +293,16 @@ def _materialize_precipitation_cs(
     dwic = arrays["dwic_corrected"]
     dsi12 = arrays["dsi12"]
 
+    negative_wic = np.isfinite(wic) & (wic < 0)
+    negative_si12 = np.isfinite(si12) & (si12 < 0)
+    wic = np.maximum(wic, 0.0)
+    si12 = np.maximum(si12, 0.0)
+    metadata["negative_input_policy"] = "clip_to_zero"
+    metadata["finite_wic_input_cells"] = int(np.count_nonzero(np.isfinite(wic)))
+    metadata["finite_si12_input_cells"] = int(np.count_nonzero(np.isfinite(si12)))
+    metadata["negative_wic_clipped_cells"] = int(np.count_nonzero(negative_wic))
+    metadata["negative_si12_clipped_cells"] = int(np.count_nonzero(negative_si12))
+
     common_finite = (
         np.isfinite(wic)
         & np.isfinite(arrays["si13_corrected"])
@@ -305,12 +315,22 @@ def _materialize_precipitation_cs(
     base_valid = method_valid & common_finite & nonnegative_uncertainty
     if minimum_sza is not None:
         base_valid &= np.isfinite(sza) & (sza >= minimum_sza)
+    wic_valid = base_valid & (wic_coverage > 0)
+    si12_valid = base_valid & (si12_coverage > 0)
+    metadata["wic_valid_input_cells"] = int(np.count_nonzero(wic_valid))
+    metadata["si12_valid_input_cells"] = int(np.count_nonzero(si12_valid))
+    metadata["negative_wic_clipped_valid_cells"] = int(
+        np.count_nonzero(negative_wic & wic_valid)
+    )
+    metadata["negative_si12_clipped_valid_cells"] = int(
+        np.count_nonzero(negative_si12 & si12_valid)
+    )
 
     values = np.stack((wic, si12), axis=1)
     standard_deviation = np.stack((dwic, dsi12), axis=1)
     coverage = np.stack((wic_coverage, si12_coverage), axis=1)
     valid = np.stack(
-        (base_valid & (wic_coverage > 0), base_valid & (si12_coverage > 0)),
+        (wic_valid, si12_valid),
         axis=1,
     )
     auroral_weight = np.clip(1.0 - method_quality[:, None, :, :], 0.0, 1.0)
@@ -492,16 +512,22 @@ def split_orbit_files(filenames, validation_fraction=0.15, test_fraction=0.15, s
 #%% Channel transformation
 
 class ChannelTransform:
-    """Signed asinh transform followed by channel-wise standardization."""
+    """Versioned channel transform followed by channel-wise standardization."""
 
-    def __init__(self, scale, center, spread):
+    ASINH_KIND = "channel_asinh_standardization_v1"
+    LOG10_KIND = "channel_log10p_standardization_v1"
+
+    def __init__(self, scale, center, spread, kind=ASINH_KIND):
         self.scale = np.asarray(scale, dtype=np.float32)
         self.center = np.asarray(center, dtype=np.float32)
         self.spread = np.asarray(spread, dtype=np.float32)
+        self.kind = str(kind)
         if self.scale.shape != (2,) or self.center.shape != (2,) or self.spread.shape != (2,):
             raise ValueError("scale, center, and spread must each have two values")
         if np.any(self.scale <= 0) or np.any(self.spread <= 0):
             raise ValueError("scale and spread must be positive")
+        if self.kind not in (self.ASINH_KIND, self.LOG10_KIND):
+            raise ValueError(f"unsupported channel transform {self.kind!r}")
 
     def transform(self, values):
         if torch.is_tensor(values):
@@ -509,13 +535,26 @@ class ChannelTransform:
             center = torch.as_tensor(self.center, device=values.device, dtype=values.dtype)
             spread = torch.as_tensor(self.spread, device=values.device, dtype=values.dtype)
             shape = (1, 2) + (1,) * (values.ndim - 2)
-            return (torch.asinh(values / scale.reshape(shape)) - center.reshape(shape)) / spread.reshape(shape)
+            if self.kind == self.LOG10_KIND:
+                if torch.any(values < 0):
+                    raise ValueError("log10 channel transform requires nonnegative values")
+                transformed = torch.log10(values + 1.0)
+            else:
+                transformed = torch.asinh(values / scale.reshape(shape))
+            return (
+                transformed - center.reshape(shape)
+            ) / spread.reshape(shape)
 
         values = np.asarray(values)
         shape = (1, 2) + (1,) * (values.ndim - 2)
+        if self.kind == self.LOG10_KIND:
+            if np.any(values < 0):
+                raise ValueError("log10 channel transform requires nonnegative values")
+            transformed = np.log10(values + 1.0)
+        else:
+            transformed = np.arcsinh(values / self.scale.reshape(shape))
         return (
-            np.arcsinh(values / self.scale.reshape(shape))
-            - self.center.reshape(shape)
+            transformed - self.center.reshape(shape)
         ) / self.spread.reshape(shape)
 
     def inverse(self, transformed):
@@ -524,15 +563,17 @@ class ChannelTransform:
             center = torch.as_tensor(self.center, device=transformed.device, dtype=transformed.dtype)
             spread = torch.as_tensor(self.spread, device=transformed.device, dtype=transformed.dtype)
             shape = (1, 2) + (1,) * (transformed.ndim - 2)
-            return scale.reshape(shape) * torch.sinh(
-                transformed * spread.reshape(shape) + center.reshape(shape)
-            )
+            restored = transformed * spread.reshape(shape) + center.reshape(shape)
+            if self.kind == self.LOG10_KIND:
+                return torch.clamp(torch.pow(10.0, restored) - 1.0, min=0.0)
+            return scale.reshape(shape) * torch.sinh(restored)
 
         transformed = np.asarray(transformed)
         shape = (1, 2) + (1,) * (transformed.ndim - 2)
-        return self.scale.reshape(shape) * np.sinh(
-            transformed * self.spread.reshape(shape) + self.center.reshape(shape)
-        )
+        restored = transformed * self.spread.reshape(shape) + self.center.reshape(shape)
+        if self.kind == self.LOG10_KIND:
+            return np.maximum(np.power(10.0, restored) - 1.0, 0.0)
+        return self.scale.reshape(shape) * np.sinh(restored)
 
     def variance(self, values, standard_deviation):
         values = np.asarray(values, dtype=np.float32)
@@ -540,12 +581,19 @@ class ChannelTransform:
         shape = (1, 2) + (1,) * (values.ndim - 2)
         scale = self.scale.reshape(shape)
         spread = self.spread.reshape(shape)
-        derivative = 1.0 / (scale * np.sqrt(1.0 + (values / scale)**2) * spread)
+        if self.kind == self.LOG10_KIND:
+            if np.any(values < 0):
+                raise ValueError("log10 variance transform requires nonnegative values")
+            derivative = 1.0 / ((values + 1.0) * np.log(10.0) * spread)
+        else:
+            derivative = 1.0 / (
+                scale * np.sqrt(1.0 + (values / scale)**2) * spread
+            )
         return (standard_deviation * derivative)**2
 
     def to_dict(self):
         return {
-            "kind": "channel_asinh_standardization_v1",
+            "kind": self.kind,
             "scale": self.scale.tolist(),
             "center": self.center.tolist(),
             "spread": self.spread.tolist(),
@@ -553,18 +601,24 @@ class ChannelTransform:
 
     @classmethod
     def from_dict(cls, values):
-        if values.get("kind") != "channel_asinh_standardization_v1":
-            raise ValueError(f"unsupported transform kind {values.get('kind')!r}")
-        return cls(values["scale"], values["center"], values["spread"])
+        return cls(
+            values["scale"], values["center"], values["spread"],
+            kind=values.get("kind", cls.ASINH_KIND)
+        )
 
 
 def fit_channel_transform(values, valid):
-    """Fit a robust signed transform using training data only."""
+    """Fit the legacy log10(value + 1) transform using training data only."""
 
     values = np.asarray(values, dtype=np.float32)
     valid = np.asarray(valid, dtype=bool)
     if values.shape != valid.shape or values.ndim != 4 or values.shape[1] != 2:
         raise ValueError("values and valid must have shape (sample, 2, y, x)")
+    if np.any(values[valid] < 0):
+        raise ValueError(
+            "log10 channel transform received negative values; "
+            "clip them at the ingestion boundary"
+        )
 
     scale = np.empty(2, dtype=np.float32)
     center = np.empty(2, dtype=np.float32)
@@ -573,14 +627,15 @@ def fit_channel_transform(values, valid):
         selected = values[:, channel][valid[:, channel]]
         if selected.size == 0:
             raise ValueError(f"channel {channel} has no valid training values")
-        nonzero = np.abs(selected[np.abs(selected) > 0])
-        scale[channel] = np.median(nonzero) if nonzero.size else 1.0
-        transformed = np.arcsinh(selected / scale[channel])
+        scale[channel] = 1.0
+        transformed = np.log10(selected + 1.0)
         center[channel] = np.mean(transformed)
         spread[channel] = np.std(transformed)
         if not np.isfinite(spread[channel]) or spread[channel] <= 0:
             raise ValueError(f"channel {channel} has zero transformed spread")
-    return ChannelTransform(scale, center, spread)
+    return ChannelTransform(
+        scale, center, spread, kind=ChannelTransform.LOG10_KIND
+    )
 
 
 def fit_precision_weighting(
@@ -729,9 +784,8 @@ class WICSI12ArrayDataset(Dataset):
         target = self.target[index].copy()
         valid = self.valid[index].copy()
         target[~valid] = 0.0
-        encoder_input = np.concatenate((target, valid.astype(np.float32)), axis=0)
         return {
-            "encoder_input": torch.from_numpy(encoder_input),
+            "encoder_input": torch.from_numpy(target),
             "target": torch.from_numpy(target),
             "valid": torch.from_numpy(valid),
             "quality": torch.from_numpy(self.quality[index]),

@@ -10,6 +10,7 @@ joint covariance factors, and test one sparse conductance reconstruction.
 import argparse
 import json
 from pathlib import Path
+import warnings
 
 import numpy as np
 import torch
@@ -28,11 +29,10 @@ from icanalyzer.wic_si12.comparison import load_paired_files, pair_orbit_files
 from icanalyzer.wic_si12.ensemble import (
     correct_wic_roundoff,
     ensemble_statistics,
-    nonnegative_wic_floor,
     sample_decoded_ensemble,
     sparse_ensemble_reconstruction,
 )
-from icanalyzer.wic_si12.model import WICSI12VAE
+from icanalyzer.wic_si12.model import SplineWICSI12VAE
 from icanalyzer.wic_si12.physics import conductance_from_corrected_wic
 from icanalyzer.wic_si12.workflow import (
     evaluate_vae,
@@ -109,6 +109,70 @@ def frame_selection(loader):
         "dropped": int(dataset.dropped_indices.size),
         "dropped_indices": dataset.dropped_indices.tolist(),
     }
+
+
+def negative_input_diagnostics(*products):
+    diagnostics = {
+        "policy": "clip_to_zero",
+        "wic_clipped_cells": 0,
+        "si12_clipped_cells": 0,
+        "finite_wic_input_cells": 0,
+        "finite_si12_input_cells": 0,
+        "wic_valid_input_cells": 0,
+        "si12_valid_input_cells": 0,
+        "wic_clipped_valid_cells": 0,
+        "si12_clipped_valid_cells": 0,
+    }
+    for product in products:
+        if product is None:
+            continue
+        for metadata in product["metadata"]:
+            diagnostics["wic_clipped_cells"] += int(
+                metadata.get("negative_wic_clipped_cells", 0)
+            )
+            diagnostics["si12_clipped_cells"] += int(
+                metadata.get("negative_si12_clipped_cells", 0)
+            )
+            diagnostics["finite_wic_input_cells"] += int(
+                metadata.get("finite_wic_input_cells", 0)
+            )
+            diagnostics["finite_si12_input_cells"] += int(
+                metadata.get("finite_si12_input_cells", 0)
+            )
+            diagnostics["wic_valid_input_cells"] += int(
+                metadata.get("wic_valid_input_cells", 0)
+            )
+            diagnostics["si12_valid_input_cells"] += int(
+                metadata.get("si12_valid_input_cells", 0)
+            )
+            diagnostics["wic_clipped_valid_cells"] += int(
+                metadata.get("negative_wic_clipped_valid_cells", 0)
+            )
+            diagnostics["si12_clipped_valid_cells"] += int(
+                metadata.get("negative_si12_clipped_valid_cells", 0)
+            )
+    total = diagnostics["wic_clipped_cells"] + diagnostics["si12_clipped_cells"]
+    diagnostics["total_clipped_cells"] = total
+    for channel in ("wic", "si12"):
+        finite = diagnostics[f"finite_{channel}_input_cells"]
+        diagnostics[f"{channel}_clipped_fraction_of_finite"] = (
+            diagnostics[f"{channel}_clipped_cells"] / finite if finite else 0.0
+        )
+        valid = diagnostics[f"{channel}_valid_input_cells"]
+        diagnostics[f"{channel}_clipped_fraction_of_valid"] = (
+            diagnostics[f"{channel}_clipped_valid_cells"] / valid
+            if valid else 0.0
+        )
+    if total:
+        warnings.warn(
+            "upstream VAE inputs contained negative physical counts; "
+            f"clipped {diagnostics['wic_clipped_cells']} WIC cells and "
+            f"{diagnostics['si12_clipped_cells']} SI12 cells to zero "
+            f"({diagnostics['si12_clipped_fraction_of_finite']:.3%} of finite SI12; "
+            f"{diagnostics['si12_clipped_fraction_of_valid']:.3%} of valid inputs)",
+            stacklevel=2,
+        )
+    return diagnostics
 
 
 def distribution_diagnostics(product, generated):
@@ -270,6 +334,9 @@ def run(arguments):
         split["test"], intervals, arguments.minimum_sza,
         comparison_pairs, arguments.data_version
     )
+    input_clipping = negative_input_diagnostics(
+        train_product, validation_product, test_product
+    )
 
     device = arguments.device
     if device == "auto":
@@ -310,10 +377,11 @@ def run(arguments):
         )
 
         set_random_seed(arguments.seed)
-        model = WICSI12VAE(
+        model = SplineWICSI12VAE(
             image_shape=train_product["values"].shape[-2:],
             latent_dim=arguments.latent_dim,
-            wic_floor_transformed=nonnegative_wic_floor(transform),
+            spline_control_points=arguments.spline_control_points,
+            spline_degree=arguments.spline_degree,
         )
         model, history = train_vae(
             model,
@@ -325,6 +393,9 @@ def run(arguments):
             device=device,
             seed=arguments.seed,
             loss_configuration=uncertainty_weighting,
+            scheduler_factor=arguments.scheduler_factor,
+            scheduler_patience=arguments.scheduler_patience,
+            scheduler_minimum_learning_rate=arguments.scheduler_minimum_learning_rate,
         )
         evaluation = {}
         if test_loader is not None:
@@ -344,6 +415,7 @@ def run(arguments):
             "proton_correction_reapplied": False,
             "upstream_proton_energy_model": "hardy",
             "electron_energy_keV": 2.0,
+            "input_negative_clipping": input_clipping,
             "loss_quality_weight_source": train_product["metadata"][0][
                 "quality_weight_source"
             ],
@@ -384,10 +456,20 @@ def run(arguments):
             "learning_rate": arguments.learning_rate,
             "beta": arguments.beta,
             "latent_dim": arguments.latent_dim,
+            "model": "SplineWICSI12VAE",
+            "spline_control_points": arguments.spline_control_points,
+            "spline_degree": arguments.spline_degree,
             "seed": arguments.seed,
             "device": device,
             "optimizer": "Adam",
             "beta_schedule": "constant",
+            "learning_rate_scheduler": "ReduceLROnPlateau",
+            "scheduler_monitor": "validation_total_or_train_total",
+            "scheduler_factor": arguments.scheduler_factor,
+            "scheduler_patience": arguments.scheduler_patience,
+            "scheduler_minimum_learning_rate": (
+                arguments.scheduler_minimum_learning_rate
+            ),
             "uncertainty_weighting": uncertainty_weighting,
             "minimum_sza_degrees": arguments.minimum_sza,
             "comparison_data_version": arguments.data_version,
@@ -478,6 +560,7 @@ def run(arguments):
                     for name, paths in split.items()
                 },
                 "sample_count": int(arguments.samples),
+                "input_negative_clipping": input_clipping,
                 "reused_training_artifact": bool(arguments.reuse_artifact),
                 "wic_nonnegative_boundary": wic_boundary_diagnostics,
                 "held_out_evaluation": evaluation,
@@ -546,11 +629,18 @@ def parse_arguments(argv=None):
             "legacy requires --legacy-comparison"
         ),
     )
-    parser.add_argument("--epochs", type=int, default=20)
-    parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--latent-dim", type=int, default=32)
-    parser.add_argument("--learning-rate", type=float, default=1e-3)
-    parser.add_argument("--beta", type=float, default=1e-3)
+    parser.add_argument("--epochs", type=int, default=1000)
+    parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--latent-dim", type=int, default=36)
+    parser.add_argument("--learning-rate", type=float, default=1e-4)
+    parser.add_argument("--beta", type=float, default=1.0)
+    parser.add_argument("--spline-control-points", type=int, default=30)
+    parser.add_argument("--spline-degree", type=int, default=3)
+    parser.add_argument("--scheduler-factor", type=float, default=0.5)
+    parser.add_argument("--scheduler-patience", type=int, default=10)
+    parser.add_argument(
+        "--scheduler-minimum-learning-rate", type=float, default=0.0
+    )
     parser.add_argument(
         "--variance-floor",
         type=float,
@@ -588,7 +678,7 @@ def parse_arguments(argv=None):
         default="joint",
         choices=("hall", "pedersen", "joint"),
     )
-    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--device", default="auto", choices=("auto", "cpu", "cuda"))
     return parser.parse_args(argv)
 

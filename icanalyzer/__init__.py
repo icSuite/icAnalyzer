@@ -13,13 +13,15 @@ from .wic_si12.ensemble import (
     sample_decoded_ensemble,
     sparse_ensemble_reconstruction,
 )
-from .wic_si12.model import WICSI12VAE, vae_loss
+from .wic_si12.model import PartialConv2d, SplineWICSI12VAE, WICSI12VAE, vae_loss
 from .wic_si12.physics import conductance_from_corrected_wic
 
 __all__ = [
     "ChannelTransform",
     "WICSI12ArrayDataset",
     "WICSI12VAE",
+    "PartialConv2d",
+    "SplineWICSI12VAE",
     "conductance_from_corrected_wic",
     "ensemble_statistics",
     "fit_channel_transform",

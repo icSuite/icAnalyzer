@@ -131,6 +131,10 @@ def _materialize_legacy(product, filename, selection, sza, current_grid, metadat
     si12 = arrays["si12"]
     dwic = arrays["dwic_corrected"]
     dsi12 = arrays["dsi12"]
+    negative_wic = np.isfinite(wic) & (wic < 0)
+    negative_si12 = np.isfinite(si12) & (si12 < 0)
+    wic = np.maximum(wic, 0.0)
+    si12 = np.maximum(si12, 0.0)
 
     common_finite = (
         np.isfinite(wic)
@@ -143,6 +147,14 @@ def _materialize_legacy(product, filename, selection, sza, current_grid, metadat
     valid_pixels = common_finite & (dwic >= 0) & (dsi12 >= 0)
     if sza is not None:
         valid_pixels &= np.isfinite(sza) & (sza >= metadata["minimum_sza_degrees"])
+    metadata["wic_valid_input_cells"] = int(np.count_nonzero(valid_pixels))
+    metadata["si12_valid_input_cells"] = int(np.count_nonzero(valid_pixels))
+    metadata["negative_wic_clipped_valid_cells"] = int(
+        np.count_nonzero(negative_wic & valid_pixels)
+    )
+    metadata["negative_si12_clipped_valid_cells"] = int(
+        np.count_nonzero(negative_si12 & valid_pixels)
+    )
 
     valid = np.stack((valid_pixels, valid_pixels), axis=1)
     auroral_weight = np.clip(1.0 - robust_weight, 0.0, 1.0)
@@ -166,6 +178,11 @@ def _materialize_legacy(product, filename, selection, sza, current_grid, metadat
         "legacy_precipitation_method": str(product.precipitation_method),
         "quality_weight_source": "one_minus_legacy_combined_w",
         "upstream_quality_weight_interpretation": "background_fit_weight",
+        "negative_input_policy": "clip_to_zero",
+        "finite_wic_input_cells": int(np.count_nonzero(np.isfinite(wic))),
+        "finite_si12_input_cells": int(np.count_nonzero(np.isfinite(si12))),
+        "negative_wic_clipped_cells": int(np.count_nonzero(negative_wic)),
+        "negative_si12_clipped_cells": int(np.count_nonzero(negative_si12)),
         "source_time_proxy": "matched_product_time",
     })
     return {

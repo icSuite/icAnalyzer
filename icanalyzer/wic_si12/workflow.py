@@ -9,7 +9,7 @@ import numpy as np
 import torch
 
 from .data import ChannelTransform
-from .model import WICSI12VAE, vae_loss
+from .model import SplineWICSI12VAE, WICSI12VAE, vae_loss
 
 
 #%% Reproducibility
@@ -82,7 +82,7 @@ def _run_epoch(
         if training:
             optimizer.zero_grad()
         with torch.set_grad_enabled(training):
-            reconstructed, mu, logvar = model(encoder_input)
+            reconstructed, mu, logvar = model(encoder_input, valid)
             losses = vae_loss(
                 reconstructed,
                 target,
@@ -122,16 +122,39 @@ def train_vae(
     device="cpu",
     seed=0,
     loss_configuration=None,
+    scheduler_factor=0.5,
+    scheduler_patience=10,
+    scheduler_minimum_learning_rate=0.0,
 ):
     """Train with separate, consistently reduced reconstruction and KL logs."""
 
     if epochs <= 0:
         raise ValueError("epochs must be positive")
+    if not np.isfinite(learning_rate) or learning_rate <= 0:
+        raise ValueError("learning_rate must be finite and positive")
+    if not np.isfinite(scheduler_factor) or not 0 < scheduler_factor < 1:
+        raise ValueError("scheduler_factor must be finite and between zero and one")
+    if scheduler_patience < 0:
+        raise ValueError("scheduler_patience must be nonnegative")
+    if (
+        not np.isfinite(scheduler_minimum_learning_rate)
+        or scheduler_minimum_learning_rate < 0
+    ):
+        raise ValueError(
+            "scheduler_minimum_learning_rate must be finite and nonnegative"
+        )
     loss_configuration = _validated_loss_configuration(loss_configuration)
     set_random_seed(seed)
     device = torch.device(device)
     model = model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        mode="min",
+        factor=float(scheduler_factor),
+        patience=int(scheduler_patience),
+        min_lr=float(scheduler_minimum_learning_rate),
+    )
     history = []
     best_validation_total = np.inf
     best_validation_epoch = None
@@ -166,6 +189,12 @@ def train_vae(
                     name: value.detach().cpu().clone()
                     for name, value in model.state_dict().items()
                 }
+        scheduler_metric = (
+            record["validation"]["total"]
+            if "validation" in record else record["train"]["total"]
+        )
+        scheduler.step(scheduler_metric)
+        record["learning_rate"] = float(optimizer.param_groups[0]["lr"])
         history.append(record)
 
     if best_state is not None:
@@ -238,7 +267,11 @@ def load_run_artifact(filename, device="cpu"):
     artifact = torch.load(filename, map_location=device, weights_only=False)
     if artifact.get("artifact_type") != "wic_si12_vae_run_v1":
         raise ValueError("unsupported run artifact")
-    model = WICSI12VAE.from_configuration(artifact["model_configuration"])
+    model_configuration = artifact["model_configuration"]
+    if model_configuration.get("model") == "SplineWICSI12VAE":
+        model = SplineWICSI12VAE.from_configuration(model_configuration)
+    else:
+        model = WICSI12VAE.from_configuration(model_configuration)
     model.load_state_dict(artifact["model_state"])
     model.loss_configuration = artifact.get("training_configuration", {}).get(
         "uncertainty_weighting"
