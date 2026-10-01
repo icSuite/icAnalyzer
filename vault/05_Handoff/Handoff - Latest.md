@@ -1,7 +1,7 @@
 # Handoff - Latest
 
 Last updated: 2026-10-01
-Repository snapshot: `vae/wic-si12` implementation at `2e5ff4d`; `main` remains at `7c71591`
+Repository snapshot: `vae/wic-si12` implementation at `ad44da0`; `main` remains at `7c71591`
 
 ## Outcome
 
@@ -38,6 +38,16 @@ keV in this baseline.
 
 ## Evidence
 
+- Nonnegative-boundary recovery: `ad44da0 Recover VAE runs from WIC boundary
+  roundoff`. The reported 0.003% negative sample fraction was 66 values, all
+  exactly `-1.2899104e-6` counts, caused by float32 inversion of the
+  mathematical zero boundary. The corrected sampler maps only values within
+  an explicit roundoff tolerance to zero and records diagnostics; substantive
+  negatives still fail. New models use a safe next-representable boundary.
+- `--reuse-artifact` now validates split, seed, latent dimension, SZA/manual
+  selection, data version, legacy directory, and corrected quality-weight
+  provenance before skipping training. A reused-artifact end-to-end smoke and
+  a fresh-training smoke both passed. The focused suite now has 42 tests.
 - Weight-orientation correction: `2e5ff4d Invert background fit weights for
   VAE`. Current Product 2 now loads
   `(1 - method_quality_weight) * channel_coverage`; the legacy adapter loads

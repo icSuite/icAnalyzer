@@ -6,6 +6,11 @@ comparison implemented; upstream background-fit weights are now correctly
 inverted, so pre-correction VAEs require retraining before loss calibration
 and full comparison runs
 
+Commit `ad44da0` makes the nonnegative corrected-WIC boundary robust to
+float32 cancellation and adds validated post-training recovery through
+`--reuse-artifact`. Roundoff-scale corrections are recorded; materially
+negative WIC remains an error.
+
 ## Implementation checkpoint
 
 Implemented on `vae/wic-si12` at `5f6de08`:
