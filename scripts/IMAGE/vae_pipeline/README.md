@@ -205,6 +205,22 @@ python scripts/IMAGE/vae_pipeline/run_wic_si12_pipeline.py \
   --observation-mode joint
 ```
 
+If training completed and `wic_si12_vae.pt` was saved but a later sampling or
+propagation stage failed, rerun the same command with `--reuse-artifact`. The
+runner verifies the saved orbit split, seed, latent dimension, SZA/manual
+selection, data version, and legacy directory before skipping training. It
+then regenerates `ensemble_products.npz` and `summary.json` from the saved
+model. This is a recovery option, not a way to reuse a model with different
+scientific selection settings.
+
+The nonnegative corrected-WIC boundary is constructed one float32 value above
+the transformed representation of physical zero. Older artifacts can still
+invert to a few approximately `1e-6`-count negative values through floating-
+point cancellation. Postprocessing converts only values within an explicit
+roundoff tolerance to zero, records the count and tolerance under
+`wic_nonnegative_boundary` in `summary.json`, and continues to reject any
+materially negative decoded WIC.
+
 `--minimum-sza 105` applies an inclusive, per-pixel night-side filter after
 the existing CSV/source-index frame selection: cells with `SZA < 105°` or
 nonfinite SZA become invalid and receive zero training weight. A frame is

@@ -8,6 +8,46 @@ import torch
 
 #%% Latent sampling
 
+def nonnegative_wic_floor(transform):
+    """Return the first float32 transformed value safely above physical zero."""
+
+    zero = np.float32(-transform.center[0] / transform.spread[0])
+    return float(np.nextafter(zero, np.float32(np.inf)))
+
+
+def correct_wic_roundoff(samples, transform):
+    """Set only float32 roundoff below the physical WIC boundary to zero."""
+
+    samples = np.asarray(samples)
+    if samples.ndim != 4 or samples.shape[1] != 2:
+        raise ValueError("decoded samples must have shape (sample, 2, y, x)")
+
+    wic = samples[:, 0]
+    negative = wic < 0
+    corrected_count = int(np.count_nonzero(negative))
+    tolerance = float(
+        8 * np.finfo(np.float32).eps * max(abs(float(transform.scale[0])), 1.0)
+    )
+    minimum = float(np.min(wic))
+    if minimum < -tolerance:
+        fraction = corrected_count / wic.size
+        raise ValueError(
+            "decoded corrected WIC contains materially negative values "
+            f"(minimum {minimum:.8g} counts; {fraction:.3%} of cells); "
+            "do not clip silently"
+        )
+    if corrected_count:
+        samples = samples.copy()
+        samples[:, 0][negative] = 0.0
+
+    diagnostics = {
+        "roundoff_corrected_cell_count": corrected_count,
+        "roundoff_corrected_fraction": corrected_count / wic.size,
+        "minimum_before_correction_counts": minimum,
+        "roundoff_tolerance_counts": tolerance,
+    }
+    return samples, diagnostics
+
 def sample_decoded_ensemble(
     model,
     transform,

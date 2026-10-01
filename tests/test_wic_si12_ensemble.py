@@ -1,9 +1,12 @@
 import numpy as np
+import pytest
 
 from icanalyzer.wic_si12.data import ChannelTransform
 from icanalyzer.wic_si12.ensemble import (
+    correct_wic_roundoff,
     covariance_blocks,
     ensemble_statistics,
+    nonnegative_wic_floor,
     sample_decoded_ensemble,
     sparse_ensemble_reconstruction,
 )
@@ -20,6 +23,34 @@ def test_prior_sampling_preserves_pairing_and_nonnegative_wic():
     assert samples.shape == (5, 2, 46, 46)
     assert latent.shape == (5, 2)
     assert np.all(samples[:, 0] >= 0)
+
+
+def test_float32_wic_boundary_is_safe_and_only_roundoff_is_corrected():
+    transform = ChannelTransform(
+        scale=[21.64110565185547, 1.7304844856262207],
+        center=[0.9756972789764404, 1.1206520795822144],
+        spread=[1.518889307975769, 1.1444892883300781],
+    )
+    floor = nonnegative_wic_floor(transform)
+    transformed = np.zeros((1, 2, 1, 1), dtype=np.float32)
+    transformed[:, 0] = floor
+    assert transform.inverse(transformed)[0, 0, 0, 0] >= 0
+
+    samples = np.zeros((1, 2, 1, 2), dtype=np.float32)
+    samples[0, 0, 0] = [-1.2899104e-6, 2.0]
+    corrected, diagnostics = correct_wic_roundoff(samples, transform)
+    np.testing.assert_array_equal(corrected[0, 0, 0], [0.0, 2.0])
+    assert diagnostics["roundoff_corrected_cell_count"] == 1
+    assert samples[0, 0, 0, 0] < 0
+
+
+def test_materially_negative_wic_is_not_hidden_as_roundoff():
+    transform = ChannelTransform(scale=[20, 2], center=[1, 0], spread=[1.5, 1])
+    samples = np.zeros((1, 2, 1, 1), dtype=np.float32)
+    samples[0, 0, 0, 0] = -0.01
+
+    with pytest.raises(ValueError, match="materially negative"):
+        correct_wic_roundoff(samples, transform)
 
 
 def test_ensemble_factor_and_cross_block_transpose():

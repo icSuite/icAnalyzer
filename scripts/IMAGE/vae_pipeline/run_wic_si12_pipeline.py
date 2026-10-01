@@ -26,7 +26,9 @@ from icanalyzer.wic_si12.data import (
 )
 from icanalyzer.wic_si12.comparison import load_paired_files, pair_orbit_files
 from icanalyzer.wic_si12.ensemble import (
+    correct_wic_roundoff,
     ensemble_statistics,
+    nonnegative_wic_floor,
     sample_decoded_ensemble,
     sparse_ensemble_reconstruction,
 )
@@ -123,6 +125,58 @@ def distribution_diagnostics(product, generated):
     return diagnostics
 
 
+def validate_reused_artifact(artifact, split, arguments, train_product):
+    """Reject reuse when the saved model does not match the requested data."""
+
+    saved_split = artifact.get("split_files", {})
+    for name, paths in split.items():
+        expected = [str(Path(path).resolve()) for path in paths]
+        saved = [str(Path(path).resolve()) for path in saved_split.get(name, [])]
+        if saved != expected:
+            raise ValueError(
+                f"--reuse-artifact split {name!r} does not match the saved run"
+            )
+
+    configuration = artifact["training_configuration"]
+    provenance = artifact["data_provenance"]
+    checks = {
+        "latent_dim": (configuration.get("latent_dim"), arguments.latent_dim),
+        "seed": (configuration.get("seed"), arguments.seed),
+        "minimum_sza_degrees": (
+            configuration.get("minimum_sza_degrees"), arguments.minimum_sza
+        ),
+        "comparison_data_version": (
+            configuration.get("comparison_data_version"), arguments.data_version
+        ),
+        "manual_frame_intervals": (
+            provenance.get("manual_frame_intervals"),
+            None if arguments.all_frames else str(Path(arguments.segments).resolve()),
+        ),
+        "legacy_comparison_directory": (
+            provenance.get("legacy_comparison_directory"),
+            None if arguments.legacy_comparison is None
+            else str(Path(arguments.legacy_comparison).resolve()),
+        ),
+        "loss_quality_weight_source": (
+            provenance.get("loss_quality_weight_source"),
+            train_product["metadata"][0]["quality_weight_source"],
+        ),
+        "upstream_quality_weight_interpretation": (
+            provenance.get("upstream_quality_weight_interpretation"),
+            train_product["metadata"][0]["upstream_quality_weight_interpretation"],
+        ),
+    }
+    mismatched = [
+        name for name, (saved, requested) in checks.items()
+        if saved != requested
+    ]
+    if mismatched:
+        raise ValueError(
+            "--reuse-artifact does not match requested settings: "
+            + ", ".join(mismatched)
+        )
+
+
 #%% Sparse validation
 
 def sparse_validation(
@@ -217,135 +271,150 @@ def run(arguments):
         comparison_pairs, arguments.data_version
     )
 
-    transform = fit_channel_transform(
-        train_product["values"], train_product["valid"]
-    )
-    uncertainty_weighting = fit_precision_weighting(
-        train_product,
-        transform,
-        variance_floor=arguments.variance_floor,
-        maximum_relative_precision=arguments.maximum_relative_precision,
-        maximum_scale_samples=arguments.precision_scale_samples,
-    )
-    train_loader = make_loader(
-        train_product, transform, arguments.batch_size, shuffle=True
-    )
-    validation_loader = make_loader(
-        validation_product, transform, arguments.batch_size, shuffle=False
-    )
-    test_loader = make_loader(
-        test_product, transform, arguments.batch_size, shuffle=False
-    )
-
     device = arguments.device
     if device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
-    set_random_seed(arguments.seed)
-    model = WICSI12VAE(
-        image_shape=train_product["values"].shape[-2:],
-        latent_dim=arguments.latent_dim,
-        wic_floor_transformed=float(-transform.center[0] / transform.spread[0]),
-    )
-    model, history = train_vae(
-        model,
-        train_loader,
-        validation_loader=validation_loader,
-        epochs=arguments.epochs,
-        learning_rate=arguments.learning_rate,
-        beta=arguments.beta,
-        device=device,
-        seed=arguments.seed,
-        loss_configuration=uncertainty_weighting,
-    )
-    evaluation = {}
-    if test_loader is not None:
-        evaluation["test"] = evaluate_vae(
-            model,
-            test_loader,
-            beta=arguments.beta,
-            device=device,
-            loss_configuration=uncertainty_weighting,
-        )
-
     output = Path(arguments.output)
     output.mkdir(parents=True, exist_ok=True)
-    provenance = {
-        "grid_id": train_product["metadata"][0]["grid_id"],
-        "grid": train_product["grid"],
-        "products": train_product["metadata"],
-        "upstream_wic_is_proton_corrected": True,
-        "proton_correction_reapplied": False,
-        "upstream_proton_energy_model": "hardy",
-        "electron_energy_keV": 2.0,
-        "loss_quality_weight_source": train_product["metadata"][0][
-            "quality_weight_source"
-        ],
-        "upstream_quality_weight_interpretation": train_product["metadata"][0][
-            "upstream_quality_weight_interpretation"
-        ],
-        "minimum_sza_degrees": arguments.minimum_sza,
-        "comparison_data_version": arguments.data_version,
-        "legacy_comparison_directory": (
-            None if arguments.legacy_comparison is None
-            else str(Path(arguments.legacy_comparison).resolve())
-        ),
-        "paired_orbit_count": (
-            None if comparison_pairs is None else len(comparison_pairs)
-        ),
-        "pairing_rule": (
-            None if comparison_pairs is None else "same orbit filename and exact product time"
-        ),
-        "manual_frame_intervals": (
-            None if intervals is None else str(Path(arguments.segments).resolve())
-        ),
-        "sza_excluded_files": {
-            "train": train_product.get("excluded_files", []),
-            "validation": (
-                [] if validation_product is None
-                else validation_product.get("excluded_files", [])
+    artifact_path = output / "wic_si12_vae.pt"
+
+    if arguments.reuse_artifact:
+        if not artifact_path.is_file():
+            raise FileNotFoundError(
+                f"--reuse-artifact requires an existing {artifact_path}"
+            )
+        model, transform, artifact = load_run_artifact(artifact_path, device=device)
+        validate_reused_artifact(artifact, split, arguments, train_product)
+        configuration = artifact["training_configuration"]
+        provenance = artifact["data_provenance"]
+        evaluation = artifact.get("evaluation", {})
+    else:
+        transform = fit_channel_transform(
+            train_product["values"], train_product["valid"]
+        )
+        uncertainty_weighting = fit_precision_weighting(
+            train_product,
+            transform,
+            variance_floor=arguments.variance_floor,
+            maximum_relative_precision=arguments.maximum_relative_precision,
+            maximum_scale_samples=arguments.precision_scale_samples,
+        )
+        train_loader = make_loader(
+            train_product, transform, arguments.batch_size, shuffle=True
+        )
+        validation_loader = make_loader(
+            validation_product, transform, arguments.batch_size, shuffle=False
+        )
+        test_loader = make_loader(
+            test_product, transform, arguments.batch_size, shuffle=False
+        )
+
+        set_random_seed(arguments.seed)
+        model = WICSI12VAE(
+            image_shape=train_product["values"].shape[-2:],
+            latent_dim=arguments.latent_dim,
+            wic_floor_transformed=nonnegative_wic_floor(transform),
+        )
+        model, history = train_vae(
+            model,
+            train_loader,
+            validation_loader=validation_loader,
+            epochs=arguments.epochs,
+            learning_rate=arguments.learning_rate,
+            beta=arguments.beta,
+            device=device,
+            seed=arguments.seed,
+            loss_configuration=uncertainty_weighting,
+        )
+        evaluation = {}
+        if test_loader is not None:
+            evaluation["test"] = evaluate_vae(
+                model,
+                test_loader,
+                beta=arguments.beta,
+                device=device,
+                loss_configuration=uncertainty_weighting,
+            )
+
+        provenance = {
+            "grid_id": train_product["metadata"][0]["grid_id"],
+            "grid": train_product["grid"],
+            "products": train_product["metadata"],
+            "upstream_wic_is_proton_corrected": True,
+            "proton_correction_reapplied": False,
+            "upstream_proton_energy_model": "hardy",
+            "electron_energy_keV": 2.0,
+            "loss_quality_weight_source": train_product["metadata"][0][
+                "quality_weight_source"
+            ],
+            "upstream_quality_weight_interpretation": train_product["metadata"][0][
+                "upstream_quality_weight_interpretation"
+            ],
+            "minimum_sza_degrees": arguments.minimum_sza,
+            "comparison_data_version": arguments.data_version,
+            "legacy_comparison_directory": (
+                None if arguments.legacy_comparison is None
+                else str(Path(arguments.legacy_comparison).resolve())
             ),
-            "test": (
-                [] if test_product is None else test_product.get("excluded_files", [])
+            "paired_orbit_count": (
+                None if comparison_pairs is None else len(comparison_pairs)
             ),
-        },
-    }
-    configuration = {
-        "epochs": arguments.epochs,
-        "batch_size": arguments.batch_size,
-        "learning_rate": arguments.learning_rate,
-        "beta": arguments.beta,
-        "latent_dim": arguments.latent_dim,
-        "seed": arguments.seed,
-        "device": device,
-        "optimizer": "Adam",
-        "beta_schedule": "constant",
-        "uncertainty_weighting": uncertainty_weighting,
-        "minimum_sza_degrees": arguments.minimum_sza,
-        "comparison_data_version": arguments.data_version,
-        "selected_epoch": (
-            model.best_validation_epoch
-            if model.best_validation_epoch is not None else arguments.epochs
-        ),
-        "selected_validation_total": model.best_validation_total,
-        "frame_selection": {
-            "train": frame_selection(train_loader),
-            "validation": frame_selection(validation_loader),
-            "test": frame_selection(test_loader),
-        },
-    }
-    save_run_artifact(
-        output / "wic_si12_vae.pt",
-        model,
-        transform,
-        history,
-        configuration,
-        provenance,
-        split,
-        evaluation=evaluation,
-    )
-    model, transform, _artifact = load_run_artifact(
-        output / "wic_si12_vae.pt", device=device
-    )
+            "pairing_rule": (
+                None if comparison_pairs is None
+                else "same orbit filename and exact product time"
+            ),
+            "manual_frame_intervals": (
+                None if intervals is None else str(Path(arguments.segments).resolve())
+            ),
+            "sza_excluded_files": {
+                "train": train_product.get("excluded_files", []),
+                "validation": (
+                    [] if validation_product is None
+                    else validation_product.get("excluded_files", [])
+                ),
+                "test": (
+                    [] if test_product is None
+                    else test_product.get("excluded_files", [])
+                ),
+            },
+        }
+        configuration = {
+            "epochs": arguments.epochs,
+            "batch_size": arguments.batch_size,
+            "learning_rate": arguments.learning_rate,
+            "beta": arguments.beta,
+            "latent_dim": arguments.latent_dim,
+            "seed": arguments.seed,
+            "device": device,
+            "optimizer": "Adam",
+            "beta_schedule": "constant",
+            "uncertainty_weighting": uncertainty_weighting,
+            "minimum_sza_degrees": arguments.minimum_sza,
+            "comparison_data_version": arguments.data_version,
+            "selected_epoch": (
+                model.best_validation_epoch
+                if model.best_validation_epoch is not None else arguments.epochs
+            ),
+            "selected_validation_total": model.best_validation_total,
+            "frame_selection": {
+                "train": frame_selection(train_loader),
+                "validation": frame_selection(validation_loader),
+                "test": frame_selection(test_loader),
+            },
+        }
+        save_run_artifact(
+            artifact_path,
+            model,
+            transform,
+            history,
+            configuration,
+            provenance,
+            split,
+            evaluation=evaluation,
+        )
+        model, transform, _artifact = load_run_artifact(
+            artifact_path, device=device
+        )
 
     decoded, latent_samples = sample_decoded_ensemble(
         model,
@@ -356,12 +425,7 @@ def run(arguments):
         seed=arguments.seed + 1,
         return_latent=True,
     )
-    if np.any(decoded[:, 0] < 0):
-        fraction = float(np.mean(decoded[:, 0] < 0))
-        raise ValueError(
-            "decoded corrected WIC contains negative values "
-            f"({fraction:.3%} of cells); do not clip silently"
-        )
+    decoded, wic_boundary_diagnostics = correct_wic_roundoff(decoded, transform)
     fuv_statistics = ensemble_statistics(decoded)
     comparison_product = test_product or validation_product or train_product
     distribution = distribution_diagnostics(comparison_product, decoded)
@@ -414,6 +478,8 @@ def run(arguments):
                     for name, paths in split.items()
                 },
                 "sample_count": int(arguments.samples),
+                "reused_training_artifact": bool(arguments.reuse_artifact),
+                "wic_nonnegative_boundary": wic_boundary_diagnostics,
                 "held_out_evaluation": evaluation,
                 "field_distribution_diagnostics": distribution,
                 "propagation_order": propagated["propagation_order"],
@@ -437,6 +503,14 @@ def parse_arguments(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("inputs", nargs="+", help="orbit files, directories, or globs")
     parser.add_argument("--output", required=True)
+    parser.add_argument(
+        "--reuse-artifact",
+        action="store_true",
+        help=(
+            "reuse output/wic_si12_vae.pt and rerun sampling, propagation, "
+            "covariance, and reconstruction without training again"
+        ),
+    )
     parser.add_argument(
         "--segments",
         default=str(
