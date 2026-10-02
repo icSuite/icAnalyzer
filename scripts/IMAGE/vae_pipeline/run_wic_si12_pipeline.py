@@ -19,7 +19,6 @@ from torch.utils.data import DataLoader
 from icanalyzer.wic_si12.data import (
     WICSI12ArrayDataset,
     fit_channel_transform,
-    fit_precision_weighting,
     load_good_orbit_intervals,
     load_precipitation_cs_files,
     select_annotated_orbit_files,
@@ -35,6 +34,7 @@ from icanalyzer.wic_si12.ensemble import (
 from icanalyzer.wic_si12.model import SplineWICSI12VAE
 from icanalyzer.wic_si12.physics import conductance_from_corrected_wic
 from icanalyzer.wic_si12.workflow import (
+    LEGACY_LOSS_CONFIGURATION,
     evaluate_vae,
     load_run_artifact,
     save_run_artifact,
@@ -93,10 +93,15 @@ def load_split(
     )
 
 
-def make_loader(product, transform, batch_size, shuffle):
+def make_loader(
+    product, transform, batch_size, shuffle, maximum_missing_fraction
+):
     if product is None:
         return None
-    dataset = WICSI12ArrayDataset(product, transform)
+    dataset = WICSI12ArrayDataset(
+        product, transform,
+        maximum_missing_fraction=maximum_missing_fraction
+    )
     return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
 
 
@@ -108,6 +113,7 @@ def frame_selection(loader):
         "used": int(dataset.selected_indices.size),
         "dropped": int(dataset.dropped_indices.size),
         "dropped_indices": dataset.dropped_indices.tolist(),
+        "maximum_missing_fraction": dataset.maximum_missing_fraction,
     }
 
 
@@ -359,21 +365,17 @@ def run(arguments):
         transform = fit_channel_transform(
             train_product["values"], train_product["valid"]
         )
-        uncertainty_weighting = fit_precision_weighting(
-            train_product,
-            transform,
-            variance_floor=arguments.variance_floor,
-            maximum_relative_precision=arguments.maximum_relative_precision,
-            maximum_scale_samples=arguments.precision_scale_samples,
-        )
         train_loader = make_loader(
-            train_product, transform, arguments.batch_size, shuffle=True
+            train_product, transform, arguments.batch_size, shuffle=True,
+            maximum_missing_fraction=arguments.maximum_missing_fraction
         )
         validation_loader = make_loader(
-            validation_product, transform, arguments.batch_size, shuffle=False
+            validation_product, transform, arguments.batch_size, shuffle=False,
+            maximum_missing_fraction=arguments.maximum_missing_fraction
         )
         test_loader = make_loader(
-            test_product, transform, arguments.batch_size, shuffle=False
+            test_product, transform, arguments.batch_size, shuffle=False,
+            maximum_missing_fraction=arguments.maximum_missing_fraction
         )
 
         set_random_seed(arguments.seed)
@@ -392,7 +394,7 @@ def run(arguments):
             beta=arguments.beta,
             device=device,
             seed=arguments.seed,
-            loss_configuration=uncertainty_weighting,
+            loss_configuration=LEGACY_LOSS_CONFIGURATION,
             scheduler_factor=arguments.scheduler_factor,
             scheduler_patience=arguments.scheduler_patience,
             scheduler_minimum_learning_rate=arguments.scheduler_minimum_learning_rate,
@@ -404,7 +406,7 @@ def run(arguments):
                 test_loader,
                 beta=arguments.beta,
                 device=device,
-                loss_configuration=uncertainty_weighting,
+                loss_configuration=LEGACY_LOSS_CONFIGURATION,
             )
 
         provenance = {
@@ -470,7 +472,8 @@ def run(arguments):
             "scheduler_minimum_learning_rate": (
                 arguments.scheduler_minimum_learning_rate
             ),
-            "uncertainty_weighting": uncertainty_weighting,
+            "loss_configuration": LEGACY_LOSS_CONFIGURATION,
+            "maximum_missing_fraction": arguments.maximum_missing_fraction,
             "minimum_sza_degrees": arguments.minimum_sza,
             "comparison_data_version": arguments.data_version,
             "selected_epoch": (
@@ -644,22 +647,10 @@ def parse_arguments(argv=None):
         "--scheduler-minimum-learning-rate", type=float, default=0.0
     )
     parser.add_argument(
-        "--variance-floor",
+        "--maximum-missing-fraction",
         type=float,
-        default=1e-3,
-        help="minimum transformed measurement variance used by the VAE loss",
-    )
-    parser.add_argument(
-        "--maximum-relative-precision",
-        type=float,
-        default=100.0,
-        help="cap on precision divided by its fitted training-channel scale",
-    )
-    parser.add_argument(
-        "--precision-scale-samples",
-        type=int,
-        default=2_000_000,
-        help="maximum candidate grid cells per channel used to fit median precision",
+        default=0.33,
+        help="drop frames with more than this fraction of invalid common pixels",
     )
     parser.add_argument(
         "--minimum-sza",

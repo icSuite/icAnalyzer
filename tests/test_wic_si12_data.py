@@ -143,6 +143,18 @@ def test_invalid_product_cells_have_zero_quality():
     np.testing.assert_array_equal(loaded["quality"][:, :, 0, 0], 0.0)
 
 
+def test_si13_validity_does_not_mask_wic_si12_training_fields():
+    product = FakeProduct()
+    product.arrays["si13_corrected"][:, 0, 0] = np.nan
+    product.arrays["dsi13_corrected"][:, 0, 0] = np.nan
+
+    loaded = load_precipitation_cs(
+        "or_0042.nc", product_loader=lambda _path: product
+    )
+
+    assert loaded["valid"][:, :, 0, 0].all()
+
+
 def test_inverts_upstream_background_fit_weight_before_applying_coverage():
     product = FakeProduct()
     product.arrays["method_quality_weight"][:, 0, 0] = 0.0

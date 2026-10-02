@@ -12,6 +12,14 @@ from .data import ChannelTransform
 from .model import SplineWICSI12VAE, WICSI12VAE, vae_loss
 
 
+LEGACY_LOSS_CONFIGURATION = {
+    "kind": "legacy_weighted_mse_v1",
+    "reconstruction_reduction": "global_weight_sum_times_state_size",
+    "kl_reduction": "sum_batch_and_latent",
+    "measurement_uncertainty_in_loss": False,
+}
+
+
 #%% Reproducibility
 
 def set_random_seed(seed):
@@ -28,33 +36,12 @@ def set_random_seed(seed):
 def _validated_loss_configuration(loss_configuration):
     if loss_configuration is None:
         raise ValueError(
-            "loss_configuration is required so uncertainty weighting is explicit"
+            "loss_configuration is required so loss semantics are explicit"
         )
-    if loss_configuration.get("kind") not in (
-        "training_median_precision_v1", "fixed_precision_scale_v1"
-    ):
+    if loss_configuration.get("kind") != "legacy_weighted_mse_v1":
         raise ValueError(
             f"unsupported loss configuration {loss_configuration.get('kind')!r}"
         )
-    required = (
-        "precision_scale", "variance_floor", "maximum_relative_precision"
-    )
-    missing = [name for name in required if name not in loss_configuration]
-    if missing:
-        raise ValueError(
-            "loss configuration is missing: " + ", ".join(missing)
-        )
-    precision_scale = np.asarray(
-        loss_configuration["precision_scale"], dtype=float
-    )
-    if precision_scale.shape != (2,) or np.any(~np.isfinite(precision_scale)):
-        raise ValueError("loss precision_scale must contain two finite values")
-    if np.any(precision_scale <= 0):
-        raise ValueError("loss precision_scale values must be positive")
-    for name in ("variance_floor", "maximum_relative_precision"):
-        value = float(loss_configuration[name])
-        if not np.isfinite(value) or value <= 0:
-            raise ValueError(f"loss {name} must be finite and positive")
     return dict(loss_configuration)
 
 
@@ -75,28 +62,21 @@ def _run_epoch(
     for batch in loader:
         encoder_input = batch["encoder_input"].to(device)
         target = batch["target"].to(device)
-        valid = batch["valid"].to(device)
-        quality = batch["quality"].to(device)
-        variance = batch["variance"].to(device)
+        mask = batch["mask"].to(device)
+        weight = batch["weight"].to(device)
 
         if training:
             optimizer.zero_grad()
         with torch.set_grad_enabled(training):
-            reconstructed, mu, logvar = model(encoder_input, valid)
+            reconstructed, mu, logvar = model(encoder_input, mask)
             losses = vae_loss(
                 reconstructed,
                 target,
-                valid,
-                quality,
-                variance,
+                mask,
+                weight,
                 mu,
                 logvar,
                 beta=beta,
-                precision_scale=loss_configuration["precision_scale"],
-                variance_floor=loss_configuration["variance_floor"],
-                maximum_relative_precision=loss_configuration[
-                    "maximum_relative_precision"
-                ],
             )
             if training:
                 losses["total"].backward()
@@ -105,7 +85,7 @@ def _run_epoch(
         batch_size = encoder_input.shape[0]
         sample_count += batch_size
         for name in totals:
-            totals[name] += float(losses[name].detach().cpu()) * batch_size
+            totals[name] += float(losses[name].detach().cpu())
 
     if sample_count == 0:
         raise ValueError("data loader contains no samples")
@@ -269,8 +249,9 @@ def load_run_artifact(filename, device="cpu"):
     else:
         model = WICSI12VAE.from_configuration(model_configuration)
     model.load_state_dict(artifact["model_state"])
-    model.loss_configuration = artifact.get("training_configuration", {}).get(
-        "uncertainty_weighting"
+    training_configuration = artifact.get("training_configuration", {})
+    model.loss_configuration = training_configuration.get(
+        "loss_configuration", training_configuration.get("uncertainty_weighting")
     )
     model.to(device)
     model.eval()

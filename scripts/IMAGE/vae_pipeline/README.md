@@ -165,10 +165,11 @@ propagates corrected WIC to Hall and Pedersen at a fixed 2 keV electron energy,
 and performs an ensemble-space sparse update. The inverse transform clips
 decoded values below the physical zero boundary to zero.
 
-The encoder receives only corrected WIC and SI12 plus the separate binary
-validity mask required by partial convolution. The continuous auroral-interest
-quality weight is deliberately not an encoder channel in this experiment; it
-enters the reconstruction loss together with measurement precision.
+The encoder receives corrected WIC, SI12, and one continuous corrected quality
+channel, plus the separate common binary validity mask required by partial
+convolution. Product-2's background-fit weight is inverted first; the encoder
+and loss therefore receive auroral-interest weight rather than the upstream
+background-fit orientation.
 
 The restored legacy-lineage defaults are 36 latent dimensions, batch size 8,
 Adam learning rate `1e-4`, `beta=1`, seed 1, and 1,000 epochs. A
@@ -179,15 +180,13 @@ decoder uses 30-by-30 cubic-spline control points and projects them onto the
 46-by-46 product grid. These values are command-line options and are saved in
 the run artifact.
 
-Measurement uncertainty enters the reconstruction loss through `dwic` and
-`dsi12`; it is not decoded as an additional science field. The runner fits one
-median transformed-space precision scale per channel from the training split.
-Each pixel is weighted by quality times precision relative to that fixed
-channel scale. Loss reduction divides by valid support, not by the sum of
-weights, so an image whose uncertainties are uniformly larger contributes
-less than a precise image. The transformed variance floor defaults to `1e-3`
-and relative precision is capped at `100`; both values and the fitted scales
-are stored under `uncertainty_weighting` in the run configuration.
+The training objective now reproduces the legacy arithmetic. One common weight
+map is formed from the smaller of the two channel-specific corrected weights.
+Weighted squared error is summed across both fields and the complete batch,
+divided by the common weight sum, and multiplied by the full two-field state
+size. KL is summed across both batch and latent dimensions. Consequently the
+legacy `beta=1` has its original numerical meaning. `dwic` and `dsi12` remain
+available in the loaded product but are not part of this baseline loss.
 
 The upstream `method_quality_weight` is a background-fit weight, not a measure
 of confidence that a pixel is scientifically useful. A value of zero means
@@ -197,18 +196,11 @@ therefore uses `1 - method_quality_weight` as the auroral-interest weight,
 then multiplies it by the WIC or SI12 channel coverage. This convention and
 its source field are saved in the run provenance.
 
-This loss is not numerically comparable to runs made before the absolute
-uncertainty revision. The restored `beta=1` is therefore an architectural
-comparison setting, not a calibrated value for the revised loss. Override the
-safeguards with `--variance-floor`,
-`--maximum-relative-precision`, and `--precision-scale-samples` only as an
-explicit sensitivity experiment.
-
-Matched legacy and current runs fit their precision scales independently, so
-their raw weighted reconstruction losses are also not direct measures of which
-physical fields are closer to truth. Compare physical-space held-out residuals,
-sample calibration, covariance, and reconstruction skill; use each weighted
-loss for optimization and within-run checkpoint selection.
+Frames follow the legacy sparsity rule: if more than 33% of common WIC/SI12
+pixels are invalid, the frame is excluded. The threshold can be changed with
+`--maximum-missing-fraction`, but `0.33` is the compatibility default. Compare
+physical-space held-out residuals, sample calibration, covariance, and
+reconstruction skill in addition to the optimization loss.
 
 ```bash
 PYTHONPATH=. python scripts/IMAGE/vae_pipeline/run_wic_si12_pipeline.py \
@@ -247,10 +239,10 @@ but does not resolve its cause.
 
 `--minimum-sza 105` applies an inclusive, per-pixel night-side filter after
 the existing CSV/source-index frame selection: cells with `SZA < 105°` or
-nonfinite SZA become invalid and receive zero training weight. A frame is
-dropped only when no valid positively weighted pixels remain after all
-filters. Omit the option to reproduce the original no-SZA-threshold baseline.
-The threshold is recorded in both model configuration and data provenance.
+nonfinite SZA become invalid and receive zero training weight. The common
+missing-pixel fraction is then subjected to the same 33% frame limit. Omit the
+option to reproduce the original no-SZA-threshold baseline. The threshold is
+recorded in both model configuration and data provenance.
 
 To use SZA as the only scientific selection criterion and bypass
 `good_orbit_segments.csv`, add `--no-csv-selection` (the older equivalent name

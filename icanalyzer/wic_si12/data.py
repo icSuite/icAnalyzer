@@ -305,10 +305,8 @@ def _materialize_precipitation_cs(
 
     common_finite = (
         np.isfinite(wic)
-        & np.isfinite(arrays["si13_corrected"])
         & np.isfinite(si12)
         & np.isfinite(dwic)
-        & np.isfinite(arrays["dsi13_corrected"])
         & np.isfinite(dsi12)
     )
     nonnegative_uncertainty = (dwic >= 0) & (dsi12 >= 0)
@@ -740,7 +738,7 @@ def fit_precision_weighting(
 class WICSI12ArrayDataset(Dataset):
     """Torch dataset for an already materialized orbit split."""
 
-    def __init__(self, product_data, transform):
+    def __init__(self, product_data, transform, maximum_missing_fraction=0.33):
         self.values = np.asarray(product_data["values"], dtype=np.float32)
         self.standard_deviation = np.asarray(
             product_data["standard_deviation"], dtype=np.float32
@@ -748,6 +746,9 @@ class WICSI12ArrayDataset(Dataset):
         self.valid = np.asarray(product_data["valid"], dtype=bool)
         self.quality = np.asarray(product_data["quality"], dtype=np.float32)
         self.transform = transform
+        self.maximum_missing_fraction = float(maximum_missing_fraction)
+        if not 0 <= self.maximum_missing_fraction <= 1:
+            raise ValueError("maximum_missing_fraction must be between zero and one")
 
         expected = self.values.shape
         for name, array in (
@@ -758,19 +759,26 @@ class WICSI12ArrayDataset(Dataset):
             if array.shape != expected:
                 raise ValueError(f"{name} shape {array.shape} does not match {expected}")
 
-        usable = np.any(
-            self.valid & np.isfinite(self.quality) & (self.quality > 0),
-            axis=(1, 2, 3),
-        )
+        common_valid = np.all(self.valid, axis=1, keepdims=True)
+        missing_fraction = np.mean(~common_valid, axis=(1, 2, 3))
+        usable = missing_fraction <= self.maximum_missing_fraction
         self.selected_indices = np.flatnonzero(usable)
         self.dropped_indices = np.flatnonzero(~usable)
         if self.selected_indices.size == 0:
-            raise ValueError("dataset contains no frames with valid weighted pixels")
+            raise ValueError(
+                "dataset contains no frames within the maximum missing fraction"
+            )
 
         self.values = self.values[self.selected_indices]
         self.standard_deviation = self.standard_deviation[self.selected_indices]
         self.valid = self.valid[self.selected_indices]
         self.quality = self.quality[self.selected_indices]
+        self.common_valid = common_valid[self.selected_indices]
+        self.missing_fraction = missing_fraction[self.selected_indices]
+        self.weight = np.min(self.quality, axis=1, keepdims=True)
+        self.weight = np.where(
+            self.common_valid & np.isfinite(self.weight), self.weight, 0.0
+        ).astype(np.float32)
 
         self.target = self.transform.transform(self.values).astype(np.float32)
         self.transformed_variance = self.transform.variance(
@@ -782,13 +790,15 @@ class WICSI12ArrayDataset(Dataset):
 
     def __getitem__(self, index):
         target = self.target[index].copy()
-        valid = self.valid[index].copy()
-        target[~valid] = 0.0
+        mask = self.common_valid[index].copy()
+        target[:, ~mask[0]] = 0.0
+        weight = self.weight[index]
+        encoder_input = np.concatenate((target, weight), axis=0)
         return {
-            "encoder_input": torch.from_numpy(target),
+            "encoder_input": torch.from_numpy(encoder_input),
             "target": torch.from_numpy(target),
-            "valid": torch.from_numpy(valid),
-            "quality": torch.from_numpy(self.quality[index]),
+            "mask": torch.from_numpy(mask),
+            "weight": torch.from_numpy(weight),
             "variance": torch.from_numpy(self.transformed_variance[index]),
             "index": int(self.selected_indices[index]),
         }

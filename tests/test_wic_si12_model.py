@@ -14,6 +14,7 @@ from icanalyzer.wic_si12.model import (
     vae_loss,
 )
 from icanalyzer.wic_si12.workflow import (
+    LEGACY_LOSS_CONFIGURATION,
     evaluate_vae,
     load_run_artifact,
     save_run_artifact,
@@ -21,12 +22,7 @@ from icanalyzer.wic_si12.workflow import (
 )
 
 
-FIXED_WEIGHTING = {
-    "kind": "fixed_precision_scale_v1",
-    "precision_scale": [1.0, 1.0],
-    "variance_floor": 1e-3,
-    "maximum_relative_precision": 100.0,
-}
+FIXED_WEIGHTING = LEGACY_LOSS_CONFIGURATION
 
 
 def synthetic_product(n_samples=6):
@@ -51,14 +47,12 @@ def test_model_forward_and_consistent_loss_reduction():
     assert torch.all(reconstructed[:, 0] >= -0.25)
 
     target = torch.zeros_like(reconstructed)
-    valid = torch.ones_like(reconstructed, dtype=torch.bool)
-    quality = torch.ones_like(reconstructed)
-    variance = torch.ones_like(reconstructed)
-    valid[:, :, 0, 0] = False
-    quality[:, :, 0, 0] = torch.nan
-    variance[:, :, 0, 0] = torch.nan
+    mask = torch.ones(2, 1, 46, 46, dtype=torch.bool)
+    weight = torch.ones(2, 1, 46, 46)
+    mask[:, :, 0, 0] = False
+    weight[:, :, 0, 0] = torch.nan
     losses = vae_loss(
-        reconstructed, target, valid, quality, variance, mu, logvar, beta=0.1
+        reconstructed, target, mask, weight, mu, logvar, beta=0.1
     )
     assert set(losses) == {"total", "reconstruction", "kl"}
     assert torch.isfinite(losses["total"])
@@ -87,8 +81,8 @@ def test_spline_model_uses_partial_mask_and_projects_to_image_grid():
     model = SplineWICSI12VAE(
         image_shape=(46, 46), latent_dim=4, spline_control_points=30
     )
-    values = torch.randn(2, 2, 46, 46)
-    valid = torch.ones_like(values, dtype=torch.bool)
+    values = torch.randn(2, 3, 46, 46)
+    valid = torch.ones(2, 1, 46, 46, dtype=torch.bool)
     valid[:, :, :4, :4] = False
 
     reconstructed, mu, logvar = model(values, valid)
@@ -97,7 +91,8 @@ def test_spline_model_uses_partial_mask_and_projects_to_image_grid():
     assert reconstructed.shape == (2, 2, 46, 46)
     assert coefficients.shape == (2, 2, 30, 30)
     assert mu.shape == logvar.shape == (2, 4)
-    assert model.configuration()["quality_weight_in_encoder"] is False
+    assert model.configuration()["quality_weight_in_encoder"] is True
+    assert model.configuration()["encoder_channels"] == [3, 16, 32, 64]
     assert model.configuration()["decoder_seed_shape"] == [9, 9]
     torch.testing.assert_close(
         model.row_basis.sum(dim=1), torch.ones(46), rtol=1e-5, atol=1e-6
@@ -118,77 +113,62 @@ def test_spline_model_uses_partial_mask_and_projects_to_image_grid():
     )
 
 
-def test_absolute_uncertainty_changes_frame_contribution():
-    reconstructed = torch.ones(2, 2, 1, 1)
+def test_default_latent_and_spline_dimensions_match_legacy():
+    model = SplineWICSI12VAE()
+
+    assert model.latent_dim == 36
+    assert model.spline_control_points == 30
+    assert model.spline_degree == 3
+
+
+def test_loss_matches_literal_legacy_formula():
+    reconstructed = torch.tensor([
+        [[[1.0, 2.0]], [[3.0, 4.0]]],
+        [[[2.0, 1.0]], [[4.0, 3.0]]],
+    ])
     target = torch.zeros_like(reconstructed)
-    valid = torch.ones_like(reconstructed, dtype=torch.bool)
-    quality = torch.ones_like(reconstructed)
-    variance = torch.ones_like(reconstructed)
-    variance[1] = 4.0
-    mu = torch.zeros(2, 1)
+    mask = torch.tensor([[[[True, True]]], [[[True, False]]]])
+    weight = torch.tensor([[[[1.0, 0.5]]], [[[0.25, 1.0]]]])
+    mu = torch.ones(2, 3)
     logvar = torch.zeros_like(mu)
 
     losses = vae_loss(
-        reconstructed,
-        target,
-        valid,
-        quality,
-        variance,
-        mu,
-        logvar,
-        beta=0.0,
-        precision_scale=[1.0, 1.0],
+        reconstructed, target, mask, weight, mu, logvar, beta=1.0
+    )
+    masked_weight = weight * mask
+    expected_reconstruction = (
+        torch.sum(masked_weight * (reconstructed - target)**2)
+        / (masked_weight.sum() + 1e-8)
+        * (2 * 1 * 2)
+    )
+    expected_kl = -0.5 * torch.sum(
+        1 + logvar - mu.pow(2) - logvar.exp()
     )
 
-    assert torch.isclose(losses["reconstruction"], torch.tensor(0.625))
+    torch.testing.assert_close(losses["reconstruction"], expected_reconstruction)
+    torch.testing.assert_close(losses["kl"], expected_kl)
+    torch.testing.assert_close(
+        losses["total"], expected_reconstruction + expected_kl
+    )
 
 
-def test_training_channel_precision_scales_balance_typical_uncertainty():
+def test_uniform_weight_scale_cancels_as_in_legacy_loss():
     reconstructed = torch.ones(1, 2, 1, 1)
     target = torch.zeros_like(reconstructed)
-    valid = torch.ones_like(reconstructed, dtype=torch.bool)
-    quality = torch.ones_like(reconstructed)
-    variance = torch.tensor([[[[0.25]], [[4.0]]]])
+    mask = torch.ones(1, 1, 1, 1, dtype=torch.bool)
     mu = torch.zeros(1, 1)
     logvar = torch.zeros_like(mu)
 
-    losses = vae_loss(
-        reconstructed,
-        target,
-        valid,
-        quality,
-        variance,
-        mu,
-        logvar,
-        beta=0.0,
-        precision_scale=[4.0, 0.25],
+    full = vae_loss(
+        reconstructed, target, mask, torch.ones(1, 1, 1, 1),
+        mu, logvar, beta=0.0
+    )
+    half = vae_loss(
+        reconstructed, target, mask, torch.full((1, 1, 1, 1), 0.5),
+        mu, logvar, beta=0.0
     )
 
-    assert torch.isclose(losses["reconstruction"], torch.tensor(1.0))
-
-
-def test_quality_scale_is_not_cancelled_by_loss_reduction():
-    reconstructed = torch.ones(1, 2, 1, 1)
-    target = torch.zeros_like(reconstructed)
-    valid = torch.ones_like(reconstructed, dtype=torch.bool)
-    quality = torch.full_like(reconstructed, 0.5)
-    variance = torch.ones_like(reconstructed)
-    mu = torch.zeros(1, 1)
-    logvar = torch.zeros_like(mu)
-
-    losses = vae_loss(
-        reconstructed,
-        target,
-        valid,
-        quality,
-        variance,
-        mu,
-        logvar,
-        beta=0.0,
-        precision_scale=[1.0, 1.0],
-    )
-
-    assert torch.isclose(losses["reconstruction"], torch.tensor(0.5))
+    torch.testing.assert_close(full["reconstruction"], half["reconstruction"])
 
 
 def test_one_epoch_and_artifact_reload(tmp_path):
@@ -199,10 +179,11 @@ def test_one_epoch_and_artifact_reload(tmp_path):
     dataset = WICSI12ArrayDataset(product, transform)
     np.testing.assert_array_equal(dataset.selected_indices, [1, 2, 3, 4, 5])
     np.testing.assert_array_equal(dataset.dropped_indices, [0])
-    assert dataset[0]["encoder_input"].shape == (2, 46, 46)
+    assert dataset[0]["encoder_input"].shape == (3, 46, 46)
+    assert dataset[0]["mask"].shape == (1, 46, 46)
+    assert dataset[0]["weight"].shape == (1, 46, 46)
     loader = DataLoader(dataset, batch_size=3, shuffle=False)
-    wic_floor = float(-transform.center[0] / transform.spread[0])
-    model = WICSI12VAE(latent_dim=3, wic_floor_transformed=wic_floor)
+    model = SplineWICSI12VAE(latent_dim=3)
     model, history = train_vae(
         model,
         loader,
@@ -227,7 +208,7 @@ def test_one_epoch_and_artifact_reload(tmp_path):
         training_configuration={
             "epochs": 1,
             "seed": 5,
-            "uncertainty_weighting": model.loss_configuration,
+            "loss_configuration": model.loss_configuration,
         },
         data_provenance={"grid_id": "image_apex_130km_46x46_v1"},
         split_files={"train": ["or_0001.nc"], "validation": [], "test": []},
@@ -239,6 +220,25 @@ def test_one_epoch_and_artifact_reload(tmp_path):
     assert np.isfinite(metadata["evaluation"]["test"]["total"])
     assert reloaded_transform.to_dict() == transform.to_dict()
     assert reloaded.loss_configuration == model.loss_configuration
+
+
+def test_dataset_adds_common_weight_channel_and_legacy_missing_limit():
+    product = synthetic_product(n_samples=3)
+    product["quality"][:, 0] = 0.75
+    product["quality"][:, 1] = 0.5
+    flattened = product["valid"].reshape(3, 2, -1)
+    flattened[0, :, :698] = False
+    flattened[1, :, :699] = False
+    transform = ChannelTransform(scale=[100, 20], center=[0, 0], spread=[1, 1])
+
+    dataset = WICSI12ArrayDataset(product, transform)
+
+    np.testing.assert_array_equal(dataset.selected_indices, [0, 2])
+    np.testing.assert_array_equal(dataset.dropped_indices, [1])
+    assert dataset.missing_fraction[0] <= 0.33
+    item = dataset[0]
+    np.testing.assert_allclose(item["encoder_input"][2], item["weight"][0])
+    np.testing.assert_allclose(item["weight"][0][item["mask"][0]], 0.5)
 
 
 def test_training_restores_lowest_validation_loss_checkpoint(monkeypatch):
@@ -283,7 +283,7 @@ def test_training_restores_lowest_validation_loss_checkpoint(monkeypatch):
     assert history[2]["learning_rate"] == 2.5e-3
 
 
-def test_training_requires_explicit_uncertainty_weighting():
+def test_training_requires_explicit_loss_configuration():
     model = WICSI12VAE(latent_dim=2)
     try:
         train_vae(model, train_loader=[None], epochs=1)

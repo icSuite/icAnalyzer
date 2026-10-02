@@ -77,17 +77,21 @@ class SplineWICSI12VAE(nn.Module):
         latent_dim=36,
         spline_control_points=30,
         spline_degree=3,
+        quality_weight_in_encoder=True,
     ):
         super().__init__()
         self.image_shape = tuple(int(value) for value in image_shape)
         self.latent_dim = int(latent_dim)
         self.spline_control_points = int(spline_control_points)
         self.spline_degree = int(spline_degree)
+        self.quality_weight_in_encoder = bool(quality_weight_in_encoder)
         if self.spline_control_points <= self.spline_degree:
             raise ValueError("spline control-point count must exceed its degree")
 
+        encoder_channels = 3 if self.quality_weight_in_encoder else 2
         self.enc_pconv1 = PartialConv2d(
-            2, 16, kernel_size=3, stride=2, padding=1, return_mask=True
+            encoder_channels, 16, kernel_size=3, stride=2, padding=1,
+            return_mask=True
         )
         self.enc_bn1 = nn.BatchNorm2d(16)
         self.enc_pconv2 = PartialConv2d(
@@ -103,7 +107,7 @@ class SplineWICSI12VAE(nn.Module):
         self.enc_bn2.eval()
         self.enc_bn3.eval()
         with torch.no_grad():
-            dummy = torch.zeros(1, 2, *self.image_shape)
+            dummy = torch.zeros(1, encoder_channels, *self.image_shape)
             mask = torch.ones(1, 1, *self.image_shape)
             encoded, _mask = self._encode_convolutions(dummy, mask)
         self.enc_bn1.train()
@@ -197,9 +201,13 @@ class SplineWICSI12VAE(nn.Module):
             "spline_control_points": self.spline_control_points,
             "spline_degree": self.spline_degree,
             "encoder": "partial_convolution",
-            "encoder_channels": [2, 16, 32, 64],
-            "encoder_input_fields": ["wic_corrected", "si12"],
-            "quality_weight_in_encoder": False,
+            "encoder_channels": [self.enc_pconv1.in_channels, 16, 32, 64],
+            "encoder_input_fields": (
+                ["wic_corrected", "si12", "auroral_interest_weight"]
+                if self.quality_weight_in_encoder
+                else ["wic_corrected", "si12"]
+            ),
+            "quality_weight_in_encoder": self.quality_weight_in_encoder,
             "decoder_seed_shape": list(self.decoder_seed_shape),
             "decoder_channels": [64, 32, 16, 2],
         }
@@ -213,6 +221,9 @@ class SplineWICSI12VAE(nn.Module):
             latent_dim=int(configuration["latent_dim"]),
             spline_control_points=int(configuration["spline_control_points"]),
             spline_degree=int(configuration["spline_degree"]),
+            quality_weight_in_encoder=configuration.get(
+                "quality_weight_in_encoder", False
+            ),
         )
 
 
@@ -320,76 +331,36 @@ class WICSI12VAE(nn.Module):
 def vae_loss(
     reconstructed,
     target,
-    valid,
-    quality,
-    transformed_variance,
+    mask,
+    weight,
     mu,
     logvar,
     beta=1.0,
-    precision_scale=(1.0, 1.0),
-    variance_floor=1e-3,
-    maximum_relative_precision=100.0,
 ):
-    """Return uncertainty-weighted reconstruction and KL losses.
+    """Return the legacy weighted reconstruction loss and summed KL term."""
 
-    ``precision_scale`` is fitted once on the training split for each channel.
-    Reduction uses valid support rather than the weight sum, preserving
-    absolute uncertainty differences between images.
-    """
+    if reconstructed.shape != target.shape or reconstructed.ndim != 4:
+        raise ValueError("reconstructed and target must share shape (batch, channel, y, x)")
+    expected_support_shape = (target.shape[0], 1, *target.shape[-2:])
+    if mask.shape != expected_support_shape or weight.shape != expected_support_shape:
+        raise ValueError("mask and weight must have shape (batch, 1, y, x)")
 
-    variance_floor = float(variance_floor)
-    maximum_relative_precision = float(maximum_relative_precision)
-    if not 0 < variance_floor < float("inf"):
-        raise ValueError("variance_floor must be finite and positive")
-    if not 0 < maximum_relative_precision < float("inf"):
-        raise ValueError("maximum_relative_precision must be finite and positive")
-
-    valid = valid.to(dtype=torch.bool)
-    quality = torch.where(
-        valid & torch.isfinite(quality),
-        quality.to(dtype=reconstructed.dtype),
-        torch.zeros_like(quality, dtype=reconstructed.dtype),
+    mask = mask.to(dtype=torch.bool)
+    weight = torch.where(
+        mask & torch.isfinite(weight),
+        weight.to(dtype=reconstructed.dtype),
+        torch.zeros_like(weight, dtype=reconstructed.dtype),
     )
-    quality = torch.clamp(quality, min=0.0)
-    variance = transformed_variance.to(dtype=reconstructed.dtype)
-    finite_variance = torch.isfinite(variance) & (variance >= 0)
-    support = valid & (quality > 0) & finite_variance
-    variance = torch.where(
-        finite_variance,
-        variance,
-        torch.full_like(variance, float(variance_floor)),
-    )
-
-    precision = 1.0 / torch.clamp(variance, min=variance_floor)
-    precision_scale = torch.as_tensor(
-        precision_scale,
-        dtype=reconstructed.dtype,
-        device=reconstructed.device,
-    )
-    if precision_scale.shape != (2,):
-        raise ValueError("precision_scale must contain one value per channel")
-    if not torch.all(torch.isfinite(precision_scale) & (precision_scale > 0)):
-        raise ValueError("precision_scale values must be finite and positive")
-    relative_precision = precision / precision_scale.reshape(1, 2, 1, 1)
-    relative_precision = torch.clamp(
-        relative_precision, max=maximum_relative_precision
-    )
-
-    support_float = support.to(reconstructed.dtype)
-    weights = support_float * quality * relative_precision
+    weight = torch.clamp(weight, min=0.0)
     squared_error = (reconstructed - target)**2
-    weighted_error = (weights * squared_error).sum(dim=(-2, -1))
-    support_count = support_float.sum(dim=(-2, -1))
-    active = support_count > 0
-    if not torch.any(active):
-        raise ValueError("batch contains no valid weighted pixels")
-    channel_loss = weighted_error / torch.clamp(support_count, min=1.0)
-    reconstruction_loss = channel_loss[active].mean()
-
-    kl_per_sample = -0.5 * torch.sum(
-        1.0 + logvar - mu.pow(2) - logvar.exp(), dim=1
+    weight_sum = weight.sum()
+    state_size = int(np.prod(target.shape[1:]))
+    reconstruction_loss = (
+        torch.sum(weight * squared_error) / (weight_sum + 1e-8) * state_size
     )
-    kl_loss = kl_per_sample.mean()
+    kl_loss = -0.5 * torch.sum(
+        1.0 + logvar - mu.pow(2) - logvar.exp()
+    )
     total = reconstruction_loss + float(beta) * kl_loss
     return {
         "total": total,
