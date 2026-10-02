@@ -1,7 +1,7 @@
 # Handoff - Latest
 
 Last updated: 2026-10-02
-Repository snapshot: `vae/wic-si12` implementation at `209e9c6`; `main` remains at `7c71591`
+Repository snapshot: `vae/wic-si12` implementation at `fcf4c90`; `main` remains at `7c71591`
 
 ## Outcome
 
@@ -46,30 +46,29 @@ keV in this baseline.
   and 1,000 epochs. `ReduceLROnPlateau` uses training total loss, factor 0.5,
   and patience 10; validation independently selects the saved checkpoint, and
   the visualizer plots the recorded learning-rate history.
-- Objective-fidelity diagnosis: the restored architecture does not restore the
-  legacy loss scale. The legacy reconstruction ratio is multiplied by
-  `36*36*2` while KL is summed over the batch; the current implementation
-  averages both. At batch size 8, a uniform-weight comparison gives current
-  `beta=1` 648 times the legacy relative KL pressure. The saved
-  `wic_si12_spline_v1` best checkpoint (epoch 73) has validation reconstruction
-  `1.5538` and KL `0.0010`, confirming posterior collapse. The next controlled
-  experiment must restore legacy-compatible objective balance or use an
-  effective beta near `1e-3`; a sweep around `beta=1` is no longer justified.
-- Quality weight is intentionally absent from the encoder for this first
-  controlled restoration. Corrected WIC/SI12 and binary validity enter the
-  encoder; inverted background-fit weight, coverage, and `dwic`/`dsi12`
-  precision remain in the reconstruction loss.
+- Legacy-semantics restoration: `fcf4c90` restores the literal global weighted
+  reconstruction reduction and summed KL, the corrected common weight as the
+  third encoder channel, and the 33% common-missing frame limit. Measurement
+  precision is absent from this baseline loss. Latent dimension 36 and the
+  30x30 degree-3 spline remain unchanged. SI13 validity no longer removes
+  WIC/SI12 training pixels.
+- Verification after `fcf4c90`: 53 tests pass, including a literal legacy-loss
+  formula regression and the exact 33% cutoff boundary. A real one-epoch
+  Product-2 smoke completed artifact reload, sampling, propagation, covariance,
+  and sparse reconstruction with reconstruction `2115.04` and KL `3.92` rather
+  than collapsed KL. Across the full annotated split, the cutoff retains 4,048
+  train, 488 validation, and 1,102 test frames.
+- The old `wic_si12_spline_v1` artifact remains invalid: it selected epoch 73
+  with validation KL `0.0010` under the nonlegacy loss and is posterior-collapsed.
 - New models clip finite negative WIC/SI12 inputs before log transformation,
   emit a warning, and save clipped/finite/technically-valid counts. The complete
   manual-selection audit found zero negative WIC cells and 3,482,898 negative
   SI12 cells among 14,030,013 finite cells (24.82%). With `SZA >= 105`,
   390,848 of 2,718,083 technically valid SI12 cells were negative (14.38%). This is
   an unresolved upstream processing issue.
-- Current verification: all 51 tests under `tests/` pass; all 61 Python files
-  parse. A fresh two-epoch real-orbit run completed training, best-checkpoint
-  restore, artifact reload, eight latent samples, propagation, covariance,
-  sparse reconstruction, and all twelve figures. Reuse of the new spline
-  artifact and a separate `SZA >= 105` smoke also passed.
+- Current verification: all 53 tests under `tests/` pass and all Python files
+  parse. The new real-data smoke and full-split selection audit supersede the
+  earlier execution-only checks for the canonical loss.
 - Large-ensemble repair: `209e9c6` makes diagnostics selective and sequential,
   removes squared-factor temporaries, and uses deterministic randomized SVD
   instead of a sample-by-sample Gram matrix. All twelve figures from the real
@@ -105,17 +104,10 @@ keV in this baseline.
 - All real-data VAE artifacts predating `2e5ff4d` used the reversed weight
   orientation and require retraining. Physical-field mean maps in the earlier
   direct comparison are unchanged; quality-weight statistics require rerun.
-- Absolute-uncertainty commit: `23afaeb Preserve absolute uncertainty in VAE
-  loss`. Training fits one transformed median precision per channel from the
-  training split, uses explicit floor/cap safeguards, and reduces weighted
-  error by valid support rather than weight sum. Absolute uncertainty and
-  quality differences between frames therefore no longer cancel. The complete
-  configuration is stored in artifacts and required for evaluation.
-- Previous absolute-uncertainty verification: 39 focused tests and 61 parsed
-  Python files. Current and legacy orbit-85 smokes plus a three-orbit held-out
-  smoke completed through training, artifact reload, sampling, propagation,
-  covariance, and sparse reconstruction. Existing saved scientific runs
-  predate this loss change.
+- Superseded uncertainty experiment: `23afaeb` added precision weighting and a
+  nonlegacy loss reduction. Commit `fcf4c90` removes both from the canonical
+  baseline. The helper remains available only for a future explicit ablation;
+  no current baseline artifact should claim uncertainty-weighted training.
 - Full SZA-support audit: across all 1,378 current files and 358,439 frames,
   only 1,483 of 2,116 grid cells ever satisfy `SZA >= 105°`. Columns 33--45
   have zero eligible targets; column 32 has only 2,047 cell-times. The current
@@ -222,8 +214,9 @@ comparison result for the restored model.
 - Propagation occurs after CS gridding. Existing `conductance_cs` instead
   averages detector-space nonlinear conductance, so equality between the two
   products is neither expected nor a valid regression criterion.
-- Measurement uncertainty is used for loss weighting and observation error;
-  latent covariance remains a separately named geophysical component.
+- Measurement uncertainty remains available for observation-error models but
+  is not used by the restored legacy training loss; latent covariance remains
+  a separately named geophysical component.
 - New log-transform artifacts clip decoded WIC and SI12 at physical zero.
   Input clipping is warned and recorded. Old signed-asinh artifacts retain the
   narrow WIC roundoff recovery and reject substantive negative WIC.
@@ -258,9 +251,8 @@ Next:
 2. if 500,000 samples are required, redesign the remaining linear-size
    sampling, propagation, and image-space factor storage around streaming or
    the spline coefficient representation; 50,000-sample plotting is repaired;
-3. run a controlled legacy-compatible loss experiment on current data, starting
-   near effective `beta=1e-3`, and compare KL, held-out physical residuals, and
-   sample dispersion before other model changes;
+3. train the restored legacy-semantics baseline on current data and compare KL,
+   held-out physical residuals, and sample dispersion with the legacy run;
 4. choose a scientifically explicit nightside support/domain or revise the SZA
    threshold; if retaining `SZA >= 105°`, exclude permanently unsupported
    cells from ensemble statistics, physical propagation, visualization, and
@@ -291,11 +283,10 @@ non-destructive Cubed-Sphere converter; do not rescale pixel indices.
   SZA-only audit shows that columns 33--45 have no training targets while the
   current VAE and covariance path still emits and uses them. A supported-domain
   decision and implementation must precede scientific interpretation or full
-  paired SZA-only training. A direct audit found that current `beta=1` is not
-  legacy-equivalent and the saved spline run is posterior-collapsed; restoring
-  objective balance is now the first model experiment. Absolute measurement-
-  uncertainty weighting is implemented, with encoder-context and downstream
-  covariance experiments still open. Upstream background-fit
+  paired SZA-only training. The VAE baseline now restores the legacy objective,
+  quality encoder channel, and frame sparsity limit while preserving corrected
+  weight orientation and Product-2 fields. A fresh full training comparison is
+  now the next model step. Upstream background-fit
   weights are now correctly inverted for auroral-interest training; all
   pre-correction real-data VAE artifacts require retraining. The
   public icPhysics propagation boundary and coordinate-based annotation

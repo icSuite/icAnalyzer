@@ -1,8 +1,8 @@
 # Current State
 
 Last reviewed: 2026-10-02
-Repository snapshot: `vae/wic-si12` implementation at `209e9c6`; `main` remains at `7c71591`
-Worktree: clean before this memory checkpoint
+Repository snapshot: `vae/wic-si12` implementation at `fcf4c90`; `main` remains at `7c71591`
+Worktree: user's uncommitted legacy-script epoch edit is preserved
 
 ## Current position
 
@@ -25,8 +25,7 @@ Commit `5f6de08` adds:
   variance propagation, masks, quality weighting, and explicit unusable-frame
   accounting. Manual good intervals are applied through `wic_source_index`
   before the camera arrays are materialized;
-- `icanalyzer.wic_si12.model`: the VAE implementations and consistently
-  reduced reconstruction/KL loss;
+- `icanalyzer.wic_si12.model`: the VAE implementations and training loss;
 - `icanalyzer.wic_si12.physics`: the reviewed fixed-2-keV local adapter with a
   frozen WIC-response fixture and no second proton correction;
 - `icanalyzer.wic_si12.ensemble`: exact-count latent sampling, low-rank joint
@@ -38,8 +37,7 @@ Commit `5f6de08` adds:
 
 The sparse validation supports Hall-only, Pedersen-only, and joint direct
 observations with explicit observation-error covariance. Detector uncertainty
-weights reconstruction but is not silently mixed into the latent geophysical
-covariance.
+is not silently mixed into the latent geophysical covariance.
 
 ## Restored legacy-lineage architecture
 
@@ -47,8 +45,8 @@ Commit `e923875` corrects the architectural divergence in the first rewrite.
 The canonical runner now uses:
 
 - a three-layer partial-convolution encoder with propagated validity masks;
-- corrected WIC and SI12 as the only encoder science channels; the continuous
-  quality weight remains out of the encoder for this experiment;
+- corrected WIC, SI12, and the corrected common auroral-interest weight as the
+  three encoder channels;
 - a 30-by-30 tensor-product cubic-spline coefficient grid projected to the
   46-by-46 Product-2 grid;
 - a training-only standardized `log10(value + 1)` transform;
@@ -65,31 +63,27 @@ constant-field reproduction, mask invariance, saved-artifact reload, and the
 scheduler. The prior convolutional artifacts remain readable but are not the
 canonical architecture.
 
-### Legacy-objective fidelity gap
+### Restored legacy training semantics
 
-A direct code audit on 2026-10-02 found that the restored architecture still
-does not reproduce the legacy objective. The legacy script multiplies its
-weighted reconstruction ratio by `36*36*2` and sums KL across the batch. The
-current implementation averages reconstruction across sample/channel and
-averages KL across the batch. With batch size 8 and otherwise uniform weights,
-`beta=1` therefore gives KL 648 times more influence relative to reconstruction
-than the legacy script.
+Commit `fcf4c90` closes the objective-fidelity gap. The canonical loss now
+matches the legacy arithmetic: one common weight map and mask are broadcast
+over both target channels, weighted squared error is divided by the global
+batch weight sum and multiplied by the full two-field state size, and KL is
+summed over batch and latent dimensions. Measurement precision is not part of
+this baseline loss. The corrected `1 - method_quality_weight` remains the
+scientific orientation; the common map uses the smaller channel-specific
+coverage-weighted value.
 
-This is not only theoretical. The saved `wic_si12_spline_v1` checkpoint chose
-epoch 73 with validation reconstruction `1.5538` and KL `0.0010`. The near-zero
-KL shows posterior collapse: the encoded posterior is effectively the unit
-Gaussian and the decoder cannot carry useful frame-specific information.
-This objective mismatch is the leading explanation for the degraded samples
-and supersedes the earlier plan to sweep around `beta=1`.
+The same corrected common weight is restored as the third partial-convolution
+encoder channel. Frames with more than 33% invalid common WIC/SI12 pixels are
+dropped, matching the legacy sparsity threshold. SI13/dSI13 no longer mask the
+WIC/SI12 model. Latent dimension 36, 30x30 cubic-spline controls, degree 3,
+batch size 8, learning rate `1e-4`, `beta=1`, and the scheduler are unchanged.
 
-Other code-level departures remain: the legacy quality map is the third
-encoder channel; the current experiment deliberately omits it; the current
-loss adds uncertainty precision, inverted background-fit quality, and channel
-coverage; sparse frames are normalized per sample/channel instead of
-contributing in proportion to global valid support; the current workflow uses
-orbit-held-out training and the best validation checkpoint; and the 46x46
-model retains 30x30 spline coefficients versus 30x30 on the legacy 36x36
-grid. These need controlled ablations after repairing the objective scale.
+The earlier `wic_si12_spline_v1` artifact remains posterior-collapsed and must
+not be used. A fresh one-epoch real Product-2 smoke had reconstruction
+`2115.04` and KL `3.92`, completed sampling, propagation, covariance, sparse
+reconstruction, and produced the expected three-channel model artifact.
 
 Finite negative WIC and SI12 inputs are clipped to zero before the log
 transform. The runner warns and saves finite, technically valid, and clipped counts
@@ -98,7 +92,7 @@ WIC and SI12 below zero to zero.
 
 ## Verification
 
-- 51 tests under `tests/` pass in the current environment.
+- 53 tests under `tests/` pass in the current environment.
 - All 61 Python files under `icanalyzer/`, `scripts/`, and `tests/` parse.
 - A fresh two-epoch run on real orbits 85, 86, and 89 verified the restored
   model through best-checkpoint selection, artifact reload, eight latent
@@ -110,6 +104,9 @@ WIC and SI12 below zero to zero.
   artifact save/reload, eight paired latent samples, fixed-energy propagation,
   joint covariance construction, and sparse reconstruction.
 - Repeating that CPU smoke with the same seed reproduced its metrics exactly.
+- The complete annotated Product-2 split passes the 33% filter with 4,048
+  train, 488 validation, and 1,102 test frames. The respective input counts
+  are 7,344, 1,454, and 1,882, so every production split remains nonempty.
 - After the Hardy correction was confirmed, three real production orbits
   (`1720`, `0813`, and `1734`) completed a one-epoch end-to-end smoke with 30
   usable frames, held-out evaluation, artifact reload, 16 latent samples,
@@ -283,31 +280,14 @@ net pipeline comparison, not an isolated fuvpy experiment, because matching,
 coregistration, detector-to-CS reduction, uncertainty, and validity handling
 also changed.
 
-## Absolute measurement-uncertainty loss
+## Superseded measurement-uncertainty experiment
 
-Commit `23afaeb` implements the first agreed uncertainty revision. `dwic` and
-`dsi12` are propagated through the fitted channel transform as before, but
-their precision is no longer normalized independently within every image.
-The training split now fits one median transformed-space precision scale for
-WIC and one for SI12. The loss divides weighted squared error by valid support
-per sample/channel rather than by the weight sum, preserving absolute
-uncertainty and quality differences between frames.
-
-The transformed variance floor defaults to `1e-3`, relative precision is
-capped at `100`, and at most two million candidate cells per channel are used
-for deterministic scale fitting. Fitted scales, sampling diagnostics, caps,
-and loss reduction are stored under `uncertainty_weighting` in the run
-artifact. Training now requires an explicit uncertainty-loss configuration so
-an old artifact cannot be silently evaluated with new loss semantics.
-
-Focused tests verify that fourfold variance gives one-quarter reconstruction
-weight, fitted channel scales balance their typical precision, and uniform
-quality differences are no longer cancelled. One-orbit current and legacy
-smokes and a three-orbit train/validation/test smoke completed end to end. Raw
-losses are not comparable with older runs or directly between current and
-legacy runs fitted with different transforms/scales. The restored `beta=1`
-default reproduces the old architecture experiment but has not been calibrated
-for the revised loss.
+Commit `23afaeb` implemented an uncertainty-weighted loss experiment. Direct
+comparison later showed that its reduction changed the legacy reconstruction/
+KL balance and caused posterior collapse at `beta=1`. Commit `fcf4c90` removes
+measurement precision from the canonical baseline and restores the legacy
+global weight-sum reduction. The precision-fitting helper remains in the code
+only for a future explicit experiment; it is not called by the runner.
 
 ## Corrected background-fit weight orientation
 
@@ -316,7 +296,7 @@ means that the background method could not fit the data; those cells commonly
 contain aurora. Upstream one means that the background fit explains the data.
 icAnalyzer now converts both current and legacy upstream weights to the
 auroral-interest orientation with `1 - w` during ingestion, before applying
-channel coverage and measurement precision.
+channel coverage.
 
 A deterministic 64-file Product-2 audit covered 35,337,200 cells. All 138,394
 exact zero-weight cells had `method_valid=True`, so the existing validity mask
@@ -379,12 +359,11 @@ and scientific selection before rerunning downstream stages.
    propagation, and covariance storage around coefficient-space or streamed
    statistics; the 50,000-sample visualizer is now verified, but full factors
    still scale linearly with ensemble size.
-3. Add a legacy-compatible objective experiment on the current data and test
-   an effective beta near `1e-3`; do not treat `beta=1` as legacy-equivalent.
-   Compare reconstruction, KL, held-out physical residuals, and prior-sample
-   dispersion before changing the encoder or data selection.
-4. Then ablate uncertainty precision, per-frame/channel loss reduction, and
-   the quality-map encoder channel separately so their effects are identifiable.
+3. Train the restored legacy-semantics model on the current Product-2 data and
+   compare reconstruction, KL, held-out physical residuals, and prior-sample
+   dispersion against the legacy run before making further model changes.
+4. Treat uncertainty or encoder-context alternatives as later, explicit
+   experiments rather than changes to this baseline.
 5. Regenerate the full legacy/rerun quality comparison and retrain any VAE
    intended for interpretation; pre-`2e5ff4d` artifacts used reversed weights.
 6. Before running the full paired SZA-only VAEs, decide whether the state is
