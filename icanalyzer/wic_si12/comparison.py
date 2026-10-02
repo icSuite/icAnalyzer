@@ -138,13 +138,17 @@ def _materialize_legacy(product, filename, selection, sza, current_grid, metadat
 
     common_finite = (
         np.isfinite(wic)
-        & np.isfinite(arrays["si13_corrected"])
         & np.isfinite(si12)
         & np.isfinite(dwic)
-        & np.isfinite(arrays["dsi13_corrected"])
         & np.isfinite(dsi12)
     )
-    valid_pixels = common_finite & (dwic >= 0) & (dsi12 >= 0)
+    valid_pixels = (
+        common_finite
+        & (dwic >= 0)
+        & (dsi12 >= 0)
+        & np.isfinite(robust_weight)
+    )
+    frame_missing_fraction = np.mean(~valid_pixels, axis=(1, 2))
     if sza is not None:
         valid_pixels &= np.isfinite(sza) & (sza >= metadata["minimum_sza_degrees"])
     metadata["wic_valid_input_cells"] = int(np.count_nonzero(valid_pixels))
@@ -190,6 +194,7 @@ def _materialize_legacy(product, filename, selection, sza, current_grid, metadat
         "standard_deviation": np.stack((dwic, dsi12), axis=1),
         "valid": valid,
         "quality": quality,
+        "frame_missing_fraction": frame_missing_fraction,
         "si13_corrected": arrays["si13_corrected"],
         "dsi13_corrected": arrays["dsi13_corrected"],
         "time": times,
@@ -306,7 +311,7 @@ def _concatenate_products(products, excluded_files):
         name: np.concatenate([product[name] for product in products], axis=0)
         for name in (
             "values", "standard_deviation", "valid", "quality",
-            "si13_corrected", "dsi13_corrected", "time",
+            "frame_missing_fraction", "si13_corrected", "dsi13_corrected", "time",
         )
     }
     result["metadata"] = [product["metadata"] for product in products]

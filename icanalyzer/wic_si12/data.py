@@ -310,7 +310,16 @@ def _materialize_precipitation_cs(
         & np.isfinite(dsi12)
     )
     nonnegative_uncertainty = (dwic >= 0) & (dsi12 >= 0)
-    base_valid = method_valid & common_finite & nonnegative_uncertainty
+    base_valid = (
+        method_valid
+        & common_finite
+        & nonnegative_uncertainty
+        & np.isfinite(method_quality)
+    )
+    frame_common_valid = (
+        base_valid & (wic_coverage > 0) & (si12_coverage > 0)
+    )
+    frame_missing_fraction = np.mean(~frame_common_valid, axis=(1, 2))
     if minimum_sza is not None:
         base_valid &= np.isfinite(sza) & (sza >= minimum_sza)
     wic_valid = base_valid & (wic_coverage > 0)
@@ -340,6 +349,7 @@ def _materialize_precipitation_cs(
         "standard_deviation": standard_deviation,
         "valid": valid,
         "quality": quality,
+        "frame_missing_fraction": frame_missing_fraction,
         "si13_corrected": arrays["si13_corrected"],
         "dsi13_corrected": arrays["dsi13_corrected"],
         "time": times,
@@ -445,7 +455,7 @@ def load_precipitation_cs_files(
     result = {}
     for name in (
         "values", "standard_deviation", "valid", "quality",
-        "si13_corrected", "dsi13_corrected", "time",
+        "frame_missing_fraction", "si13_corrected", "dsi13_corrected", "time",
     ):
         result[name] = np.concatenate([product[name] for product in products], axis=0)
 
@@ -760,7 +770,15 @@ class WICSI12ArrayDataset(Dataset):
                 raise ValueError(f"{name} shape {array.shape} does not match {expected}")
 
         common_valid = np.all(self.valid, axis=1, keepdims=True)
-        missing_fraction = np.mean(~common_valid, axis=(1, 2, 3))
+        missing_fraction = np.asarray(
+            product_data.get(
+                "frame_missing_fraction",
+                np.mean(~common_valid, axis=(1, 2, 3)),
+            ),
+            dtype=np.float64,
+        )
+        if missing_fraction.shape != (self.values.shape[0],):
+            raise ValueError("frame_missing_fraction must contain one value per frame")
         usable = missing_fraction <= self.maximum_missing_fraction
         self.selected_indices = np.flatnonzero(usable)
         self.dropped_indices = np.flatnonzero(~usable)

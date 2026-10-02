@@ -6,6 +6,7 @@ from types import MappingProxyType
 from icanalyzer.wic_si12.data import (
     ChannelTransform,
     REQUIRED_CAMERA_FIELDS,
+    WICSI12ArrayDataset,
     fit_channel_transform,
     fit_precision_weighting,
     load_good_orbit_intervals,
@@ -240,6 +241,23 @@ def test_minimum_sza_masks_pixels_and_records_filter_provenance():
     assert loaded["metadata"]["sza_filter_retained_frames"] == 2
     assert loaded["metadata"]["sza_filter_retained_cells"] == 2 * 46 * 46 - 2
     assert loaded["metadata"]["sza_filter_total_cells"] == 2 * 46 * 46
+
+
+def test_legacy_missing_limit_is_measured_before_sza_masking():
+    product = FakeProduct()
+    product.arrays["sza"][:] = 104.0
+    product.arrays["sza"][:, 0, 0] = 105.0
+    loaded = load_precipitation_cs(
+        "or_0042.nc", product_loader=lambda _path: product,
+        minimum_sza=105.0
+    )
+    transform = ChannelTransform(scale=[1, 1], center=[0, 0], spread=[1, 1])
+
+    dataset = WICSI12ArrayDataset(loaded, transform)
+
+    np.testing.assert_array_equal(loaded["frame_missing_fraction"], 0.0)
+    assert len(dataset) == 2
+    assert np.count_nonzero(dataset.common_valid) == 2
 
 
 def test_sza_empty_frames_are_removed_before_camera_fields_are_read():

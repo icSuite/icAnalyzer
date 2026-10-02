@@ -197,10 +197,11 @@ then multiplies it by the WIC or SI12 channel coverage. This convention and
 its source field are saved in the run provenance.
 
 Frames follow the legacy sparsity rule: if more than 33% of common WIC/SI12
-pixels are invalid, the frame is excluded. The threshold can be changed with
-`--maximum-missing-fraction`, but `0.33` is the compatibility default. Compare
-physical-space held-out residuals, sample calibration, covariance, and
-reconstruction skill in addition to the optimization loss.
+pixels are intrinsically invalid before optional SZA masking, the frame is
+excluded. The threshold can be changed with `--maximum-missing-fraction`, but
+`0.33` is the compatibility default. Compare physical-space held-out residuals,
+sample calibration, covariance, and reconstruction skill in addition to the
+optimization loss.
 
 ```bash
 PYTHONPATH=. python scripts/IMAGE/vae_pipeline/run_wic_si12_pipeline.py \
@@ -240,9 +241,10 @@ but does not resolve its cause.
 `--minimum-sza 105` applies an inclusive, per-pixel night-side filter after
 the existing CSV/source-index frame selection: cells with `SZA < 105°` or
 nonfinite SZA become invalid and receive zero training weight. The common
-missing-pixel fraction is then subjected to the same 33% frame limit. Omit the
-option to reproduce the original no-SZA-threshold baseline. The threshold is
-recorded in both model configuration and data provenance.
+33% frame limit is evaluated on intrinsic camera validity before this
+scientific mask, so the SZA filter does not itself reject nightside frames.
+Omit the option to reproduce the original no-SZA-threshold baseline. The
+threshold is recorded in both model configuration and data provenance.
 
 To use SZA as the only scientific selection criterion and bypass
 `good_orbit_segments.csv`, add `--no-csv-selection` (the older equivalent name
