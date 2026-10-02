@@ -65,6 +65,32 @@ constant-field reproduction, mask invariance, saved-artifact reload, and the
 scheduler. The prior convolutional artifacts remain readable but are not the
 canonical architecture.
 
+### Legacy-objective fidelity gap
+
+A direct code audit on 2026-10-02 found that the restored architecture still
+does not reproduce the legacy objective. The legacy script multiplies its
+weighted reconstruction ratio by `36*36*2` and sums KL across the batch. The
+current implementation averages reconstruction across sample/channel and
+averages KL across the batch. With batch size 8 and otherwise uniform weights,
+`beta=1` therefore gives KL 648 times more influence relative to reconstruction
+than the legacy script.
+
+This is not only theoretical. The saved `wic_si12_spline_v1` checkpoint chose
+epoch 73 with validation reconstruction `1.5538` and KL `0.0010`. The near-zero
+KL shows posterior collapse: the encoded posterior is effectively the unit
+Gaussian and the decoder cannot carry useful frame-specific information.
+This objective mismatch is the leading explanation for the degraded samples
+and supersedes the earlier plan to sweep around `beta=1`.
+
+Other code-level departures remain: the legacy quality map is the third
+encoder channel; the current experiment deliberately omits it; the current
+loss adds uncertainty precision, inverted background-fit quality, and channel
+coverage; sparse frames are normalized per sample/channel instead of
+contributing in proportion to global valid support; the current workflow uses
+orbit-held-out training and the best validation checkpoint; and the 46x46
+model retains 30x30 spline coefficients versus 30x30 on the legacy 36x36
+grid. These need controlled ablations after repairing the objective scale.
+
 Finite negative WIC and SI12 inputs are clipped to zero before the log
 transform. The runner warns and saves finite, technically valid, and clipped counts
 as upstream-problem provenance. The inverse transform clips decoded physical
@@ -353,12 +379,12 @@ and scientific selection before rerunning downstream stages.
    propagation, and covariance storage around coefficient-space or streamed
    statistics; the 50,000-sample visualizer is now verified, but full factors
    still scale linearly with ensemble size.
-3. Run the restored spline/partial-convolution model and inspect convergence,
-   held-out physical residuals, sample dispersion, and spline-field
-   diagnostics. The historical 20-epoch convolutional result is not a
-   comparison baseline for this architecture.
-4. Calibrate the revised loss with fitted precision diagnostics and a beta
-   sweep around the restored `beta=1` experiment setting.
+3. Add a legacy-compatible objective experiment on the current data and test
+   an effective beta near `1e-3`; do not treat `beta=1` as legacy-equivalent.
+   Compare reconstruction, KL, held-out physical residuals, and prior-sample
+   dispersion before changing the encoder or data selection.
+4. Then ablate uncertainty precision, per-frame/channel loss reduction, and
+   the quality-map encoder channel separately so their effects are identifiable.
 5. Regenerate the full legacy/rerun quality comparison and retrain any VAE
    intended for interpretation; pre-`2e5ff4d` artifacts used reversed weights.
 6. Before running the full paired SZA-only VAEs, decide whether the state is

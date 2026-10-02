@@ -46,6 +46,15 @@ keV in this baseline.
   and 1,000 epochs. `ReduceLROnPlateau` uses training total loss, factor 0.5,
   and patience 10; validation independently selects the saved checkpoint, and
   the visualizer plots the recorded learning-rate history.
+- Objective-fidelity diagnosis: the restored architecture does not restore the
+  legacy loss scale. The legacy reconstruction ratio is multiplied by
+  `36*36*2` while KL is summed over the batch; the current implementation
+  averages both. At batch size 8, a uniform-weight comparison gives current
+  `beta=1` 648 times the legacy relative KL pressure. The saved
+  `wic_si12_spline_v1` best checkpoint (epoch 73) has validation reconstruction
+  `1.5538` and KL `0.0010`, confirming posterior collapse. The next controlled
+  experiment must restore legacy-compatible objective balance or use an
+  effective beta near `1e-3`; a sweep around `beta=1` is no longer justified.
 - Quality weight is intentionally absent from the encoder for this first
   controlled restoration. Corrected WIC/SI12 and binary validity enter the
   encoder; inverted background-fit weight, coverage, and `dwic`/`dsi12`
@@ -249,9 +258,9 @@ Next:
 2. if 500,000 samples are required, redesign the remaining linear-size
    sampling, propagation, and image-space factor storage around streaming or
    the spline coefficient representation; 50,000-sample plotting is repaired;
-3. run and inspect the restored spline/partial-convolution model, then sweep
-   beta around the restored `beta=1` setting using held-out physical residuals
-   and sample dispersion;
+3. run a controlled legacy-compatible loss experiment on current data, starting
+   near effective `beta=1e-3`, and compare KL, held-out physical residuals, and
+   sample dispersion before other model changes;
 4. choose a scientifically explicit nightside support/domain or revise the SZA
    threshold; if retaining `SZA >= 105°`, exclude permanently unsupported
    cells from ensemble statistics, physical propagation, visualization, and
@@ -282,9 +291,11 @@ non-destructive Cubed-Sphere converter; do not rescale pixel indices.
   SZA-only audit shows that columns 33--45 have no training targets while the
   current VAE and covariance path still emits and uses them. A supported-domain
   decision and implementation must precede scientific interpretation or full
-  paired SZA-only training. Absolute measurement-uncertainty weighting is now
-  implemented, with beta calibration followed by encoder-context and
-  downstream covariance experiments still open. Upstream background-fit
+  paired SZA-only training. A direct audit found that current `beta=1` is not
+  legacy-equivalent and the saved spline run is posterior-collapsed; restoring
+  objective balance is now the first model experiment. Absolute measurement-
+  uncertainty weighting is implemented, with encoder-context and downstream
+  covariance experiments still open. Upstream background-fit
   weights are now correctly inverted for auroral-interest training; all
   pre-correction real-data VAE artifacts require retraining. The
   public icPhysics propagation boundary and coordinate-based annotation
