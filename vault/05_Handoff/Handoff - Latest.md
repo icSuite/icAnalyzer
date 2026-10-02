@@ -56,11 +56,18 @@ keV in this baseline.
   SI12 cells among 14,030,013 finite cells (24.82%). With `SZA >= 105`,
   390,848 of 2,718,083 technically valid SI12 cells were negative (14.38%). This is
   an unresolved upstream processing issue.
-- Current verification: all 47 tests under `tests/` pass; all 61 Python files
+- Current verification: all 48 tests under `tests/` pass; all 61 Python files
   parse. A fresh two-epoch real-orbit run completed training, best-checkpoint
   restore, artifact reload, eight latent samples, propagation, covariance,
   sparse reconstruction, and all twelve figures. Reuse of the new spline
   artifact and a separate `SZA >= 105` smoke also passed.
+- Large-ensemble blocker: the completed 50,000-sample archive is 3.1 GiB and
+  contains two float64 `(4232, 50000)` anomaly factors. The visualizer eagerly
+  loads both, reconstructs two complete ensembles, and forms `A.T @ A`, a
+  50,000-by-50,000 float64 matrix requiring 18.6 GiB before eigensolver
+  workspace. This explains the computer crash. Do not rerun the current
+  plotter on that archive or attempt 500,000 samples until storage and
+  diagnostics are refactored around streaming and the smaller state dimension.
 - Nonnegative-boundary recovery: `ad44da0 Recover VAE runs from WIC boundary
   roundoff`. The reported 0.003% negative sample fraction was 66 values, all
   exactly `-1.2899104e-6` counts, caused by float32 inversion of the
@@ -237,21 +244,24 @@ Next:
 
 1. identify and fix the upstream source of negative SI12; treat zero-clipped
    runs as experiments until that is resolved;
-2. run and inspect the restored spline/partial-convolution model, then sweep
+2. fix the large-ensemble path: avoid eager full-ensemble reconstruction, use
+   the smaller covariance orientation or truncated SVD, retain float32 where
+   adequate, and process product families sequentially;
+3. run and inspect the restored spline/partial-convolution model, then sweep
    beta around the restored `beta=1` setting using held-out physical residuals
    and sample dispersion;
-3. choose a scientifically explicit nightside support/domain or revise the SZA
+4. choose a scientifically explicit nightside support/domain or revise the SZA
    threshold; if retaining `SZA >= 105°`, exclude permanently unsupported
    cells from ensemble statistics, physical propagation, visualization, and
    reconstruction before full paired training;
-4. then test uncertainty maps as auxiliary encoder inputs and implement clear
+5. then test uncertainty maps as auxiliary encoder inputs and implement clear
    downstream separation of latent/background covariance from measurement/
    observation covariance; do not decode uncertainty fields;
-5. measure prior-sample calibration and covariance convergence across seeds;
-6. evaluate many held-out fields and Hall-only, Pedersen-only, and joint
+6. measure prior-sample calibration and covariance convergence across seeds;
+7. evaluate many held-out fields and Hall-only, Pedersen-only, and joint
    realistic sparse geometries;
-7. compare prior-mean and independent-channel baselines;
-8. implement a positivity-preserving reconstruction formulation without
+8. compare prior-mean and independent-channel baselines;
+9. implement a positivity-preserving reconstruction formulation without
    silent clipping.
 
 Annotation conversion is also open. The annotation JSON contains 53 orbit

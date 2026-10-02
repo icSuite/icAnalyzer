@@ -72,7 +72,7 @@ WIC and SI12 below zero to zero.
 
 ## Verification
 
-- 47 tests under `tests/` pass in the current environment.
+- 48 tests under `tests/` pass in the current environment.
 - All 61 Python files under `icanalyzer/`, `scripts/`, and `tests/` parse.
 - A fresh two-epoch run on real orbits 85, 86, and 89 verified the restored
   model through best-checkpoint selection, artifact reload, eight latent
@@ -149,6 +149,28 @@ sampling, and artifact saving. A three-orbit, two-epoch smoke verified all of
 these fields and generated twelve figures, including latent-draw and
 truth/error panels. Older runs remain visualizable, but missing latent draws
 and validation truth cannot be recovered after the fact.
+
+### 50,000-sample diagnostics scalability blocker
+
+A 50,000-sample run exposed that the saved-run visualizer does not scale with
+large ensembles. Its archive contains two float64 anomaly factors of shape
+`(4232, 50000)`, 1.58 GiB each in memory and 3.1 GiB together even after ZIP
+compression. The visualizer eagerly loads both factors and reconstructs both
+complete ensembles, retaining more than 6 GiB before temporary arrays.
+
+The immediate crash mechanism is worse: `leading_covariance_modes()` and
+`covariance_spectrum()` form `A.T @ A`, a 50,000-by-50,000 float64 Gram matrix
+requiring 18.6 GiB before eigensolver workspace. The spectrum path also asks
+for a full eigenvalue decomposition. This choice was only tolerable when the
+sample count was smaller than the 4,232-state dimension.
+
+The archived spline code used chunked decoding, retained 30-by-30 coefficient
+samples, and formed variable-space covariance with `rowvar=False`; its matrix
+dimension therefore did not grow with sample count. Before plotting or
+generating larger ensembles, the current path must select the smaller
+state-space orientation, compute leading modes with a truncated SVD, avoid
+reconstructing complete ensembles for mosaics, process FUV and conductance
+sequentially, and stop coercing all anomaly factors to float64.
 
 ## Experimental SZA selection
 
@@ -326,32 +348,34 @@ and scientific selection before rerunning downstream stages.
 1. Trace and correct the upstream source of the widespread negative SI12
    counts. Until then, treat zero-clipped VAE runs as controlled experiments,
    not final scientific products.
-2. Run the restored spline/partial-convolution model and inspect convergence,
+2. Repair large-ensemble storage and diagnostics before plotting the existing
+   50,000-sample run or attempting 500,000 samples.
+3. Run the restored spline/partial-convolution model and inspect convergence,
    held-out physical residuals, sample dispersion, and spline-field
    diagnostics. The historical 20-epoch convolutional result is not a
    comparison baseline for this architecture.
-3. Calibrate the revised loss with fitted precision diagnostics and a beta
+4. Calibrate the revised loss with fitted precision diagnostics and a beta
    sweep around the restored `beta=1` experiment setting.
-4. Regenerate the full legacy/rerun quality comparison and retrain any VAE
+5. Regenerate the full legacy/rerun quality comparison and retrain any VAE
    intended for interpretation; pre-`2e5ff4d` artifacts used reversed weights.
-5. Before running the full paired SZA-only VAEs, decide whether the state is
+6. Before running the full paired SZA-only VAEs, decide whether the state is
    the explicitly supported nightside domain or whether the SZA threshold must
    change. Mask permanently unsupported decoder output out of sampling,
    propagation, covariance, visualization, and reconstruction if the
    nightside-only formulation is retained.
-6. After the revised loss is evaluated, test uncertainty maps as auxiliary
+7. After the revised loss is evaluated, test uncertainty maps as auxiliary
    encoder inputs. Separately preserve latent/background covariance and
    measurement/observation covariance as named downstream quantities. Do not
    make `dwic` and `dsi12` decoder outputs.
-7. Evaluate prior dispersion and sparse reconstruction across many held-out
+8. Evaluate prior dispersion and sparse reconstruction across many held-out
    frames, seeds, and Hall-only/Pedersen-only/joint geometries.
-8. Choose an explicit positivity-preserving reconstruction state or method;
+9. Choose an explicit positivity-preserving reconstruction state or method;
    do not silently clip negative posterior conductance.
-9. Decide whether early stopping is useful now that the best validation state
+10. Decide whether early stopping is useful now that the best validation state
    is restored automatically.
-10. Recover the legacy annotation source grid and implement the previously
+11. Recover the legacy annotation source grid and implement the previously
    agreed non-destructive coordinate conversion before applying annotations.
-9. Decide separately whether to authorize a public icPhysics propagation API.
+12. Decide separately whether to authorize a public icPhysics propagation API.
 
 The December 2026 paper target remains the latest recorded publication target.
 The AGU 2026 abstract outcome, target journal, co-authors, and review standard
