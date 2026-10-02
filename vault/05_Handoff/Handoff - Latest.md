@@ -1,7 +1,7 @@
 # Handoff - Latest
 
 Last updated: 2026-10-02
-Repository snapshot: `vae/wic-si12` implementation at `fcf4c90`; `main` remains at `7c71591`
+Repository snapshot: `vae/wic-si12` implementation at `9a723b3`; `main` remains at `7c71591`
 
 ## Outcome
 
@@ -51,13 +51,15 @@ keV in this baseline.
   third encoder channel, and the 33% common-missing frame limit. Measurement
   precision is absent from this baseline loss. Latent dimension 36 and the
   30x30 degree-3 spline remain unchanged. SI13 validity no longer removes
-  WIC/SI12 training pixels.
-- Verification after `fcf4c90`: 53 tests pass, including a literal legacy-loss
+  WIC/SI12 training pixels. Follow-up `9a723b3` measures the 33% limit before
+  optional SZA masking, as in the legacy preprocessing order.
+- Verification after `9a723b3`: 54 tests pass, including a literal legacy-loss
   formula regression and the exact 33% cutoff boundary. A real one-epoch
   Product-2 smoke completed artifact reload, sampling, propagation, covariance,
   and sparse reconstruction with reconstruction `2115.04` and KL `3.92` rather
   than collapsed KL. Across the full annotated split, the cutoff retains 4,048
-  train, 488 validation, and 1,102 test frames.
+  train, 488 validation, and 1,102 test frames. A separate real three-orbit
+  `SZA >= 105°` smoke also completed with the intrinsic 33% cutoff.
 - The old `wic_si12_spline_v1` artifact remains invalid: it selected epoch 73
   with validation KL `0.0010` under the nonlegacy loss and is posterior-collapsed.
 - New models clip finite negative WIC/SI12 inputs before log transformation,

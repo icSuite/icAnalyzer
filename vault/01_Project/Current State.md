@@ -1,7 +1,7 @@
 # Current State
 
 Last reviewed: 2026-10-02
-Repository snapshot: `vae/wic-si12` implementation at `fcf4c90`; `main` remains at `7c71591`
+Repository snapshot: `vae/wic-si12` implementation at `9a723b3`; `main` remains at `7c71591`
 Worktree: user's uncommitted legacy-script epoch edit is preserved
 
 ## Current position
@@ -75,10 +75,12 @@ scientific orientation; the common map uses the smaller channel-specific
 coverage-weighted value.
 
 The same corrected common weight is restored as the third partial-convolution
-encoder channel. Frames with more than 33% invalid common WIC/SI12 pixels are
-dropped, matching the legacy sparsity threshold. SI13/dSI13 no longer mask the
-WIC/SI12 model. Latent dimension 36, 30x30 cubic-spline controls, degree 3,
-batch size 8, learning rate `1e-4`, `beta=1`, and the scheduler are unchanged.
+encoder channel. Frames with more than 33% intrinsically invalid common
+WIC/SI12 pixels are dropped before optional SZA masking, matching the legacy
+sparsity threshold without rejecting the nightside experiment. SI13/dSI13 no
+longer mask the WIC/SI12 model. Latent dimension 36, 30x30 cubic-spline
+controls, degree 3, batch size 8, learning rate `1e-4`, `beta=1`, and the
+scheduler are unchanged.
 
 The earlier `wic_si12_spline_v1` artifact remains posterior-collapsed and must
 not be used. A fresh one-epoch real Product-2 smoke had reconstruction
@@ -92,7 +94,7 @@ WIC and SI12 below zero to zero.
 
 ## Verification
 
-- 53 tests under `tests/` pass in the current environment.
+- 54 tests under `tests/` pass in the current environment.
 - All 61 Python files under `icanalyzer/`, `scripts/`, and `tests/` parse.
 - A fresh two-epoch run on real orbits 85, 86, and 89 verified the restored
   model through best-checkpoint selection, artifact reload, eight latent
@@ -107,6 +109,8 @@ WIC and SI12 below zero to zero.
 - The complete annotated Product-2 split passes the 33% filter with 4,048
   train, 488 validation, and 1,102 test frames. The respective input counts
   are 7,344, 1,454, and 1,882, so every production split remains nonempty.
+- A separate real three-orbit `SZA >= 105°` smoke completed with the 33% limit,
+  confirming that the intrinsic frame cutoff and later scientific mask compose.
 - After the Hardy correction was confirmed, three real production orbits
   (`1720`, `0813`, and `1734`) completed a one-epoch end-to-end smoke with 30
   usable frames, held-out evaluation, artifact reload, 16 latent samples,
