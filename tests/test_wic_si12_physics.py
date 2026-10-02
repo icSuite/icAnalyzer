@@ -33,6 +33,17 @@ def test_ensemble_shape_nan_zero_and_uncertainty():
     np.testing.assert_allclose(result["dFe"][2], 0.1)
 
 
+def test_intermediate_energy_fields_can_be_omitted_for_large_ensembles():
+    wic = np.full((3, 4, 5), 477.5, dtype=np.float32)
+    complete = conductance_from_corrected_wic(wic)
+    compact = conductance_from_corrected_wic(wic, include_intermediates=False)
+
+    assert "E0" not in compact
+    assert "Fe" not in compact
+    np.testing.assert_allclose(compact["H"], complete["H"])
+    np.testing.assert_allclose(compact["P"], complete["P"])
+
+
 def test_negative_decoded_wic_is_rejected():
     try:
         conductance_from_corrected_wic(np.array([1.0, -0.01]))

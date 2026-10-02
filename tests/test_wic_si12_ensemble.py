@@ -65,6 +65,14 @@ def test_ensemble_factor_and_cross_block_transpose():
     np.testing.assert_allclose(blocks["12"], blocks["21"].T)
 
 
+def test_float32_samples_keep_float32_anomaly_storage():
+    samples = np.random.default_rng(3).normal(size=(20, 2, 3, 3)).astype(np.float32)
+    statistics = ensemble_statistics(samples)
+
+    assert statistics["anomaly_factor"].dtype == np.float32
+    assert statistics["mean"].dtype == np.float64
+
+
 def test_no_observations_returns_prior():
     mean = np.arange(6, dtype=float).reshape(2, 3)
     anomaly = np.eye(6)

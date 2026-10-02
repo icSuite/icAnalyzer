@@ -512,7 +512,9 @@ def run(arguments):
     comparison_product = test_product or validation_product or train_product
     distribution = distribution_diagnostics(comparison_product, decoded)
 
-    propagated = conductance_from_corrected_wic(decoded[:, 0])
+    propagated = conductance_from_corrected_wic(
+        decoded[:, 0], include_intermediates=False
+    )
     conductance_samples = np.stack((propagated["H"], propagated["P"]), axis=1)
     conductance_statistics = ensemble_statistics(conductance_samples)
 

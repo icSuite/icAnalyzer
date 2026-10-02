@@ -18,7 +18,9 @@ from .comparison import (
     pair_orbit_files,
 )
 from .diagnostics import (
+    anomaly_variance,
     best_validation_epoch,
+    covariance_mode_decomposition,
     covariance_spectrum,
     joint_correlation_maps,
     leading_covariance_modes,
@@ -39,9 +41,11 @@ __all__ = [
     "WICSI12VAE",
     "PartialConv2d",
     "SplineWICSI12VAE",
+    "anomaly_variance",
     "best_validation_epoch",
     "conductance_from_corrected_wic",
     "covariance_spectrum",
+    "covariance_mode_decomposition",
     "ensemble_statistics",
     "fit_channel_transform",
     "fit_precision_weighting",

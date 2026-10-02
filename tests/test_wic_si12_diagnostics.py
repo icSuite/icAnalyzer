@@ -6,6 +6,7 @@ import torch
 
 from icanalyzer.wic_si12.diagnostics import (
     best_validation_epoch,
+    covariance_mode_decomposition,
     covariance_spectrum,
     joint_correlation_maps,
     leading_covariance_modes,
@@ -35,6 +36,11 @@ def test_reconstructs_exact_samples_from_low_rank_factor():
         statistics["mean"], statistics["anomaly_factor"]
     )
     np.testing.assert_allclose(recovered, samples)
+
+    selected = reconstruct_ensemble(
+        statistics["mean"], statistics["anomaly_factor"], [1, 7]
+    )
+    np.testing.assert_allclose(selected, samples[[1, 7]])
 
 
 def test_cross_field_correlation_matches_direct_calculation():
@@ -69,6 +75,33 @@ def test_low_rank_spectrum_and_modes_match_dense_covariance():
     np.testing.assert_allclose(eigenvalues, expected[:3])
     np.testing.assert_allclose(
         modes.reshape(3, -1) @ modes.reshape(3, -1).T,
+        np.eye(3),
+        atol=1e-10,
+    )
+
+
+def test_randomized_modes_avoid_sample_gram_and_recover_low_rank_field():
+    generator = np.random.default_rng(2)
+    left, _ = np.linalg.qr(generator.normal(size=(18, 3)))
+    right, _ = np.linalg.qr(generator.normal(size=(600, 3)))
+    singular_values = np.array([4.0, 2.0, 1.0])
+    factor = (left * singular_values) @ right.T
+
+    decomposition = covariance_mode_decomposition(
+        factor,
+        (2, 3, 3),
+        n_modes=3,
+        exact_max_dimension=4,
+        power_iterations=1,
+    )
+
+    assert decomposition["method"] == "randomized_svd"
+    np.testing.assert_allclose(
+        decomposition["eigenvalues"], singular_values**2, rtol=1e-10
+    )
+    np.testing.assert_allclose(
+        decomposition["modes"].reshape(3, -1)
+        @ decomposition["modes"].reshape(3, -1).T,
         np.eye(3),
         atol=1e-10,
     )

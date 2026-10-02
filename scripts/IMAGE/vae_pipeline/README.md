@@ -367,6 +367,22 @@ change the sample-mosaic size, or `--anchor ROW,COLUMN` to select the common
 correlation probe. The default probe is the maximum-variance corrected-WIC
 pixel for FUV and Hall pixel for conductance.
 
+Large saved ensembles are processed one product family at a time. Only the
+requested mosaic members are reconstructed, variances are calculated without
+a squared-factor temporary, and leading modes use a deterministic randomized
+SVD when both covariance orientations are large. `--spectrum-modes` controls
+how many leading modes are retained; the cumulative spectrum is therefore the
+captured fraction of total variance and need not end at one. A smaller value,
+for example `--spectrum-modes 8`, gives a faster overview. The real 50,000-
+sample archive completed with this path at about 2.2 GiB peak resident memory.
+
+New run archives retain float32 latent samples and anomaly factors. Sampling
+is decoded and inverse-transformed batch by batch into preallocated arrays,
+without concatenating a second complete ensemble. Storage and propagation
+still grow linearly with sample count, so a 500,000-sample run remains a large
+disk and memory job even though plotting no longer constructs a covariance
+matrix whose size is quadratic in the number of samples.
+
 The figures cover training history (including the recorded learning-rate
 schedule), decoded FUV and propagated-conductance
 samples, ensemble mean and standard deviation, joint-channel correlation

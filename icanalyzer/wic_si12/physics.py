@@ -35,6 +35,7 @@ def conductance_from_corrected_wic(
     wic_corrected,
     dwic_corrected=None,
     electron_energy_keV=BASELINE_ELECTRON_ENERGY_KEV,
+    include_intermediates=True,
 ):
     """Convert already proton-corrected WIC counts to Hall/Pedersen fields.
 
@@ -47,7 +48,7 @@ def conductance_from_corrected_wic(
     if not np.isclose(electron_energy_keV, BASELINE_ELECTRON_ENERGY_KEV):
         raise ValueError("the accepted baseline requires electron_energy_keV=2.0")
 
-    wic_corrected = np.asarray(wic_corrected, dtype=float)
+    wic_corrected = np.asarray(wic_corrected)
     finite_negative = np.isfinite(wic_corrected) & (wic_corrected < 0)
     if np.any(finite_negative):
         raise ValueError("corrected WIC must be non-negative where finite")
@@ -58,16 +59,19 @@ def conductance_from_corrected_wic(
     hall_conductance = hall(electron_energy_keV, electron_energy_flux)
 
     result = {
-        "E0": np.full(wic_corrected.shape, electron_energy_keV, dtype=float),
-        "Fe": electron_energy_flux,
         "P": pedersen,
         "H": hall_conductance,
         "wic_response": response,
         "propagation_order": PROPAGATION_ORDER,
     }
+    if include_intermediates:
+        result.update({
+            "E0": np.full(wic_corrected.shape, electron_energy_keV, dtype=float),
+            "Fe": electron_energy_flux,
+        })
 
     if dwic_corrected is not None:
-        dwic_corrected = np.asarray(dwic_corrected, dtype=float)
+        dwic_corrected = np.asarray(dwic_corrected)
         if dwic_corrected.shape != wic_corrected.shape:
             raise ValueError("dwic_corrected must match wic_corrected shape")
         if np.any(np.isfinite(dwic_corrected) & (dwic_corrected < 0)):
@@ -75,8 +79,11 @@ def conductance_from_corrected_wic(
 
         dFe = dwic_corrected / response
         zeros = np.zeros(wic_corrected.shape, dtype=float)
+        fixed_energy = np.full(
+            wic_corrected.shape, electron_energy_keV, dtype=float
+        )
         uncertainty = robinson_conductance(
-            result["E0"], electron_energy_flux, zeros, dFe, zeros
+            fixed_energy, electron_energy_flux, zeros, dFe, zeros
         )
         result.update({
             "dFe": dFe,

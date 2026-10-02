@@ -70,11 +70,17 @@ def sample_decoded_ensemble(
     model = model.to(device)
     model.eval()
 
-    transformed_batches = []
-    latent_batches = []
+    physical = np.empty(
+        (n_samples, 2, *model.image_shape), dtype=np.float32
+    )
+    latent_samples = (
+        np.empty((n_samples, model.latent_dim), dtype=np.float32)
+        if return_latent else None
+    )
     with torch.no_grad():
         for start in range(0, n_samples, batch_size):
             current_size = min(batch_size, n_samples - start)
+            stop = start + current_size
             latent = torch.randn(
                 current_size,
                 model.latent_dim,
@@ -82,18 +88,13 @@ def sample_decoded_ensemble(
                 device=device,
             )
             if return_latent:
-                latent_batches.append(latent.cpu())
-            transformed_batches.append(model.decode(latent).cpu())
+                latent_samples[start:stop] = latent.cpu().numpy()
+            transformed = model.decode(latent)
+            physical[start:stop] = transform.inverse(transformed).cpu().numpy()
 
-    transformed = torch.cat(transformed_batches, dim=0)
-    physical = transform.inverse(transformed).numpy()
-    if physical.shape[0] != n_samples:
-        raise RuntimeError("latent sampler returned the wrong sample count")
-    physical = physical.astype(np.float32, copy=False)
     if not return_latent:
         return physical
-    latent = torch.cat(latent_batches, dim=0).numpy()
-    return physical, latent.astype(np.float32, copy=False)
+    return physical, latent_samples
 
 
 #%% Ensemble moments
@@ -105,29 +106,36 @@ def ensemble_statistics(samples):
     has shape ``(channel*y*x, sample)`` and satisfies ``cov = A @ A.T``.
     """
 
-    samples = np.asarray(samples, dtype=float)
+    samples = np.asarray(samples)
     if samples.ndim < 2 or samples.shape[0] < 2:
         raise ValueError("samples must contain at least two ensemble members")
+    if not np.issubdtype(samples.dtype, np.floating):
+        samples = samples.astype(np.float32)
     if np.any(~np.isfinite(samples)):
         raise ValueError("ensemble statistics require finite samples")
 
-    mean = samples.mean(axis=0)
+    mean = samples.mean(axis=0, dtype=np.float64)
     flattened = samples.reshape(samples.shape[0], -1)
-    anomaly_factor = (flattened - flattened.mean(axis=0)).T
-    anomaly_factor = anomaly_factor / np.sqrt(samples.shape[0] - 1)
+    anomaly_factor = flattened.T.copy()
+    anomaly_factor -= mean.reshape(-1, 1)
+    anomaly_factor /= np.sqrt(samples.shape[0] - 1)
+    variance = np.einsum(
+        "ij,ij->i", anomaly_factor, anomaly_factor,
+        dtype=np.float64, optimize=True
+    ).reshape(samples.shape[1:])
     return {
         "mean": mean,
         "anomaly_factor": anomaly_factor,
         "state_shape": samples.shape[1:],
         "sample_count": samples.shape[0],
-        "variance": np.sum(anomaly_factor**2, axis=1).reshape(samples.shape[1:]),
+        "variance": variance,
     }
 
 
 def covariance_blocks(anomaly_factor, field_size):
     """Materialize four covariance blocks for a two-field joint state."""
 
-    anomaly_factor = np.asarray(anomaly_factor, dtype=float)
+    anomaly_factor = np.asarray(anomaly_factor)
     if anomaly_factor.shape[0] != 2 * field_size:
         raise ValueError("anomaly_factor does not contain two equal fields")
     first = anomaly_factor[:field_size]
@@ -171,7 +179,7 @@ def sparse_ensemble_reconstruction(
     prior_mean = np.asarray(prior_mean, dtype=float)
     state_shape = prior_mean.shape
     mean_flat = prior_mean.reshape(-1)
-    anomaly_factor = np.asarray(anomaly_factor, dtype=float)
+    anomaly_factor = np.asarray(anomaly_factor)
     if anomaly_factor.ndim != 2 or anomaly_factor.shape[0] != mean_flat.size:
         raise ValueError("anomaly_factor shape is incompatible with prior_mean")
 
@@ -184,7 +192,10 @@ def sparse_ensemble_reconstruction(
     if len(np.unique(indices)) != indices.size:
         raise ValueError("observation indices must be unique")
 
-    prior_variance = np.sum(anomaly_factor**2, axis=1)
+    prior_variance = np.einsum(
+        "ij,ij->i", anomaly_factor, anomaly_factor,
+        dtype=np.float64, optimize=True
+    )
     if indices.size == 0:
         return {
             "mean": prior_mean.copy(),

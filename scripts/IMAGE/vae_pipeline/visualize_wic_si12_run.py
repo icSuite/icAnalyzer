@@ -3,6 +3,7 @@
 #%% Imports
 
 import argparse
+import gc
 import json
 from pathlib import Path
 
@@ -13,10 +14,10 @@ import numpy as np
 import torch
 
 from icanalyzer.wic_si12.diagnostics import (
+    anomaly_variance,
     best_validation_epoch,
-    covariance_spectrum,
+    covariance_mode_decomposition,
     joint_correlation_maps,
-    leading_covariance_modes,
     maximum_variance_anchor,
     reconstruct_ensemble,
 )
@@ -134,11 +135,10 @@ def plot_loss_history(history, output, created):
 
 #%% Ensemble samples and moments
 
-def plot_sample_mosaic(samples, family, output, created, n_examples):
-    if n_examples < 2:
+def plot_sample_mosaic(samples, sample_indices, family, output, created):
+    if len(sample_indices) < 2:
         raise ValueError("at least two sample examples are required")
-    sample_indices = np.linspace(0, samples.shape[0] - 1, n_examples, dtype=int)
-    selected = samples[sample_indices]
+    n_examples = len(sample_indices)
     names = FIELD_NAMES[family]
     units = FIELD_UNITS[family]
     figure, axes = plt.subplots(
@@ -146,13 +146,13 @@ def plot_sample_mosaic(samples, family, output, created, n_examples):
     )
 
     for channel in range(2):
-        signed = bool(np.any(selected[:, channel] < 0))
-        limits = robust_limits(selected[:, channel], signed=signed)
+        signed = bool(np.any(samples[:, channel] < 0))
+        limits = robust_limits(samples[:, channel], signed=signed)
         cmap = "coolwarm" if signed else "viridis"
         for column, sample_index in enumerate(sample_indices):
             image_panel(
                 axes[channel, column],
-                samples[sample_index, channel],
+                samples[column, channel],
                 f"{names[channel]} sample {sample_index}",
                 units[channel],
                 cmap=cmap,
@@ -161,18 +161,14 @@ def plot_sample_mosaic(samples, family, output, created, n_examples):
                 show_ylabel=column == 0,
             )
     save_figure(figure, output, f"{family}_samples.png", created)
-    return sample_indices.tolist()
+    return np.asarray(sample_indices, dtype=int).tolist()
 
 
-def plot_ensemble_moments(products, output, created):
-    fuv_mean = products["fuv_mean"]
-    conductance_mean = products["conductance_mean"]
-    fuv_std = np.sqrt(
-        np.sum(products["fuv_anomaly_factor"]**2, axis=1)
-    ).reshape(fuv_mean.shape)
-    conductance_std = np.sqrt(
-        np.sum(products["conductance_anomaly_factor"]**2, axis=1)
-    ).reshape(conductance_mean.shape)
+def plot_ensemble_moments(moments, output, created):
+    fuv_mean = moments["fuv"]["mean"]
+    fuv_std = moments["fuv"]["standard_deviation"]
+    conductance_mean = moments["conductance"]["mean"]
+    conductance_std = moments["conductance"]["standard_deviation"]
 
     fields = (
         (fuv_mean[0], fuv_std[0], "corrected WIC", "counts"),
@@ -273,12 +269,13 @@ def plot_correlation_maps(factor, state_shape, family, anchor, output, created):
     save_figure(figure, output, f"{family}_correlation_maps.png", created)
 
 
-def plot_covariance_modes(factor, state_shape, family, output, created, n_modes):
-    eigenvalues, modes = leading_covariance_modes(
-        factor, state_shape, n_modes=n_modes
-    )
+def plot_covariance_modes(
+    eigenvalues, modes, total_variance, family, output, created, n_modes
+):
+    eigenvalues = eigenvalues[:n_modes]
+    modes = modes[:n_modes]
     names = FIELD_NAMES[family]
-    fraction = eigenvalues / np.sum(factor**2)
+    fraction = eigenvalues / total_variance
     figure, axes = plt.subplots(
         2,
         n_modes,
@@ -305,12 +302,13 @@ def plot_covariance_modes(factor, state_shape, family, output, created, n_modes)
 
 def plot_covariance_spectra(spectra, output, created):
     figure, axes = plt.subplots(1, 2, figsize=(11, 4.5), layout="constrained")
-    for family, values in spectra.items():
-        fraction = values / values.sum()
+    for family, spectrum in spectra.items():
+        values = spectrum["eigenvalues"]
+        fraction = values / spectrum["total_variance"]
         axes[0].semilogy(np.arange(1, len(values) + 1), fraction, label=family)
         axes[1].plot(np.arange(1, len(values) + 1), np.cumsum(fraction), label=family)
-    axes[0].set(title="Covariance spectrum", xlabel="mode", ylabel="variance fraction")
-    axes[1].set(title="Cumulative explained variance", xlabel="mode", ylabel="fraction")
+    axes[0].set(title="Leading covariance spectrum", xlabel="mode", ylabel="variance fraction")
+    axes[1].set(title="Cumulative captured variance", xlabel="mode", ylabel="fraction")
     axes[1].set_ylim(0, 1.01)
     for axis in axes:
         axis.grid(alpha=0.25)
@@ -320,16 +318,16 @@ def plot_covariance_spectra(spectra, output, created):
 
 #%% Sparse reconstruction
 
-def plot_reconstruction(products, output, created):
+def plot_reconstruction(products, output, created, conductance_std=None):
     prior_mean = products.get(
         "reconstruction_prior_mean", products["conductance_mean"]
     )
     posterior_mean = products["reconstruction_mean"]
     prior_std = products.get("reconstruction_prior_standard_deviation")
     if prior_std is None:
-        prior_std = np.sqrt(
-            np.sum(products["conductance_anomaly_factor"]**2, axis=1)
-        ).reshape(prior_mean.shape)
+        if conductance_std is None:
+            raise ValueError("saved run has no prior conductance uncertainty")
+        prior_std = conductance_std
     posterior_std = products["reconstruction_standard_deviation"]
 
     figure, axes = plt.subplots(4, 2, figsize=(10, 16), layout="constrained")
@@ -415,6 +413,13 @@ def parse_anchor(value):
 
 
 def run(arguments):
+    if arguments.examples < 2:
+        raise ValueError("examples must be at least 2")
+    if arguments.modes < 1:
+        raise ValueError("modes must be positive")
+    if arguments.spectrum_modes < 1:
+        raise ValueError("spectrum_modes must be positive")
+
     run_directory = Path(arguments.run_directory)
     output = Path(arguments.output) if arguments.output else run_directory / "figures"
     output.mkdir(parents=True, exist_ok=True)
@@ -423,66 +428,110 @@ def run(arguments):
     artifact = torch.load(
         run_directory / "wic_si12_vae.pt", map_location="cpu", weights_only=False
     )
-    with np.load(run_directory / "ensemble_products.npz") as stored:
-        products = {name: np.asarray(stored[name]) for name in stored.files}
+    ensemble_path = run_directory / "ensemble_products.npz"
+    with np.load(ensemble_path) as stored:
+        products = {
+            name: np.asarray(stored[name])
+            for name in stored.files
+            if not name.endswith("_anomaly_factor")
+        }
 
-    fuv_samples = reconstruct_ensemble(
-        products["fuv_mean"], products["fuv_anomaly_factor"]
-    )
-    conductance_samples = reconstruct_ensemble(
-        products["conductance_mean"], products["conductance_anomaly_factor"]
-    )
     state_shape = products["fuv_mean"].shape
     requested_anchor = parse_anchor(arguments.anchor)
-    anchors = {
-        "fuv": requested_anchor or maximum_variance_anchor(
-            products["fuv_anomaly_factor"], state_shape, channel=0
-        ),
-        "conductance": requested_anchor or maximum_variance_anchor(
-            products["conductance_anomaly_factor"], state_shape, channel=0
-        ),
-    }
+    sample_count = int(summary["sample_count"])
+    sample_indices = np.linspace(
+        0, sample_count - 1, arguments.examples, dtype=int
+    )
 
     created = []
     best_epoch, best_metrics = plot_loss_history(
         artifact["history"], output, created
     )
-    sample_indices = {
-        "fuv": plot_sample_mosaic(
-            fuv_samples, "fuv", output, created, arguments.examples
-        ),
-        "conductance": plot_sample_mosaic(
-            conductance_samples, "conductance", output, created, arguments.examples
-        ),
-    }
-    plot_ensemble_moments(products, output, created)
     latent_samples_available = plot_latent_samples(products, output, created)
 
+    anchors = {}
+    selected_sample_indices = {}
+    moments = {}
     spectra = {}
     mode_diagnostics = {}
     for family in ("fuv", "conductance"):
-        factor = products[f"{family}_anomaly_factor"]
+        factor_name = f"{family}_anomaly_factor"
+        with np.load(ensemble_path) as stored:
+            factor = np.asarray(stored[factor_name])
+        if factor.shape != (int(np.prod(state_shape)), sample_count):
+            raise ValueError(
+                f"{factor_name} shape does not match saved state and sample count"
+            )
+
+        mean = products[f"{family}_mean"]
+        anchors[family] = requested_anchor or maximum_variance_anchor(
+            factor, state_shape, channel=0
+        )
+        samples = reconstruct_ensemble(
+            mean, factor, sample_indices=sample_indices
+        )
+        selected_sample_indices[family] = plot_sample_mosaic(
+            samples, sample_indices, family, output, created
+        )
+        moments[family] = {
+            "mean": mean,
+            "standard_deviation": np.sqrt(
+                anomaly_variance(factor).reshape(state_shape)
+            ),
+        }
         plot_correlation_maps(
             factor, state_shape, family, anchors[family], output, created
         )
-        eigenvalues, fraction = plot_covariance_modes(
-            factor, state_shape, family, output, created, arguments.modes
+        decomposition = covariance_mode_decomposition(
+            factor,
+            state_shape,
+            n_modes=max(arguments.modes, arguments.spectrum_modes),
+            random_seed=arguments.decomposition_seed,
         )
-        spectra[family] = covariance_spectrum(factor)
+        displayed_mode_count = min(
+            arguments.modes, len(decomposition["eigenvalues"])
+        )
+        eigenvalues, fraction = plot_covariance_modes(
+            decomposition["eigenvalues"],
+            decomposition["modes"],
+            decomposition["total_variance"],
+            family,
+            output,
+            created,
+            displayed_mode_count,
+        )
+        spectra[family] = {
+            "eigenvalues": decomposition["eigenvalues"],
+            "total_variance": decomposition["total_variance"],
+        }
         mode_diagnostics[family] = {
             "leading_eigenvalues": eigenvalues.tolist(),
             "leading_variance_fractions": fraction.tolist(),
+            "spectrum_mode_count": int(len(decomposition["eigenvalues"])),
+            "spectrum_captured_variance_fraction": decomposition[
+                "captured_variance_fraction"
+            ],
+            "decomposition_method": decomposition["method"],
         }
+        del samples, factor, decomposition
+        gc.collect()
+
+    plot_ensemble_moments(moments, output, created)
     plot_covariance_spectra(spectra, output, created)
-    reconstruction_has_truth = plot_reconstruction(products, output, created)
+    reconstruction_has_truth = plot_reconstruction(
+        products,
+        output,
+        created,
+        conductance_std=moments["conductance"]["standard_deviation"],
+    )
 
     diagnostics = {
         "run_directory": str(run_directory.resolve()),
-        "sample_count": int(summary["sample_count"]),
+        "sample_count": sample_count,
         "best_validation_epoch": best_epoch,
         "best_validation_metrics": best_metrics,
         "anchors": {name: list(anchor) for name, anchor in anchors.items()},
-        "sample_indices": sample_indices,
+        "sample_indices": selected_sample_indices,
         "latent_samples_available": latent_samples_available,
         "modes": mode_diagnostics,
         "reconstruction_truth_available": reconstruction_has_truth,
@@ -501,6 +550,13 @@ def parse_arguments(argv=None):
     parser.add_argument("--output")
     parser.add_argument("--examples", type=int, default=6)
     parser.add_argument("--modes", type=int, default=4)
+    parser.add_argument(
+        "--spectrum-modes",
+        type=int,
+        default=64,
+        help="number of leading modes retained in the scalable spectrum plot",
+    )
+    parser.add_argument("--decomposition-seed", type=int, default=0)
     parser.add_argument(
         "--anchor",
         help="optional common CS anchor as ROW,COLUMN; default is maximum variance",
