@@ -1,7 +1,7 @@
 # Handoff - Latest
 
-Last updated: 2026-10-01
-Repository snapshot: `vae/wic-si12` implementation at `a68ffaa`; `main` remains at `7c71591`
+Last updated: 2026-10-02
+Repository snapshot: `vae/wic-si12` implementation at `209e9c6`; `main` remains at `7c71591`
 
 ## Outcome
 
@@ -56,18 +56,20 @@ keV in this baseline.
   SI12 cells among 14,030,013 finite cells (24.82%). With `SZA >= 105`,
   390,848 of 2,718,083 technically valid SI12 cells were negative (14.38%). This is
   an unresolved upstream processing issue.
-- Current verification: all 48 tests under `tests/` pass; all 61 Python files
+- Current verification: all 51 tests under `tests/` pass; all 61 Python files
   parse. A fresh two-epoch real-orbit run completed training, best-checkpoint
   restore, artifact reload, eight latent samples, propagation, covariance,
   sparse reconstruction, and all twelve figures. Reuse of the new spline
   artifact and a separate `SZA >= 105` smoke also passed.
-- Large-ensemble blocker: the completed 50,000-sample archive is 3.1 GiB and
-  contains two float64 `(4232, 50000)` anomaly factors. The visualizer eagerly
-  loads both, reconstructs two complete ensembles, and forms `A.T @ A`, a
-  50,000-by-50,000 float64 matrix requiring 18.6 GiB before eigensolver
-  workspace. This explains the computer crash. Do not rerun the current
-  plotter on that archive or attempt 500,000 samples until storage and
-  diagnostics are refactored around streaming and the smaller state dimension.
+- Large-ensemble repair: `209e9c6` makes diagnostics selective and sequential,
+  removes squared-factor temporaries, and uses deterministic randomized SVD
+  instead of a sample-by-sample Gram matrix. All twelve figures from the real
+  50,000-sample, 3.1-GiB archive completed in 31.18 seconds at 2,308,412 KiB
+  peak resident memory with eight spectrum modes; they captured 63.10% of FUV
+  and 62.69% of conductance variance. New runs preallocate batched decoded
+  output, omit unused propagation intermediates, and retain float32 factors.
+  Sampling, propagation, and saved factors remain linear in sample count, so
+  this does not yet make 500,000 full image-space samples workstation-safe.
 - Nonnegative-boundary recovery: `ad44da0 Recover VAE runs from WIC boundary
   roundoff`. The reported 0.003% negative sample fraction was 66 values, all
   exactly `-1.2899104e-6` counts, caused by float32 inversion of the
@@ -244,9 +246,9 @@ Next:
 
 1. identify and fix the upstream source of negative SI12; treat zero-clipped
    runs as experiments until that is resolved;
-2. fix the large-ensemble path: avoid eager full-ensemble reconstruction, use
-   the smaller covariance orientation or truncated SVD, retain float32 where
-   adequate, and process product families sequentially;
+2. if 500,000 samples are required, redesign the remaining linear-size
+   sampling, propagation, and image-space factor storage around streaming or
+   the spline coefficient representation; 50,000-sample plotting is repaired;
 3. run and inspect the restored spline/partial-convolution model, then sweep
    beta around the restored `beta=1` setting using held-out physical residuals
    and sample dispersion;

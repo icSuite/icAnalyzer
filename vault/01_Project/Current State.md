@@ -1,7 +1,7 @@
 # Current State
 
-Last reviewed: 2026-10-01
-Repository snapshot: `vae/wic-si12` implementation at `a68ffaa`; `main` remains at `7c71591`
+Last reviewed: 2026-10-02
+Repository snapshot: `vae/wic-si12` implementation at `209e9c6`; `main` remains at `7c71591`
 Worktree: clean before this memory checkpoint
 
 ## Current position
@@ -72,7 +72,7 @@ WIC and SI12 below zero to zero.
 
 ## Verification
 
-- 48 tests under `tests/` pass in the current environment.
+- 51 tests under `tests/` pass in the current environment.
 - All 61 Python files under `icanalyzer/`, `scripts/`, and `tests/` parse.
 - A fresh two-epoch run on real orbits 85, 86, and 89 verified the restored
   model through best-checkpoint selection, artifact reload, eight latent
@@ -150,27 +150,28 @@ these fields and generated twelve figures, including latent-draw and
 truth/error panels. Older runs remain visualizable, but missing latent draws
 and validation truth cannot be recovered after the fact.
 
-### 50,000-sample diagnostics scalability blocker
+### Large-ensemble diagnostics
 
-A 50,000-sample run exposed that the saved-run visualizer does not scale with
-large ensembles. Its archive contains two float64 anomaly factors of shape
-`(4232, 50000)`, 1.58 GiB each in memory and 3.1 GiB together even after ZIP
-compression. The visualizer eagerly loads both factors and reconstructs both
-complete ensembles, retaining more than 6 GiB before temporary arrays.
+Commit `209e9c6` resolves the diagnostic crash on the existing 50,000-sample
+archive. The former visualizer eagerly retained both full reconstructed
+ensembles and both float64 anomaly factors, then formed a
+50,000-by-50,000 Gram matrix requiring 18.6 GiB before eigensolver workspace.
 
-The immediate crash mechanism is worse: `leading_covariance_modes()` and
-`covariance_spectrum()` form `A.T @ A`, a 50,000-by-50,000 float64 Gram matrix
-requiring 18.6 GiB before eigensolver workspace. The spectrum path also asks
-for a full eigenvalue decomposition. This choice was only tolerable when the
-sample count was smaller than the 4,232-state dimension.
+The visualizer now reconstructs only requested mosaic members, calculates
+variance without a full squared-factor temporary, processes FUV and
+conductance sequentially, and uses deterministic randomized SVD when neither
+covariance orientation is small. On the real 3.1-GiB archive, all twelve
+figures completed in 31.18 seconds with 2,308,412 KiB peak resident memory
+using eight retained spectrum modes. Those eight modes captured 63.10% of FUV
+variance and 62.69% of conductance variance.
 
-The archived spline code used chunked decoding, retained 30-by-30 coefficient
-samples, and formed variable-space covariance with `rowvar=False`; its matrix
-dimension therefore did not grow with sample count. Before plotting or
-generating larger ensembles, the current path must select the smaller
-state-space orientation, compute leading modes with a truncated SVD, avoid
-reconstructing complete ensembles for mosaics, process FUV and conductance
-sequentially, and stop coercing all anomaly factors to float64.
+New runs preallocate batch-decoded samples, avoid concatenating a second full
+decoded ensemble, omit unused propagation intermediates, and save float32
+latent samples and anomaly factors. A fresh real-orbit smoke verified float32
+`(4232, 8)` FUV and conductance factors and generated all figures. Sampling,
+physical propagation, and factor storage still grow linearly with ensemble
+size: unlike the old coefficient-space workflow, the current path has not yet
+made a 500,000-sample run workstation-safe.
 
 ## Experimental SZA selection
 
@@ -348,8 +349,10 @@ and scientific selection before rerunning downstream stages.
 1. Trace and correct the upstream source of the widespread negative SI12
    counts. Until then, treat zero-clipped VAE runs as controlled experiments,
    not final scientific products.
-2. Repair large-ensemble storage and diagnostics before plotting the existing
-   50,000-sample run or attempting 500,000 samples.
+2. If 500,000 samples are scientifically required, redesign sampling,
+   propagation, and covariance storage around coefficient-space or streamed
+   statistics; the 50,000-sample visualizer is now verified, but full factors
+   still scale linearly with ensemble size.
 3. Run the restored spline/partial-convolution model and inspect convergence,
    held-out physical residuals, sample dispersion, and spline-field
    diagnostics. The historical 20-epoch convolutional result is not a
