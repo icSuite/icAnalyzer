@@ -17,15 +17,17 @@ from typing import Callable
 
 import matplotlib.pyplot as plt
 import numpy as np
-from icreader import ConductanceImage
 from matplotlib.path import Path as MatplotlibPath
 from matplotlib.widgets import Button, LassoSelector
+from scripts.manual_masking.native_annotations import load_native_images, native_orbit_record, stamp_native_record
+from scripts.manual_masking.annotation_store import decode_mask, encode_mask
+from scripts.manual_masking.annotated_data import annotation_times
+from scripts.manual_masking.annotation_geometry import line_side_mask, source_pixel_coordinates
 
 try:
     from .annotation_store import (
         clear_boundary,
         delete_keyframe,
-        ensure_orbit_record,
         exact_keyframe_mask,
         frame_class,
         keyframe_frames,
@@ -46,7 +48,6 @@ except ImportError:
     from annotation_store import (  # type: ignore[no-redef]
         clear_boundary,
         delete_keyframe,
-        ensure_orbit_record,
         exact_keyframe_mask,
         frame_class,
         keyframe_frames,
@@ -64,21 +65,18 @@ except ImportError:
     )
 
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DATA_DIRECTORY = Path(
-    "/home/bing/Dropbox/work/data/IMAGE_FUV/conductance"
+    "/home/bing/Dropbox/work/data/IMAGE_FUV/conductance_cs/image_apex_130km_46x46_v1/IR_hardy_smoothed_wic0p8_si120_si131p2/robinson"
 )
-DEFAULT_OVERVIEW_DIRECTORY = Path(
-    "/home/bing/Dropbox/work/projects/icAnalyzer/ncso"
-)
+DEFAULT_OVERVIEW_DIRECTORY = None
 DEFAULT_ANNOTATION_FILE = (
-    REPOSITORY_ROOT / "data" / "partial_image_annotations.json"
+    REPOSITORY_ROOT / "data" / "partial_image_annotations_46x46.json"
 )
 DEFAULT_SEGMENT_FILE = REPOSITORY_ROOT / "data" / "good_orbit_segments.csv"
 
 PAGE_SIZE = 36
-MASK_SHAPE = (36, 36)
-CHANNEL_NAMES = ("WIC", "Hall", "Pedersen", "weight")
+MASK_SHAPE = (46, 46)
 CLASS_COLORS = {
     "unreviewed": "#777777",
     "bad": "#d62728",
@@ -88,14 +86,14 @@ CLASS_COLORS = {
 
 
 def discover_orbits(
-    overview_directory: Path,
+    overview_directory: Path | None,
     data_directory: Path,
 ) -> list[int]:
     """Discover orbit numbers without loading every NetCDF file."""
     overview_pattern = re.compile(r"orbit_(\d+)_\d+\.png$")
     overview_orbits = {
         int(match.group(1))
-        for path in overview_directory.glob("orbit_*.png")
+        for path in (overview_directory.glob("orbit_*.png") if overview_directory is not None else [])
         if (match := overview_pattern.match(path.name))
     }
     data_pattern = re.compile(r"or_(\d+)\.nc$")
@@ -126,8 +124,24 @@ def finite_limits(values: np.ndarray) -> tuple[float, float]:
     return float(low), float(high)
 
 
+def draw_sza_contours(axis, sza, labels=False):
+    """Draw only levels crossed by the stored, finite per-frame SZA field."""
+    if sza is None:
+        return
+    values = np.asarray(sza, dtype=float)
+    finite = values[np.isfinite(values)]
+    if finite.size == 0:
+        return
+    for level, color, style in ((90, "white", "solid"), (105, "magenta", "dashed")):
+        if not finite.min() < level < finite.max():
+            continue
+        contour = axis.contour(np.ma.masked_invalid(values), levels=[level], colors=[color], linestyles=[style], linewidths=1.0, zorder=5)
+        if labels:
+            axis.clabel(contour, fmt={level: f"{level}°"}, fontsize=8)
+
+
 class MaskEditor:
-    """Enlarged four-channel editor for one mask keyframe."""
+    """Enlarged editor showing every available channel for one mask keyframe."""
 
     def __init__(self, parent: "PartialImageAnnotator", frame: int) -> None:
         self.parent = parent
@@ -145,17 +159,13 @@ class MaskEditor:
                 "vertices": copy.deepcopy(self.vertices),
             }
         elif self.geometry is not None and self.geometry.get("kind") == "line":
-            self.geometry = {
-                "kind": "line_set",
-                "lines": [
-                    {
-                        "points": copy.deepcopy(self.geometry.get("points")),
-                        "valid_side": int(
-                            self.geometry.get("valid_side", 1)
-                        ),
-                    }
-                ],
-            }
+            line = copy.deepcopy(self.geometry)
+            line.pop("kind")
+            self.geometry = {"kind": "line_set", "lines": [line]}
+        self.source_coordinates = None
+        if self.geometry is not None and self.geometry.get("kind") == "line_set":
+            if any("source_points" in line for line in self.geometry["lines"]):
+                self.source_coordinates = source_pixel_coordinates(self.record, parent.document["target_grid_file"])
         self.mode = "line"
         self.line_start: tuple[float, float] | None = None
         self.line_artists: list[object] = []
@@ -168,10 +178,14 @@ class MaskEditor:
         else:
             # Starting fully valid makes the undrawn state easy to understand.
             # The first lasso replaces this with the selected valid region.
-            self.mask = np.ones(MASK_SHAPE, dtype=bool)
+            self.mask = self.parent.footprint.copy()
+        self.mask &= self.parent.footprint
 
-        self.figure, axes = plt.subplots(2, 2, figsize=(11, 10.5))
-        self.axes = list(axes.flat)
+        columns = 3 if len(parent.channels) > 4 else 2
+        self.figure, axes = plt.subplots(2, columns, figsize=(5.5 * columns, 10.5))
+        self.axes = list(axes.flat)[:len(parent.channels)]
+        for unused in list(axes.flat)[len(parent.channels):]:
+            unused.set_visible(False)
         self.figure.subplots_adjust(bottom=0.37, wspace=0.08, hspace=0.14)
         self.figure.canvas.manager.set_window_title(
             f"Mask editor — orbit {parent.orbit:04d}, frame {self.frame}"
@@ -181,7 +195,7 @@ class MaskEditor:
         self.overlays = []
         channels = parent.channels
         for axis, channel, name in zip(
-            self.axes, channels, CHANNEL_NAMES, strict=True
+            self.axes, channels, parent.channel_names, strict=True
         ):
             limits = finite_limits(channel[self.frame])
             image = axis.imshow(
@@ -205,6 +219,7 @@ class MaskEditor:
             axis.set_yticks([])
             self.images.append(image)
             self.overlays.append(overlay)
+            draw_sza_contours(axis, parent.sza[self.frame] if parent.sza is not None else None, labels=True)
 
         self.lasso = LassoSelector(
             self.axes[0],
@@ -295,7 +310,7 @@ class MaskEditor:
         xx, yy = np.meshgrid(np.arange(columns), np.arange(rows))
         points = np.column_stack([xx.ravel(), yy.ravel()])
         path = MatplotlibPath(vertices, closed=True)
-        self.mask = path.contains_points(points, radius=0.15).reshape(MASK_SHAPE)
+        self.mask = path.contains_points(points, radius=0.15).reshape(MASK_SHAPE) & self.parent.footprint
         self.vertices = [[float(x), float(y)] for x, y in vertices]
         self.geometry = {
             "kind": "lasso",
@@ -323,10 +338,10 @@ class MaskEditor:
         self.mode = "lasso"
         self.line_start = None
         self.lasso.set_active(True)
-        self.axes[0].set_title("WIC — lasso the VALID region")
+        self.axes[0].set_title(f"{self.parent.channel_names[0]} — lasso the VALID region")
         self._refresh_overlay(
             message
-            or "Lasso mode: draw around the valid pixels on the WIC panel."
+            or "Lasso mode: draw around the valid pixels on the first panel."
         )
 
     def use_line_mode(
@@ -337,7 +352,7 @@ class MaskEditor:
         self.mode = "line"
         self.line_start = None
         self.lasso.set_active(False)
-        self.axes[0].set_title("WIC — draw divider on any panel")
+        self.axes[0].set_title(f"{self.parent.channel_names[0]} — draw divider on any panel")
         if (
             self.geometry is not None
             and self.geometry.get("kind") == "line_set"
@@ -433,16 +448,7 @@ class MaskEditor:
         points = line.get("points")
         if not isinstance(points, list) or len(points) != 2:
             raise ValueError("Saved line does not contain two points")
-        (x_start, y_start), (x_stop, y_stop) = points
-        direction_x = float(x_stop) - float(x_start)
-        direction_y = float(y_stop) - float(y_start)
-        rows, columns = MASK_SHAPE
-        xx, yy = np.meshgrid(np.arange(columns), np.arange(rows))
-        signed_side = (
-            direction_x * (yy - float(y_start))
-            - direction_y * (xx - float(x_start))
-        )
-        return int(line.get("valid_side", 1)) * signed_side >= 0.0
+        return line_side_mask(line, MASK_SHAPE, self.source_coordinates)
 
     def _line_entries(self) -> list[dict[str, object]]:
         if self.geometry is None or self.geometry.get("kind") != "line_set":
@@ -457,7 +463,7 @@ class MaskEditor:
     def _apply_line_set(self) -> None:
         if self.geometry is None or self.geometry.get("kind") != "line_set":
             return
-        self.mask = np.ones(MASK_SHAPE, dtype=bool)
+        self.mask = self.parent.footprint.copy()
         for line in self._line_entries():
             self.mask &= self._line_mask(line)
         self._redraw_lines()
@@ -534,7 +540,7 @@ class MaskEditor:
         self.mode = "line"
         self.line_start = None
         self.lasso.set_active(False)
-        self.axes[0].set_title("WIC — draw divider on any panel")
+        self.axes[0].set_title(f"{self.parent.channel_names[0]} — draw divider on any panel")
         self.vertices = None
         self.geometry = {"kind": "line_set", "lines": []}
         self._apply_line_set()
@@ -564,14 +570,14 @@ class MaskEditor:
         if not keyframe_frames(self.record):
             self._refresh_overlay("There are no other keyframes to propagate.")
             return
-        self.mask = propagated_mask(self.record, self.frame)
+        self.mask = propagated_mask(self.record, self.frame) & self.parent.footprint
         self.vertices = None
         self.geometry = None
         self._clear_line_artists()
         self._refresh_overlay("Loaded the currently propagated mask as a draft.")
 
     def all_valid(self, _event: object = None) -> None:
-        self.mask = np.ones(MASK_SHAPE, dtype=bool)
+        self.mask = self.parent.footprint.copy()
         self.vertices = None
         self.geometry = None
         self._clear_line_artists()
@@ -617,22 +623,32 @@ class MaskEditor:
             self.undo_last_line()
 
 
+class EmptyImageOrbit(ValueError):
+    """An orbit has no finite pixels in any of its image channels."""
+
+
 class PartialImageAnnotator:
     """Main 6x6 orbit viewer with persistent orbit-level annotation state."""
 
     def __init__(
         self,
         data_directory: Path,
-        overview_directory: Path,
+        overview_directory: Path | None,
         annotation_file: Path,
         segment_file: Path,
         start_orbit: int | None = None,
         start_frame: int | None = None,
+        show_empty_orbits: bool = False,
     ) -> None:
         self.data_directory = Path(data_directory)
-        self.overview_directory = Path(overview_directory)
+        self.overview_directory = Path(overview_directory) if overview_directory is not None else None
         self.annotation_file = Path(annotation_file)
+        self.show_empty_orbits = show_empty_orbits
         self.document = load_document(self.annotation_file)
+        if not self.annotation_file.exists():
+            self.document.update(schema_version=2, mask_shape=[46, 46], coordinate_system="target image pixels (column, row)")
+        if self.document.get("schema_version") != 2 or self.document.get("mask_shape") != [46, 46]:
+            raise ValueError("use the converted 46x46 JSON; original 36x36 annotations are not edited by this tool")
         self.seeds = load_good_segment_seeds(segment_file)
         self.orbits = discover_orbits(
             self.overview_directory,
@@ -647,6 +663,7 @@ class PartialImageAnnotator:
         self._editors: list[MaskEditor] = []
 
         cursor = self.document.get("cursor", {})
+        self._resume_legacy_cursor = start_orbit is None and start_frame is None and cursor.get("orbit") == self.orbit
         if start_orbit is None and cursor.get("orbit") == self.orbit:
             self.page_start = max(0, int(cursor.get("page_start", 0)))
             self.selected_frame = max(0, int(cursor.get("frame", 0)))
@@ -654,7 +671,18 @@ class PartialImageAnnotator:
             self.selected_frame = max(0, int(start_frame))
             self.page_start = (self.selected_frame // PAGE_SIZE) * PAGE_SIZE
 
-        self._load_orbit()
+        skipped = []
+        for _ in self.orbits:
+            try:
+                self._load_orbit()
+                break
+            except EmptyImageOrbit:
+                skipped.append(self.orbit)
+                self.orbit_index = (self.orbit_index + 1) % len(self.orbits)
+                self.page_start = self.selected_frame = 0
+                self._resume_legacy_cursor = False
+        else:
+            raise EmptyImageOrbit("No orbit contains finite image pixels")
         self.figure, axes = plt.subplots(6, 6, figsize=(16, 10))
         self.axes = list(axes.flat)
         self.figure.subplots_adjust(
@@ -670,7 +698,7 @@ class PartialImageAnnotator:
         )
         self.status = self.figure.text(
             0.785,
-            0.325,
+            0.275,
             "",
             va="top",
             fontsize=9,
@@ -680,7 +708,7 @@ class PartialImageAnnotator:
         self.figure.canvas.mpl_connect("button_press_event", self._panel_clicked)
         self.figure.canvas.mpl_connect("key_press_event", self._key_pressed)
         self.figure.canvas.mpl_connect("close_event", self._window_closed)
-        self.refresh(self._workflow_hint())
+        self.refresh(self._workflow_hint() + (f" Skipped empty orbits: {skipped}." if skipped else ""))
 
     @property
     def orbit(self) -> int:
@@ -692,8 +720,15 @@ class PartialImageAnnotator:
             requested = self.document.get("cursor", {}).get("orbit")
         if requested is not None:
             if int(requested) not in self.orbits:
-                raise ValueError(f"Orbit {requested} was not found")
-            return self.orbits.index(int(requested))
+                if start_orbit is not None:
+                    raise ValueError(f"Orbit {requested} was not found")
+                # Converted cursor may point to an orbit absent from the CS corpus.
+                for index, orbit in enumerate(self.orbits):
+                    record = self.document["orbits"].get(orbit_key(orbit))
+                    if orbit >= int(requested) and (record is None or record["review_status"] == "in_progress"):
+                        return index
+            else:
+                return self.orbits.index(int(requested))
 
         for index, orbit in enumerate(self.orbits):
             record = self.document["orbits"].get(orbit_key(orbit))
@@ -708,36 +743,25 @@ class PartialImageAnnotator:
         source = self.data_directory / f"or_{self.orbit:04d}.nc"
         if not source.exists():
             raise FileNotFoundError(source)
-        image = ConductanceImage(str(source))
-        wic = np.asarray(image.wic_avg)
-        hall = np.asarray(image.H)
-        pedersen = np.asarray(image.P)
-        weight = np.asarray(image.w)
-        if not (
-            wic.shape == hall.shape == pedersen.shape == weight.shape
-            and wic.ndim == 3
-            and wic.shape[1:] == MASK_SHAPE
-        ):
-            raise ValueError(
-                f"Unexpected arrays for orbit {self.orbit}: "
-                f"WIC={wic.shape}, H={hall.shape}, P={pedersen.shape}, "
-                f"w={weight.shape}"
-            )
-        self.channels = (wic, hall, pedersen, weight)
-        self.n_frames = int(wic.shape[0])
-        seed_start, seed_stop = self.seeds.get(self.orbit, (None, None))
-        if seed_start is not None and seed_stop is not None:
-            seed_start = int(seed_start)
-            seed_stop = min(int(seed_stop), self.n_frames - 1)
-            if not 0 <= seed_start <= seed_stop:
-                seed_start, seed_stop = None, None
-        self.record = ensure_orbit_record(
-            self.document,
-            self.orbit,
-            self.n_frames,
-            seed_good_start=seed_start,
-            seed_good_stop=seed_stop,
-        )
+        self.channels, self.channel_names, self.times, source_wic, self.sza = load_native_images(source, self.document)
+        image_channels = [channel for channel, name in zip(self.channels, self.channel_names) if "quality" not in name.lower() and "coverage" not in name.lower()]
+        if not self.show_empty_orbits and not any(np.isfinite(channel).any() for channel in image_channels):
+            raise EmptyImageOrbit(f"Orbit{self.orbit} has no finite image pixels")
+        self.channel_index %= len(self.channels)
+        self.n_frames = len(self.times)
+        self.record = native_orbit_record(self.document, self.orbit, source, self.times, source_wic, self.seeds.get(self.orbit))
+        legacy = self.record.get("legacy_annotation")
+        if self._resume_legacy_cursor and legacy is not None and self.document.get("frame_index_space", "").startswith("original"):
+            old_times = annotation_times(legacy)
+            old_frame = min(self.selected_frame, len(old_times) - 1)
+            self.selected_frame = int(np.argmin(np.abs(self.times - old_times[old_frame])))
+            self.page_start = (self.selected_frame // PAGE_SIZE) * PAGE_SIZE
+        self._resume_legacy_cursor = False
+        self.footprint = decode_mask(self.record["target_annotated_runs"], shape=MASK_SHAPE)
+        self.document["frame_index_space"] = "per orbit: native_cs records use their CS source_file; untouched converted records retain the original time axis"
+        self.document["outside_source_grid"] = "Frame classes and drawn geometry apply across the entire native 46x46 grid"
+        if hasattr(self, "channel_button"):
+            self.channel_button.label.set_text(f"Channel: {self.channel_names[self.channel_index]}")
         self.selected_frame = min(max(0, self.selected_frame), self.n_frames - 1)
         largest_page = ((self.n_frames - 1) // PAGE_SIZE) * PAGE_SIZE
         self.page_start = min(max(0, self.page_start), largest_page)
@@ -752,16 +776,18 @@ class PartialImageAnnotator:
             ("Next orbit", self.next_orbit),
             ("Previous page", self.previous_page),
             ("Next page", self.next_page),
-            ("Channel: WIC", self.cycle_channel),
+            (f"Channel: {self.channel_names[0]}", self.cycle_channel),
             ("Set FIRST usable", self.set_usable_start),
             ("Set FIRST fully good", self.set_full_start),
             ("Set LAST fully good", self.set_full_stop),
             ("Set LAST usable", self.set_usable_stop),
             ("Clear full-good core", self.clear_full_core),
             ("Edit selected mask", self.edit_selected),
+            ("Review entire grid", self.review_entire_grid),
             ("Mark orbit complete", self.complete_orbit),
             ("No usable data", self.no_usable),
             ("Undo last edit", self.undo),
+            ("Next unreviewed", self.next_unreviewed),
             ("Stop and save", self.stop),
         ]
         self.buttons: list[Button] = []
@@ -769,7 +795,7 @@ class PartialImageAnnotator:
         top = 0.94
         for index, (label, callback) in enumerate(controls):
             axis = self.figure.add_axes(
-                (0.79, top - index * 0.043, 0.19, 0.032)
+                (0.79, top - index * (0.645 / (len(controls) - 1)), 0.19, 0.032)
             )
             button = Button(axis, label)
             button.on_clicked(callback)
@@ -794,8 +820,7 @@ class PartialImageAnnotator:
                 "and click “Set LAST usable”. Do not change FIRST usable."
             )
         return (
-            "FIRST/LAST usable are the outer limits of the entire retained "
-            "orbit; the fully-good limits sit inside them."
+            "Set outer usable limits, then an optional fully-good core."
         )
 
     def push_undo(self, snapshot: dict[str, object]) -> None:
@@ -820,6 +845,7 @@ class PartialImageAnnotator:
         self.refresh(success_message)
 
     def save(self) -> None:
+        stamp_native_record(self.record, self.times)
         self.document["cursor"] = {
             "orbit": self.orbit,
             "page_start": self.page_start,
@@ -849,8 +875,8 @@ class PartialImageAnnotator:
                 interpolation="nearest",
             )
             classification = frame_class(self.record, frame)
-            if classification == "partial" and keyframes:
-                mask = propagated_mask(self.record, frame)
+            if classification == "partial" or (classification == "full" and not self.footprint.all()):
+                mask = propagated_mask(self.record, frame) & self.footprint
                 bad = ~mask
                 axis.imshow(
                     np.ma.masked_where(~bad, bad.astype(float)),
@@ -861,6 +887,7 @@ class PartialImageAnnotator:
                     alpha=0.38,
                     interpolation="nearest",
                 )
+            draw_sza_contours(axis, self.sza[frame] if self.sza is not None else None)
             color = CLASS_COLORS[classification]
             width = 3.0 if frame == self.selected_frame else 1.8
             if frame == self.selected_frame:
@@ -873,14 +900,9 @@ class PartialImageAnnotator:
             axis.set_xticks([])
             axis.set_yticks([])
 
-        boundaries = ", ".join(
-            f"{name.replace('_', ' ')}={self.record.get(name)}"
-            for name in (
-                "usable_start",
-                "full_good_start",
-                "full_good_stop",
-                "usable_stop",
-            )
+        boundaries = (
+            f"Usable: {self.record.get('usable_start')}–{self.record.get('usable_stop')}\n"
+            f"Fully good: {self.record.get('full_good_start')}–{self.record.get('full_good_stop')}"
         )
         counts = progress_counts(self.document, self.orbits)
         progress = (
@@ -894,15 +916,16 @@ class PartialImageAnnotator:
             f"{len(self.orbits)})\n"
             f"Frame {self.selected_frame}/{self.n_frames - 1}; "
             f"page {self.page_start}–{page_stop - 1}\n"
-            f"Channel: {CHANNEL_NAMES[self.channel_index]}\n"
+            f"Channel: {self.channel_names[self.channel_index]}\n"
+            f"SZA: {'90° white; 105° magenta dashed' if self.sza is not None else 'unavailable (missing companion)'}\n"
+            f"Reviewed grid: {100 * self.footprint.mean():.1f}%\n"
             f"Status: {self.record['review_status']}\n"
             f"{boundaries}\n"
             f"Mask keyframes: {keyframe_frames(self.record) or 'none'}\n\n"
             f"All orbits: {progress}\n\n"
             f"{message}\n\n"
             f"Autosaved: {self.annotation_file.name}\n"
-            "Double-click an orange frame to edit its valid mask.\n"
-            "For partial data after a good core, change only LAST usable."
+            "Double-click a partial frame to edit its mask."
         )
         self.figure.canvas.draw_idle()
 
@@ -919,32 +942,50 @@ class PartialImageAnnotator:
         if getattr(event, "dblclick", False):
             self.edit_selected()
 
-    def _move_orbit(self, change: int) -> None:
+    def _move_orbit(self, change: int, unreviewed_only: bool = False) -> None:
         target = self.orbit_index + change
         if not 0 <= target < len(self.orbits):
             self.refresh("There is no orbit in that direction.")
             return
         self._close_editors()
         self.save()
-        self.orbit_index = target
-        self.page_start = 0
-        self.selected_frame = 0
-        try:
-            self._load_orbit()
-        except Exception as error:
-            # Restore the prior orbit if its neighbor cannot be loaded.
-            self.orbit_index -= change
-            self._load_orbit()
-            self.refresh(f"Could not load neighboring orbit: {error}")
+        previous = self.orbit_index, self.page_start, self.selected_frame
+        old_undo = self.undo_stack.copy()
+        skipped = []
+        step = 1 if change > 0 else -1
+        message = "There are no more unfinished reviews." if unreviewed_only else "There are no more nonempty orbits in that direction."
+        while 0 <= target < len(self.orbits):
+            record = self.document["orbits"].get(orbit_key(self.orbits[target]), {})
+            if unreviewed_only and record.get("review_status") in {"complete", "no_usable"}:
+                target += step
+                continue
+            self.orbit_index = target
+            self.page_start = self.selected_frame = 0
+            try:
+                self._load_orbit()
+            except EmptyImageOrbit:
+                skipped.append(self.orbit)
+                target += step
+                continue
+            except Exception as error:
+                message = f"Could not load neighboring orbit: {error}"
+                break
+            self.save()
+            self.refresh(self._workflow_hint() + (f" Skipped empty orbits: {skipped}." if skipped else ""))
             return
-        self.save()
-        self.refresh(self._workflow_hint())
+        self.orbit_index, self.page_start, self.selected_frame = previous
+        self._load_orbit()
+        self.undo_stack = old_undo
+        self.refresh(message)
 
     def previous_orbit(self, _event: object = None) -> None:
         self._move_orbit(-1)
 
     def next_orbit(self, _event: object = None) -> None:
         self._move_orbit(1)
+
+    def next_unreviewed(self, _event: object = None) -> None:
+        self._move_orbit(1, unreviewed_only=True)
 
     def _move_page(self, change: int) -> None:
         new_start = self.page_start + change * PAGE_SIZE
@@ -967,7 +1008,7 @@ class PartialImageAnnotator:
     def cycle_channel(self, _event: object = None) -> None:
         self.channel_index = (self.channel_index + 1) % len(self.channels)
         self.channel_button.label.set_text(
-            f"Channel: {CHANNEL_NAMES[self.channel_index]}"
+            f"Channel: {self.channel_names[self.channel_index]}"
         )
         self.refresh("Changed display channel.")
 
@@ -1050,6 +1091,14 @@ class PartialImageAnnotator:
             "It should appear as a separate foreground window."
         )
 
+    def review_entire_grid(self, _event: object = None) -> None:
+        def expand():
+            self.record["target_annotated_runs"] = encode_mask(np.ones(MASK_SHAPE, dtype=bool))
+            self.record["review_status"] = "in_progress"
+            self.footprint = np.ones(MASK_SHAPE, dtype=bool)
+        self._close_editors()
+        self._mutate(expand, "Entire 46x46 grid selected for review. Recheck full frames and partial masks before marking complete.")
+
     def complete_orbit(self, _event: object = None) -> None:
         def complete() -> None:
             mark_complete(self.record)
@@ -1064,7 +1113,7 @@ class PartialImageAnnotator:
         self.save()
         self.refresh("Orbit marked complete. Moving to the next orbit.")
         if self.orbit_index + 1 < len(self.orbits):
-            self._move_orbit(1)
+            self.next_unreviewed()
 
     def no_usable(self, _event: object = None) -> None:
         if not self.no_usable_armed:
@@ -1084,6 +1133,7 @@ class PartialImageAnnotator:
             self.refresh("There is nothing to undo for this orbit.")
             return
         restore_record(self.record, self.undo_stack.pop())
+        self.footprint = decode_mask(self.record["target_annotated_runs"], shape=MASK_SHAPE)
         self.save()
         self.refresh("Restored the previous annotation state.")
 
@@ -1119,7 +1169,7 @@ class PartialImageAnnotator:
             self.stop()
 
 
-def parse_arguments() -> argparse.Namespace:
+def parse_arguments(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Annotate IMAGE orbits with a usable interval and sparse spatial "
@@ -1157,6 +1207,11 @@ def parse_arguments() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--show-empty-orbits",
+        action="store_true",
+        help="Include completely empty image orbits for inspection (normally skipped)",
+    )
+    parser.add_argument(
         "--start-orbit",
         type=int,
         help="Open this orbit instead of the saved cursor",
@@ -1166,7 +1221,7 @@ def parse_arguments() -> argparse.Namespace:
         type=int,
         help="Open this frame within the selected or resumed orbit",
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def main() -> None:
@@ -1178,6 +1233,7 @@ def main() -> None:
         segment_file=arguments.segments,
         start_orbit=arguments.start_orbit,
         start_frame=arguments.start_frame,
+        show_empty_orbits=arguments.show_empty_orbits,
     )
     try:
         plt.show()

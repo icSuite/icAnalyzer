@@ -1,8 +1,7 @@
 """Persistent annotation state and temporal mask propagation.
 
-The annotation file stores only orbit-level boundaries and sparse mask
-keyframes. Full 36x36 masks are generated when processed training data is
-built; annotators never need to label each image independently.
+The annotation file stores orbit-level boundaries and sparse mask keyframes.
+Legacy records default to 36x36; native records declare their 46x46 shape.
 """
 
 from __future__ import annotations
@@ -52,10 +51,10 @@ def load_document(path: str | Path) -> dict[str, Any]:
     with path.open(encoding="utf-8") as stream:
         document = json.load(stream)
 
-    if document.get("schema_version") != SCHEMA_VERSION:
+    if document.get("schema_version") not in (1, 2):
         raise ValueError(
             f"Unsupported annotation schema {document.get('schema_version')}; "
-            f"expected {SCHEMA_VERSION}"
+            "expected 1 or 2"
         )
     if not isinstance(document.get("orbits"), dict):
         raise ValueError("Annotation document is missing the 'orbits' mapping")
@@ -240,8 +239,9 @@ def set_keyframe(
 ) -> None:
     frame = _validate_frame(frame, int(record["n_frames"]))
     mask = np.asarray(mask, dtype=bool)
-    if mask.shape != MASK_SHAPE:
-        raise ValueError(f"Mask must have shape {MASK_SHAPE}")
+    shape = tuple(record.get("mask_shape", MASK_SHAPE))
+    if mask.shape != shape:
+        raise ValueError(f"Mask must have shape {shape}")
 
     payload: dict[str, Any] = {
         "valid_runs": encode_mask(mask),
@@ -272,8 +272,10 @@ def delete_keyframe(record: dict[str, Any], frame: int) -> bool:
 def exact_keyframe_mask(
     record: dict[str, Any],
     frame: int,
-    shape: tuple[int, int] = MASK_SHAPE,
+    shape: tuple[int, int] | None = None,
 ) -> np.ndarray | None:
+    if shape is None:
+        shape = tuple(record.get("mask_shape", MASK_SHAPE))
     payload = record.get("keyframes", {}).get(str(int(frame)))
     if payload is None:
         return None
@@ -310,8 +312,10 @@ def frame_class(record: dict[str, Any], frame: int) -> str:
 def propagated_mask(
     record: dict[str, Any],
     frame: int,
-    shape: tuple[int, int] = MASK_SHAPE,
+    shape: tuple[int, int] | None = None,
 ) -> np.ndarray:
+    if shape is None:
+        shape = tuple(record.get("mask_shape", MASK_SHAPE))
     classification = frame_class(record, frame)
     if classification == "full":
         return np.ones(shape, dtype=bool)
