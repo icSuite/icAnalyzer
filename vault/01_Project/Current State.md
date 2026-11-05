@@ -30,6 +30,11 @@ retired `IMAGE_FUV` corpus. The 27 inherited rebased keyframes retain an
 explicit `human_reviewed: false` flag, preserving Model-2 selection semantics.
 Native-grid line geometry reproduces all 505 stored raster masks exactly.
 
+WIC training now keeps spawned DataLoader workers alive between epochs when
+`--num-workers` is positive. This removes the repeated worker-import and cache-
+mapping delay that dominated the first batch of every epoch on Dynamit; the
+setting is recorded in the run artifact configuration.
+
 Real Product-2 orbit85 preparation from the manual JSON retained106 frames
 (37 full,69 partial), excluded16 and reported3 unmatched timestamps at the5%
 intrinsic-valid cutoff. A one-epoch CPU WIC training smoke completed and saved

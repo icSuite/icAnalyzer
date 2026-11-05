@@ -51,6 +51,13 @@ selection. All 505 retained native line geometries exactly reproduce their
 authoritative raster masks. The server can generate the WIC cache from the new
 Product-2 source plus the repository annotation JSON alone.
 
+The Dynamit WIC run exposed a roughly 70-second first-batch delay while the
+remaining 529 batches completed in about eight seconds. The trainer used the
+safe `spawn` multiprocessing context but recreated four workers for every
+epoch. It now sets `persistent_workers=True` whenever `--num-workers` is
+positive and records that choice in the artifact configuration, so worker
+startup and cache mapping are paid only during the first epoch.
+
 ## Supported CVAE implementation extracted from legacy WIC/SI12 package (2026-11-05)
 
 `scripts/CVAE/` is now the supported automatic-CVAE command boundary. Its seven

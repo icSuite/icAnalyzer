@@ -63,7 +63,11 @@ def run(arguments):
         workers = arguments.num_workers if name == "train" else 0
         options = {"num_workers": workers, "pin_memory": device == "cuda"}
         if workers:
-            options.update(multiprocessing_context="spawn", prefetch_factor=arguments.prefetch_factor)
+            options.update(
+                multiprocessing_context="spawn",
+                prefetch_factor=arguments.prefetch_factor,
+                persistent_workers=True
+            )
         loaders[name] = DataLoader(dataset, batch_size=arguments.batch_size, shuffle=name == "train", **options)
 
     transform = datasets["train"].transform
@@ -88,6 +92,7 @@ def run(arguments):
         "cache_mib_per_split": arguments.cache_mib,
         "max_open_orbits_per_worker": arguments.max_open_orbits,
         "num_workers": arguments.num_workers, "prefetch_factor": arguments.prefetch_factor,
+        "persistent_workers": arguments.num_workers > 0,
         "pin_memory": device == "cuda", "uncertainty_arrays_loaded": False,
         "training_holes": {
             "probability": arguments.hole_probability, "size": arguments.hole_size,
