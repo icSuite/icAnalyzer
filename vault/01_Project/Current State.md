@@ -129,11 +129,21 @@ import. The duplicate experimental training CLI was removed from
 model module is library-only. Supported CVAE entries are now under
 `scripts/CVAE/`; older VAE analyses remain under `scripts/IMAGE/vae_pipeline/`.
 
-All retained modules import cleanly, all five argparse help paths load, the
-hard-coded Model2 trainer is import-safe, and no deleted module remains
+All retained modules import cleanly, all six argparse help paths load, the
+Model2 trainer is import-safe, and no deleted module remains
 referenced by live source, tests or README files. Verification
 passes 389 maintained checks: 388 together plus the spawned-worker IPC check.
 No masking/CVAE data, masks, caches, models or figures were regenerated.
+
+The adopted Model1+Model2 workflow is now portable and writes no generated
+artifacts into the repository. Six explicit stages prepare/train/apply Model2,
+prepare/train Model1, and export the combined masks; their source, prepared
+data, checkpoints and outputs are caller-supplied paths. The prepared Model2
+dataset owns the split and annotation snapshot, Model1 reuses both, and hash
+checks connect every downstream artifact. The date rule exactly reproduces the
+evaluated split on the existing reviewed population: 9,333/3,438/4,841 frames
+and 35/13/25 train/validation/test orbits. Newly trained Model2 thresholds are
+propagated rather than assuming the historical 0.475 value.
 
 ## Hybrid WIC-only Kp-CVAE implemented (2026-11-02)
 

@@ -17,11 +17,6 @@ sys.path.insert(0, str(ROOT))
 from scripts.automatic_masking.prepare_model1_training_data import CORE, sha, write_json
 from scripts.automatic_masking.model1_cnn import FullFrameClassifier, normalized_core, route_two_stage
 
-TRIAL = ROOT / "figures/validation/wic_model1_accepted_partials_20261015"
-BASELINE = ROOT / "data/training_data/automatic_masks_e5c009e6713b"
-OUTPUT = ROOT / "data/training_data/two_stage_acceptance_masks_20261105"
-
-
 def predict_acceptance(model, inputs):
     result = np.empty(len(inputs), dtype=np.float32)
     with torch.inference_mode():
@@ -34,16 +29,20 @@ def predict_acceptance(model, inputs):
 def parse_arguments(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--baseline", type=Path, default=BASELINE,
+        "--baseline", type=Path, required=True,
         help="completed Model-2 mask directory used as the pixel-mask fallback"
     )
     parser.add_argument(
-        "--trial", type=Path, default=TRIAL,
+        "--trial", type=Path, required=True,
         help="saved Model-1 acceptance trial containing its frozen checkpoint"
     )
-    parser.add_argument("--output", type=Path, default=OUTPUT)
+    parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--orbits", type=int, nargs="+")
-    return parser.parse_args(argv)
+    parser.add_argument("--threads", type=int, default=4)
+    arguments = parser.parse_args(argv)
+    if arguments.threads < 1:
+        parser.error("--threads must be positive")
+    return arguments
 
 
 def run(args):
@@ -52,7 +51,7 @@ def run(args):
     output = args.output.expanduser().resolve()
     if output.exists():
         raise FileExistsError("Choose a new combined-mask output directory")
-    torch.set_num_threads(4)
+    torch.set_num_threads(args.threads)
     torch.set_num_interop_threads(1)
     selection = json.loads((trial / "selection_before_test.json").read_text())
     verified = json.loads((trial / "verification.json").read_text())
@@ -60,7 +59,7 @@ def run(args):
     assert sha(accept_file) == verified["accept_checkpoint_sha256"]
     source_manifest = json.loads((baseline / "manifest.json").read_text())
     assert source_manifest["model_sha256"] == verified["model2_sha256"]
-    assert source_manifest["threshold"] == .475
+    model2_threshold = float(source_manifest["threshold"])
     accept_saved = torch.load(accept_file, map_location="cpu", weights_only=False)
     normal = accept_saved["normalization"]
     assert normal["fields"] == CORE
@@ -79,7 +78,7 @@ def run(args):
         selection_field="Only full_cutoff is used; any historical veto fields in an older trial are ignored",
         model1_transfer="Frozen Model1 acceptance checkpoint applied without retraining to the Product-2 generation identified by the Model2 manifest",
         model2_directory=str(baseline), model2_manifest_sha256=sha(baseline / "manifest.json"),
-        model2_sha256=source_manifest["model_sha256"], model2_threshold=.475,
+        model2_sha256=source_manifest["model_sha256"], model2_threshold=model2_threshold,
         routing="Accept>=cutoff and nonempty finite WIC -> all intrinsic-valid pixels; every other frame retains Model2 mask exactly",
         annotation_policy="Model1 trained with all-observed-accepted manual Partial frames positive; no manual labels read at inference")
     output.mkdir(parents=True)
@@ -139,7 +138,7 @@ def run(args):
     regions = dict(dayside=(grid["mlt"] >= 6) & (grid["mlt"] < 18) & (grid["mlat"] >= 60),
         noon=(grid["mlt"] >= 10) & (grid["mlt"] < 14) & (grid["mlat"] >= 60) & (grid["mlat"] < 75))
     summary = dict(model=str(output / "policy.json"), model_sha256=policy_sha,
-        source_directory=source_manifest["source_directory"], threshold=.475,
+        source_directory=source_manifest["source_directory"], threshold=model2_threshold,
         model2_sha256=source_manifest["model_sha256"], frame_gate=policy,
         mask_meaning="True means keep; Model1 releases whole frame, otherwise frozen Model2 prediction. Intersect with intrinsic product validity; never fill missing observations.",
         alignment=source_manifest["alignment"], orbit_files=len(rows), frames=sum(row["frames"] for row in rows),

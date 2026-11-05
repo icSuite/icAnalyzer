@@ -15,7 +15,11 @@ from scripts.manual_masking.annotated_data import annotation_times
 from scripts.manual_masking.annotation_store import decode_mask, frame_class, propagated_mask
 
 FIELDS = ("wic_corrected", "method_quality_weight", "wic_coverage", "sza", "dza")
-SOURCE = Path("/home/bing/Dropbox/work/data/IMAGE_FUV/precipitation_cs/image_apex_130km_46x46_v1/IR_hardy_smoothed_wic0p8_si120_si131p2")
+DEFAULT_VALIDATION_DAYS = (
+    "2000-05-21", "2000-05-23", "2000-05-24", "2000-05-26",
+    "2000-05-28", "2000-06-14", "2000-06-30"
+)
+DEFAULT_TEST_START = "2000-07-09"
 
 
 def human_keyframe(record, frame):
@@ -48,9 +52,14 @@ def frame_segments(record, classes):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--annotations", type=Path, default=Path("data/partial_image_annotations_46x46.json"))
-    parser.add_argument("--source", type=Path, default=SOURCE)
+    parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--validation-days", nargs="+", default=DEFAULT_VALIDATION_DAYS)
+    parser.add_argument("--test-start", default=DEFAULT_TEST_START)
     args = parser.parse_args()
+    args.annotations = args.annotations.expanduser().resolve()
+    args.source = args.source.expanduser().resolve()
+    args.output = args.output.expanduser().resolve()
     args.output.mkdir(parents=True, exist_ok=False)
     contents = args.annotations.read_bytes()
     document = json.loads(contents)
@@ -117,11 +126,27 @@ def main():
         writer = csv.DictWriter(stream, fieldnames=rows[0])
         writer.writeheader()
         writer.writerows(rows)
+
+    days = np.asarray([row["day"] for row in rows])
+    orbits = np.asarray([row["orbit"] for row in rows])
+    validation_days = set(args.validation_days)
+    split = {
+        "train": np.flatnonzero((days < args.test_start) & ~np.isin(days, list(validation_days))),
+        "validation": np.flatnonzero((days < args.test_start) & np.isin(days, list(validation_days))),
+        "test": np.flatnonzero(days >= args.test_start)
+    }
+    if any(len(indices) == 0 for indices in split.values()):
+        raise ValueError("train, validation and test splits must all contain reviewed frames")
+    orbit_sets = {name: set(orbits[indices]) for name, indices in split.items()}
+    pairs = (("train", "validation"), ("train", "test"), ("validation", "test"))
+    if any(orbit_sets[left] & orbit_sets[right] for left, right in pairs):
+        raise ValueError("orbit appears in more than one Model2 split")
+    (args.output / "split_ids.json").write_text(json.dumps({name: indices.tolist() for name, indices in split.items()}, indent=2) + "\n")
     (args.output / "empty_frames.json").write_text(json.dumps(empty_rows, indent=2) + "\n")
     classes = ("full", "bad", "partial")
     counts = {label: sum(r["label"] == label for r in rows) for label in classes}
     empty_counts = {label: sum(r["label"] == label for r in empty_rows) for label in classes}
-    metadata = dict(annotation_sha256=hashlib.sha256(contents).hexdigest(), fields=FIELDS, samples=len(rows), class_counts=counts, empty_class_counts=empty_counts, human_keyframe_samples=sum(r["human_keyframe"] for r in rows), propagated_partial_samples=sum(r["label"] == "partial" and not r["human_keyframe"] for r in rows), orbits=len({r["orbit"] for r in rows}), segments=len({r["segment"] for r in rows}), sources=sources, excluded=excluded, supervision="finite corrected WIC intersect reviewed footprint; full all-keep, bad all-reject, partial held-forward keyframe", caveat="CS input support inherits upstream retrieval validity; empty frames archived separately because no pixels can supervise a mask")
+    metadata = dict(annotation_sha256=hashlib.sha256(contents).hexdigest(), annotations=str(args.annotations), source=str(args.source), fields=FIELDS, samples=len(rows), class_counts=counts, empty_class_counts=empty_counts, human_keyframe_samples=sum(r["human_keyframe"] for r in rows), propagated_partial_samples=sum(r["label"] == "partial" and not r["human_keyframe"] for r in rows), orbits=len({r["orbit"] for r in rows}), segments=len({r["segment"] for r in rows}), split={name: {"frames": len(indices), "orbits": sorted(map(int, orbit_sets[name]))} for name, indices in split.items()}, split_policy={"validation_days": sorted(validation_days), "test_start": args.test_start}, sources=sources, excluded=excluded, supervision="finite corrected WIC intersect reviewed footprint; full all-keep, bad all-reject, partial held-forward keyframe", caveat="CS input support inherits upstream retrieval validity; empty frames archived separately because no pixels can supervise a mask")
     if all(not row["restricted_footprint"] for row in rows):
         metadata["supervision"] = "all finite corrected WIC pixels across the entire native 46x46 grid; full all-keep, bad all-reject, partial held-forward drawn mask; no old-grid restriction"
     (args.output / "dataset_provenance.json").write_text(json.dumps(metadata, indent=2) + "\n")

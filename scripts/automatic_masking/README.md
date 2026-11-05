@@ -19,3 +19,41 @@ Current production-facing entries are:
 Historical CNNs and the rejected random-forest, SZA, line-mask,
 partial-convolution, temporal-ablation, Bad-veto and comparison workflows are
 preserved in Git history rather than the live tree.
+
+All generated datasets, checkpoints and masks belong outside the repository.
+The complete supported workflow is:
+
+```bash
+SOURCE=~/IMAGE_FUV_new/precipitation_cs/image_apex_130km_46x46_v1/IR_hardy_smoothed_wic1_si121_si131
+MASK_RUN=~/IMAGE_CVAE/automatic_masking/model1_model2_20261105
+
+PYTHONPATH=. python scripts/automatic_masking/prepare_model2_training_data.py \
+  --annotations data/partial_image_annotations_46x46.json \
+  --source "$SOURCE" --output "$MASK_RUN/model2_training_data"
+
+PYTHONPATH=. python scripts/automatic_masking/train_model2_unet.py \
+  "$MASK_RUN/model2_training_data" --output "$MASK_RUN/model2_run" --device cuda
+
+PYTHONPATH=. python scripts/automatic_masking/apply_model2_unet.py \
+  --source "$SOURCE" --checkpoint "$MASK_RUN/model2_run/model2_unet.pt" \
+  --output "$MASK_RUN/model2_masks" --device cuda
+
+PYTHONPATH=. python scripts/automatic_masking/prepare_model1_training_data.py \
+  --prepared-model2 "$MASK_RUN/model2_training_data" \
+  --model2 "$MASK_RUN/model2_run/model2_unet.pt" \
+  --output "$MASK_RUN/model1_training_data"
+
+PYTHONPATH=. python scripts/automatic_masking/train_model1_cnn.py \
+  --prepared "$MASK_RUN/model1_training_data" \
+  --model2 "$MASK_RUN/model2_run/model2_unet.pt" \
+  --output "$MASK_RUN/model1_run"
+
+PYTHONPATH=. python scripts/automatic_masking/apply_two_stage_masks.py \
+  --baseline "$MASK_RUN/model2_masks" --trial "$MASK_RUN/model1_run" \
+  --output "$MASK_RUN/two_stage_masks"
+```
+
+The preparation step freezes the established held-out policy: validation days
+are selected before `2000-07-09`, and all reviewed frames on or after that date
+form the test split. The exact frame and orbit memberships are written into the
+prepared dataset and reused unchanged by both models.

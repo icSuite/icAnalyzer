@@ -74,7 +74,7 @@ def channels_for(parent_fields, normalization):
     indices = [
         index
         for parent in parent_fields
-        for index, candidate in enumerate(normalization["parent_fields"])
+        for index, candidate in enumerate(normalization.get("parent_fields", fields))
         if candidate == parent
     ]
     return indices + [index + len(fields) for index in indices]

@@ -126,7 +126,7 @@ below its frozen cutoff retain Model2 masks. The earlier exported masks and
 CVAE caches include the veto and remain historical artifacts. New
 acceptance-only masks and caches require fresh output directories.
 
-Verification is green: all retained modules import, all five argparse help
+Verification is green: all retained modules import, all six argparse help
 paths load, the Model2 trainer is import-safe, 38 focused automatic-mask tests
 pass, and the maintained repository suite
 passes 389 checks (388 together plus the spawned-worker IPC check). No data,
@@ -135,6 +135,18 @@ or deadline change. The supported CVAE command family has since moved to
 `scripts/CVAE/`; classification of the remaining legacy VAE/diagnostic scripts
 is still pending. Server deployment remains downstream of a clean, versionable
 repository.
+
+The six-stage Model1+Model2 workflow is now server-portable. All generated
+training data, checkpoints, figures and mask corpora use explicit external
+paths; no supported automatic-masking script contains workstation data paths or
+repository-local artifact defaults. Model2 preparation freezes the annotation
+snapshot and split membership, Model2 training consumes that artifact directly,
+Model1 preparation reuses the same population/split, and both application
+stages verify checkpoint hashes. The generalized date policy reproduces the
+previous evaluated split exactly on the existing population: 9,333/3,438/4,841
+frames and 35/13/25 orbits. The combined exporter now carries the threshold
+from the newly trained Model2 manifest rather than requiring 0.475. No model or
+mask was trained/generated during this refactor.
 
 ## Hybrid WIC-only Kp-CVAE ready for the full diagnostic (2026-11-02)
 

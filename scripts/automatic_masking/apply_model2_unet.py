@@ -5,8 +5,7 @@ Run from any directory with the tConductance environment:
 
 Each orbit gets one NPZ with the original frame times and raw 46x46 binary
 model masks. Manual annotations are never read or mixed into these outputs.
-The defaults target the current fuvpy-background-subtraction Product 2 corpus;
-``--source`` and ``--output`` keep other product generations explicit.
+The source, trained checkpoint and fresh output directory are explicit.
 """
 
 #%% Source, checkpoint and output paths
@@ -28,22 +27,27 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from scripts.automatic_masking.model2_unet import SmallUNet
 
-DEFAULT_SOURCE = Path.home() / "Dropbox/work/data/IMAGE_FUV_new/precipitation_cs/image_apex_130km_46x46_v1/IR_hardy_smoothed_wic1_si121_si131"
-DATA = ROOT / "data/training_data"
-FIGURES = ROOT / "figures/training_data"
-MODEL_FILE = DATA / "U_net_weight_0p1.pt"
 FIELDS = ["wic_corrected", "method_quality_weight", "sza", "dza"]
 
 #%% Recover exactly the input scaling and threshold fitted during training
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source", type=Path, default=DEFAULT_SOURCE)
-    parser.add_argument("--output", type=Path, help="Fresh mask directory; default identifies the Product 2 generation and model hash")
+    parser.add_argument("--source", type=Path, required=True)
+    parser.add_argument("--checkpoint", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--threads", type=int, default=4)
+    parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     arguments = parser.parse_args()
+    if arguments.threads < 1:
+        parser.error("--threads must be positive")
 
-    torch.set_num_threads(4)
-    checkpoint = torch.load(MODEL_FILE, map_location="cpu", weights_only=False)
+    torch.set_num_threads(arguments.threads)
+    device = torch.device("cuda" if arguments.device == "auto" and torch.cuda.is_available() else "cpu" if arguments.device == "auto" else arguments.device)
+    if device.type == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("CUDA requested but unavailable")
+    model_file = arguments.checkpoint.expanduser().resolve()
+    checkpoint = torch.load(model_file, map_location="cpu", weights_only=False)
     normalization = checkpoint["normalization"]
     if checkpoint["input_fields"] != FIELDS or normalization["fields"] != FIELDS:
         raise ValueError("This script expects the four-field single-frame WIC model")
@@ -51,13 +55,13 @@ def main():
         raise ValueError("The saved checkpoint is not the requested weight 0.1 model")
     model = SmallUNet(input_channels=8)
     model.load_state_dict(checkpoint["state_dict"])
-    model.eval()
+    model.to(device).eval()
     threshold = checkpoint["threshold"]
-    model_sha = hashlib.sha256(MODEL_FILE.read_bytes()).hexdigest()
+    model_sha = hashlib.sha256(model_file.read_bytes()).hexdigest()
 
     source = arguments.source.expanduser().resolve()
-    output = arguments.output.expanduser().resolve() if arguments.output is not None else DATA / f"automatic_masks_fuvpy_bs2d_sigma2_pointing_v1_{model_sha[:12]}"
-    example_figure = FIGURES / f"{output.name}_examples.png"
+    output = arguments.output.expanduser().resolve()
+    example_figure = output / "examples.png"
 
 
     def model_inputs(channels):
@@ -77,7 +81,6 @@ def main():
     if not files:
         raise FileNotFoundError(f"No orbit files found in {source}")
     output.mkdir(parents=True, exist_ok=False)
-    FIGURES.mkdir(exist_ok=True)
 
     #%% Read each source orbit in small batches and save every raw predicted mask
 
@@ -100,7 +103,7 @@ def main():
                 finite_wic = np.isfinite(channels[:, 0])
                 values = model_inputs(channels)
                 with torch.inference_mode():
-                    probability = model(torch.from_numpy(values)).sigmoid().numpy()
+                    probability = model(torch.from_numpy(values).to(device)).sigmoid().cpu().numpy()
                 raw_mask = probability >= threshold
                 masks.append(raw_mask)
                 nonempty += int(finite_wic.any(axis=(1, 2)).sum())
@@ -125,7 +128,7 @@ def main():
     #%% Mark the collection complete only after every file has an aligned output
 
     summary = {
-        "model": str(MODEL_FILE), "model_sha256": model_sha,
+        "model": str(model_file), "model_sha256": model_sha,
         "source_directory": str(source), "threshold": threshold,
         "mask_meaning": "Raw thresholded model prediction over the full 46x46 grid; true means keep. No hole filling, component filtering, or manual override. Combine with intrinsic product validity in the VAE.",
         "alignment": "One NPZ per source orbit, same stem and source frame order; time is datetime64[us] and mask has shape (frames, 46, 46)",

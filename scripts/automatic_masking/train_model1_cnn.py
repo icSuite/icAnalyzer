@@ -1,6 +1,6 @@
 """Train the single-frame Model1 whole-frame acceptance CNN."""
 
-#%% Imports and frozen reference paths
+#%% Imports
 
 import argparse
 import csv
@@ -19,10 +19,6 @@ from scripts.automatic_masking.model1_cnn import (
 from scripts.automatic_masking.prepare_model1_training_data import CORE, sha, write_json
 
 
-ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_PREPARED = ROOT / "figures/validation/wic_input_selection_20261014"
-DEFAULT_MODEL2 = ROOT / "data/training_data/U_net_weight_0p1.pt"
-DEFAULT_OUTPUT = ROOT / "figures/validation/wic_model1_acceptance_20261105"
 ACCEPT_SEED = 12027
 
 
@@ -49,15 +45,14 @@ def run(arguments):
     if output.exists():
         raise FileExistsError("Choose a fresh Model1 output directory")
 
-    torch.set_num_threads(4)
+    torch.set_num_threads(arguments.threads)
     torch.set_num_interop_threads(1)
     reference = json.loads((prepared / "protocol.json").read_text())
-    annotation = ROOT / "data/partial_image_annotations_46x46.json"
     if sha(model2_checkpoint) != reference["baseline_checkpoint_sha256"]:
         raise ValueError("Model2 checkpoint differs from the prepared Model1 population")
     if sha(prepared / "frames.csv") != reference["frames_sha256"]:
         raise ValueError("Model1 frame table differs from the prepared population")
-    if sha(annotation) != reference["annotation_sha256"]:
+    if sha(prepared / "annotations_snapshot.json") != reference["annotation_sha256"]:
         raise ValueError("Manual annotations differ from the prepared Model1 population")
 
     rows = list(csv.DictReader((prepared / "frames.csv").open()))
@@ -169,10 +164,14 @@ def run(arguments):
 
 def parse_arguments(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--prepared", type=Path, default=DEFAULT_PREPARED)
-    parser.add_argument("--model2", type=Path, default=DEFAULT_MODEL2)
-    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
-    return parser.parse_args(argv)
+    parser.add_argument("--prepared", type=Path, required=True)
+    parser.add_argument("--model2", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--threads", type=int, default=4)
+    arguments = parser.parse_args(argv)
+    if arguments.threads < 1:
+        parser.error("--threads must be positive")
+    return arguments
 
 
 if __name__ == "__main__":
