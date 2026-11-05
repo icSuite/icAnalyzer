@@ -17,14 +17,18 @@ import torch
 from torch.utils.data import DataLoader
 
 from icanalyzer.wic_si12.data import (
+    ChannelTransform,
     WICSI12ArrayDataset,
     fit_channel_transform,
+    fit_precision_weighting,
     load_good_orbit_intervals,
     load_precipitation_cs_files,
     select_annotated_orbit_files,
     split_orbit_files,
 )
 from icanalyzer.wic_si12.comparison import load_paired_files, pair_orbit_files
+from scripts.manual_masking.annotated_data import load_annotations, select_annotation_files, annotation_intervals, apply_annotations
+from icanalyzer.wic_si12.count_likelihood import COUNT_UNCERTAINTY_LOSS_KIND, fit_count_uncertainty_configuration
 from icanalyzer.wic_si12.ensemble import (
     correct_wic_roundoff,
     ensemble_statistics,
@@ -35,7 +39,9 @@ from icanalyzer.wic_si12.model import SplineWICSI12VAE
 from icanalyzer.wic_si12.physics import conductance_from_corrected_wic
 from icanalyzer.wic_si12.workflow import (
     LEGACY_LOSS_CONFIGURATION,
+    GAUSSIAN_UNCERTAINTY_LOSS_KIND,
     evaluate_vae,
+    gaussian_uncertainty_configuration,
     load_run_artifact,
     save_run_artifact,
     set_random_seed,
@@ -45,7 +51,7 @@ from icanalyzer.wic_si12.workflow import (
 
 #%% Input discovery
 
-def discover_files(inputs):
+def discover_files(inputs, product_name="precipitation_cs"):
     files = []
     for value in inputs:
         path = Path(value)
@@ -57,7 +63,7 @@ def discover_files(inputs):
             files.extend(sorted(Path().glob(value)))
     files = sorted({path.resolve() for path in files})
     if not files:
-        raise FileNotFoundError("no precipitation_cs orbit files were found")
+        raise FileNotFoundError(f"no {product_name} orbit files were found")
     return files
 
 
@@ -209,6 +215,8 @@ def validate_reused_artifact(artifact, split, arguments, train_product):
 
     configuration = artifact["training_configuration"]
     provenance = artifact["data_provenance"]
+    saved_loss_configuration = configuration.get("loss_configuration", {})
+    annotation_file = arguments.annotations or arguments.hybrid_annotations
     checks = {
         "latent_dim": (configuration.get("latent_dim"), arguments.latent_dim),
         "seed": (configuration.get("seed"), arguments.seed),
@@ -220,7 +228,11 @@ def validate_reused_artifact(artifact, split, arguments, train_product):
         ),
         "manual_frame_intervals": (
             provenance.get("manual_frame_intervals"),
-            None if arguments.all_frames else str(Path(arguments.segments).resolve()),
+            None if arguments.all_frames or arguments.annotations else str(Path(arguments.segments).resolve()),
+        ),
+        "manual_annotations": (
+            provenance.get("manual_annotations"),
+            None if not annotation_file else load_annotations(annotation_file, arguments.segments if arguments.hybrid_annotations else None)["provenance"]
         ),
         "legacy_comparison_directory": (
             provenance.get("legacy_comparison_directory"),
@@ -235,7 +247,39 @@ def validate_reused_artifact(artifact, split, arguments, train_product):
             provenance.get("upstream_quality_weight_interpretation"),
             train_product["metadata"][0]["upstream_quality_weight_interpretation"],
         ),
+        "measurement_uncertainty_in_loss": (
+            bool(saved_loss_configuration.get("measurement_uncertainty_in_loss")),
+            bool(arguments.measurement_uncertainty or arguments.gaussian_uncertainty or arguments.count_uncertainty),
+        ),
+        "gaussian_uncertainty": (
+            saved_loss_configuration.get("kind") == GAUSSIAN_UNCERTAINTY_LOSS_KIND,
+            bool(arguments.gaussian_uncertainty)
+        ),
+        "count_uncertainty": (
+            saved_loss_configuration.get("kind") == COUNT_UNCERTAINTY_LOSS_KIND,
+            bool(arguments.count_uncertainty)
+        ),
     }
+    if arguments.gaussian_uncertainty:
+        checks["model_error_std"] = (
+            saved_loss_configuration.get("model_error_std"), list(arguments.model_error_std)
+        )
+    if arguments.count_uncertainty:
+        checks["count_transform"] = (saved_loss_configuration.get("transform"), artifact["transform"])
+        checks["count_model_error_fraction"] = (
+            saved_loss_configuration.get("model_error_fraction"), list(arguments.count_model_error_fraction)
+        )
+        retained_training = WICSI12ArrayDataset(
+            train_product, ChannelTransform.from_dict(artifact["transform"]),
+            maximum_missing_fraction=arguments.maximum_missing_fraction
+        )
+        refitted = fit_count_uncertainty_configuration(retained_training, arguments.count_model_error_fraction)
+        checks["count_channel_scales"] = (saved_loss_configuration.get("channel_scale_counts"), refitted["channel_scale_counts"])
+    saved_holes = configuration.get("training_holes") or {}
+    checks["training_holes"] = (bool(saved_holes), bool(arguments.training_holes))
+    if arguments.training_holes:
+        checks["hole_probability"] = (saved_holes.get("probability"), arguments.hole_probability)
+        checks["hole_size"] = (saved_holes.get("size"), arguments.hole_size)
     mismatched = [
         name for name, (saved, requested) in checks.items()
         if saved != requested
@@ -311,7 +355,12 @@ def sparse_validation(
 def run(arguments):
     files = discover_files(arguments.inputs)
     intervals = None
-    if not arguments.all_frames:
+    annotation_file = arguments.annotations or arguments.hybrid_annotations
+    annotations = load_annotations(annotation_file, arguments.segments if arguments.hybrid_annotations else None) if annotation_file else None
+    if annotations is not None:
+        files = select_annotation_files(files, annotations)
+        intervals = annotation_intervals(annotations)
+    elif not arguments.all_frames:
         intervals = load_good_orbit_intervals(arguments.segments)
         files = select_annotated_orbit_files(files, intervals)
 
@@ -340,6 +389,10 @@ def run(arguments):
         split["test"], intervals, arguments.minimum_sza,
         comparison_pairs, arguments.data_version
     )
+    if annotations is not None:
+        train_product = apply_annotations(train_product, annotations)
+        validation_product = apply_annotations(validation_product, annotations)
+        test_product = apply_annotations(test_product, annotations)
     input_clipping = negative_input_diagnostics(
         train_product, validation_product, test_product
     )
@@ -365,10 +418,25 @@ def run(arguments):
         transform = fit_channel_transform(
             train_product["values"], train_product["valid"]
         )
+        loss_configuration = dict(LEGACY_LOSS_CONFIGURATION)
+        if arguments.gaussian_uncertainty:
+            loss_configuration = gaussian_uncertainty_configuration(arguments.model_error_std)
+        elif arguments.measurement_uncertainty:
+            loss_configuration = fit_precision_weighting(
+                train_product,
+                transform,
+                variance_floor=arguments.uncertainty_variance_floor,
+                maximum_relative_precision=(
+                    arguments.maximum_relative_precision
+                ),
+                maximum_scale_samples=arguments.precision_scale_samples,
+            )
         train_loader = make_loader(
             train_product, transform, arguments.batch_size, shuffle=True,
             maximum_missing_fraction=arguments.maximum_missing_fraction
         )
+        if arguments.count_uncertainty:
+            loss_configuration = fit_count_uncertainty_configuration(train_loader.dataset, arguments.count_model_error_fraction)
         validation_loader = make_loader(
             validation_product, transform, arguments.batch_size, shuffle=False,
             maximum_missing_fraction=arguments.maximum_missing_fraction
@@ -394,10 +462,12 @@ def run(arguments):
             beta=arguments.beta,
             device=device,
             seed=arguments.seed,
-            loss_configuration=LEGACY_LOSS_CONFIGURATION,
+            loss_configuration=loss_configuration,
             scheduler_factor=arguments.scheduler_factor,
             scheduler_patience=arguments.scheduler_patience,
             scheduler_minimum_learning_rate=arguments.scheduler_minimum_learning_rate,
+            hole_probability=arguments.hole_probability if arguments.training_holes else 0.0,
+            hole_size=arguments.hole_size,
         )
         evaluation = {}
         if test_loader is not None:
@@ -406,7 +476,7 @@ def run(arguments):
                 test_loader,
                 beta=arguments.beta,
                 device=device,
-                loss_configuration=LEGACY_LOSS_CONFIGURATION,
+                loss_configuration=loss_configuration,
             )
 
         provenance = {
@@ -440,6 +510,11 @@ def run(arguments):
             "manual_frame_intervals": (
                 None if intervals is None else str(Path(arguments.segments).resolve())
             ),
+            "manual_annotations": None if annotations is None else annotations["provenance"],
+            "annotation_selection": {
+                name: product["annotation_selection"] for name, product in
+                (("train", train_product), ("validation", validation_product), ("test", test_product)) if product is not None
+            } if annotations is not None else None,
             "sza_excluded_files": {
                 "train": train_product.get("excluded_files", []),
                 "validation": (
@@ -472,7 +547,15 @@ def run(arguments):
             "scheduler_minimum_learning_rate": (
                 arguments.scheduler_minimum_learning_rate
             ),
-            "loss_configuration": LEGACY_LOSS_CONFIGURATION,
+            "loss_configuration": loss_configuration,
+            "training_holes": {
+                "probability": arguments.hole_probability,
+                "size": arguments.hole_size,
+                "seed": arguments.seed + 3,
+                "center_policy": "uniform_original_valid_pixel",
+                "target_policy": "original_observed_cells_retained",
+                "applied_to": "training_only"
+            } if arguments.training_holes else None,
             "maximum_missing_fraction": arguments.maximum_missing_fraction,
             "minimum_sza_degrees": arguments.minimum_sza,
             "comparison_data_version": arguments.data_version,
@@ -607,7 +690,10 @@ def parse_arguments(argv=None):
         ),
         help="manual inclusive WIC-frame intervals used by default",
     )
-    parser.add_argument(
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument("--annotations", help="converted 46x46 JSON: completed good and masked partial frames; replaces CSV selection")
+    selection.add_argument("--hybrid-annotations", help="converted 46x46 JSON overrides reviewed orbits; --segments CSV is fallback elsewhere")
+    selection.add_argument(
         "--all-frames",
         "--no-csv-selection",
         dest="all_frames",
@@ -639,6 +725,57 @@ def parse_arguments(argv=None):
     parser.add_argument("--latent-dim", type=int, default=36)
     parser.add_argument("--learning-rate", type=float, default=1e-4)
     parser.add_argument("--beta", type=float, default=1.0)
+    parser.add_argument(
+        "--training-holes", action="store_true",
+        help="remove artificial input-only squares during training while retaining their observed targets"
+    )
+    parser.add_argument("--hole-probability", type=float, default=0.5, help="probability of one hole per training image")
+    parser.add_argument("--hole-size", type=int, default=12, help="side length of the training hole in CS cells")
+    uncertainty_options = parser.add_mutually_exclusive_group()
+    uncertainty_options.add_argument(
+        "--measurement-uncertainty",
+        action="store_true",
+        help=(
+            "weight reconstruction residuals by propagated WIC/SI12 measurement "
+            "precision; disabled by default"
+        ),
+    )
+    uncertainty_options.add_argument(
+        "--gaussian-uncertainty", action="store_true",
+        help="use measurement variance plus fixed model-error variance in a reference-scaled Gaussian loss"
+    )
+    uncertainty_options.add_argument(
+        "--count-uncertainty", action="store_true",
+        help="opt-in count-space Gaussian likelihood using original count errors and censored zeros"
+    )
+    parser.add_argument(
+        "--model-error-std", nargs=2, type=float, default=None,
+        metavar=("WIC", "SI12"),
+        help="fixed model-error standard deviations in normalized log10 units for --gaussian-uncertainty"
+    )
+    parser.add_argument(
+        "--count-model-error-fraction", nargs=2, type=float, default=None,
+        metavar=("WIC", "SI12"),
+        help="fixed count-space discrepancy as fractions of training-fitted channel RMS counts; default 0.5 0.5"
+    )
+    parser.add_argument(
+        "--uncertainty-variance-floor",
+        type=float,
+        default=None,
+        help="minimum normalized-log10 measurement variance",
+    )
+    parser.add_argument(
+        "--maximum-relative-precision",
+        type=float,
+        default=None,
+        help="cap on precision relative to its fitted training-channel median",
+    )
+    parser.add_argument(
+        "--precision-scale-samples",
+        type=int,
+        default=None,
+        help="maximum sampled training cells per channel for fitting precision scale",
+    )
     parser.add_argument("--spline-control-points", type=int, default=30)
     parser.add_argument("--spline-degree", type=int, default=3)
     parser.add_argument("--scheduler-factor", type=float, default=0.5)
@@ -650,7 +787,7 @@ def parse_arguments(argv=None):
         "--maximum-missing-fraction",
         type=float,
         default=0.33,
-        help="drop frames with more than this fraction of invalid common pixels",
+        help="drop frames above this intrinsic paired-pixel missing fraction, before SZA/manual masks",
     )
     parser.add_argument(
         "--minimum-sza",
@@ -673,7 +810,24 @@ def parse_arguments(argv=None):
     )
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--device", default="auto", choices=("auto", "cpu", "cuda"))
-    return parser.parse_args(argv)
+    arguments = parser.parse_args(argv)
+    if arguments.model_error_std is not None and not arguments.gaussian_uncertainty:
+        parser.error("--model-error-std requires --gaussian-uncertainty")
+    if arguments.count_model_error_fraction is not None and not arguments.count_uncertainty:
+        parser.error("--count-model-error-fraction requires --count-uncertainty")
+    precision_options = {"uncertainty_variance_floor": 1e-3, "maximum_relative_precision": 100.0, "precision_scale_samples": 2_000_000}
+    for name, default in precision_options.items():
+        if getattr(arguments, name) is not None and not arguments.measurement_uncertainty:
+            parser.error("--" + name.replace("_", "-") + " requires --measurement-uncertainty")
+        if getattr(arguments, name) is None:
+            setattr(arguments, name, default)
+    arguments.model_error_std = [0.5, 0.5] if arguments.model_error_std is None else arguments.model_error_std
+    arguments.count_model_error_fraction = [0.5, 0.5] if arguments.count_model_error_fraction is None else arguments.count_model_error_fraction
+    for name in ("model_error_std", "count_model_error_fraction"):
+        values = np.asarray(getattr(arguments, name))
+        if np.any(~np.isfinite(values)) or np.any(values <= 0):
+            parser.error("--" + name.replace("_", "-") + " requires finite positive values")
+    return arguments
 
 
 if __name__ == "__main__":

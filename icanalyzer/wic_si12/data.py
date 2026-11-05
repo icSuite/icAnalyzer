@@ -29,6 +29,10 @@ REQUIRED_CAMERA_FIELDS = (
     "si12",
     "dsi12",
 )
+METHOD_QUALITY_WEIGHT_ORIENTATION_MARKERS = (
+    "auroral-quality",
+    "1 minus",
+)
 
 
 class _NoFramesRemainError(ValueError):
@@ -153,6 +157,19 @@ def _require_product_contract(product):
             "proton_energy_model='hardy'"
         )
 
+    quality_method = str(
+        product.attrs.get("method_quality_weight_method", "")
+    ).lower()
+    if not all(
+        marker in quality_method
+        for marker in METHOD_QUALITY_WEIGHT_ORIENTATION_MARKERS
+    ):
+        raise ValueError(
+            "the VAE requires Product-2 method_quality_weight metadata that "
+            "explicitly defines auroral quality as 1 minus the fuvpy weight; "
+            "refusing an absent, ambiguous, or old background-fit orientation"
+        )
+
 
 def _validated_minimum_sza(minimum_sza):
     if minimum_sza is None:
@@ -257,9 +274,20 @@ def _materialize_precipitation_cs(
         "manual_frame_selection": annotation,
         "minimum_sza_degrees": minimum_sza,
         "quality_weight_source": (
-            "one_minus_method_quality_weight_times_channel_coverage"
+            "method_quality_weight_times_channel_coverage"
         ),
-        "upstream_quality_weight_interpretation": "background_fit_weight",
+        "upstream_quality_weight_interpretation": "auroral_quality_weight",
+        "method_quality_weight_method": str(
+            product.attrs["method_quality_weight_method"]
+        ),
+        "method_quality_weight_spatial_propagation": str(
+            product.attrs.get(
+                "method_quality_weight_spatial_propagation", "unrecorded"
+            )
+        ),
+        "method_quality_weight_floor": float(
+            product.attrs.get("method_quality_weight_floor", 0.0)
+        ),
     }
     if sza_diagnostics is not None:
         metadata.update({
@@ -340,7 +368,7 @@ def _materialize_precipitation_cs(
         (wic_valid, si12_valid),
         axis=1,
     )
-    auroral_weight = np.clip(1.0 - method_quality[:, None, :, :], 0.0, 1.0)
+    auroral_weight = np.clip(method_quality[:, None, :, :], 0.0, 1.0)
     quality = auroral_weight * np.clip(coverage, 0.0, 1.0)
     quality = np.where(valid & np.isfinite(quality), quality, 0.0)
 
@@ -530,19 +558,28 @@ class ChannelTransform:
         self.center = np.asarray(center, dtype=np.float32)
         self.spread = np.asarray(spread, dtype=np.float32)
         self.kind = str(kind)
-        if self.scale.shape != (2,) or self.center.shape != (2,) or self.spread.shape != (2,):
-            raise ValueError("scale, center, and spread must each have two values")
+        if self.scale.ndim != 1 or not self.scale.size or self.center.shape != self.scale.shape or self.spread.shape != self.scale.shape:
+            raise ValueError("scale, center, and spread must be nonempty and have one value per channel")
         if np.any(self.scale <= 0) or np.any(self.spread <= 0):
             raise ValueError("scale and spread must be positive")
         if self.kind not in (self.ASINH_KIND, self.LOG10_KIND):
             raise ValueError(f"unsupported channel transform {self.kind!r}")
+
+    @property
+    def channel_count(self):
+        return int(self.scale.size)
+
+    def _channel_shape(self, values):
+        if values.ndim < 2 or values.shape[1] != self.channel_count:
+            raise ValueError(f"values must have {self.channel_count} channels on axis 1")
+        return (1, self.channel_count) + (1,) * (values.ndim - 2)
 
     def transform(self, values):
         if torch.is_tensor(values):
             scale = torch.as_tensor(self.scale, device=values.device, dtype=values.dtype)
             center = torch.as_tensor(self.center, device=values.device, dtype=values.dtype)
             spread = torch.as_tensor(self.spread, device=values.device, dtype=values.dtype)
-            shape = (1, 2) + (1,) * (values.ndim - 2)
+            shape = self._channel_shape(values)
             if self.kind == self.LOG10_KIND:
                 if torch.any(values < 0):
                     raise ValueError("log10 channel transform requires nonnegative values")
@@ -554,7 +591,7 @@ class ChannelTransform:
             ) / spread.reshape(shape)
 
         values = np.asarray(values)
-        shape = (1, 2) + (1,) * (values.ndim - 2)
+        shape = self._channel_shape(values)
         if self.kind == self.LOG10_KIND:
             if np.any(values < 0):
                 raise ValueError("log10 channel transform requires nonnegative values")
@@ -570,14 +607,14 @@ class ChannelTransform:
             scale = torch.as_tensor(self.scale, device=transformed.device, dtype=transformed.dtype)
             center = torch.as_tensor(self.center, device=transformed.device, dtype=transformed.dtype)
             spread = torch.as_tensor(self.spread, device=transformed.device, dtype=transformed.dtype)
-            shape = (1, 2) + (1,) * (transformed.ndim - 2)
+            shape = self._channel_shape(transformed)
             restored = transformed * spread.reshape(shape) + center.reshape(shape)
             if self.kind == self.LOG10_KIND:
                 return torch.clamp(torch.pow(10.0, restored) - 1.0, min=0.0)
             return scale.reshape(shape) * torch.sinh(restored)
 
         transformed = np.asarray(transformed)
-        shape = (1, 2) + (1,) * (transformed.ndim - 2)
+        shape = self._channel_shape(transformed)
         restored = transformed * self.spread.reshape(shape) + self.center.reshape(shape)
         if self.kind == self.LOG10_KIND:
             return np.maximum(np.power(10.0, restored) - 1.0, 0.0)
@@ -586,7 +623,9 @@ class ChannelTransform:
     def variance(self, values, standard_deviation):
         values = np.asarray(values, dtype=np.float32)
         standard_deviation = np.asarray(standard_deviation, dtype=np.float32)
-        shape = (1, 2) + (1,) * (values.ndim - 2)
+        if standard_deviation.shape != values.shape:
+            raise ValueError("standard deviation must match the channel values")
+        shape = self._channel_shape(values)
         scale = self.scale.reshape(shape)
         spread = self.spread.reshape(shape)
         if self.kind == self.LOG10_KIND:
@@ -732,6 +771,7 @@ def fit_precision_weighting(
 
     return {
         "kind": "training_median_precision_v1",
+        "measurement_uncertainty_in_loss": True,
         "precision_scale": precision_scale.tolist(),
         "variance_floor": variance_floor,
         "maximum_relative_precision": maximum_relative_precision,
@@ -739,7 +779,7 @@ def fit_precision_weighting(
         "frame_stride": frame_stride,
         "scale_sample_count": scale_sample_count,
         "relative_precision_diagnostics": relative_precision_diagnostics,
-        "loss_reduction": "mean_valid_support_per_sample_channel",
+        "loss_reduction": "global_effective_weight_sum_times_state_size",
     }
 
 
@@ -791,6 +831,14 @@ class WICSI12ArrayDataset(Dataset):
         self.standard_deviation = self.standard_deviation[self.selected_indices]
         self.valid = self.valid[self.selected_indices]
         self.quality = self.quality[self.selected_indices]
+        self.kp = None
+        if "kp" in product_data:
+            kp = np.asarray(product_data["kp"], dtype=np.float32)
+            if kp.shape != (expected[0],):
+                raise ValueError("Kp must have one label for every input image")
+            self.kp = kp[self.selected_indices]
+            if not np.isfinite(self.kp).all() or np.any((self.kp < 0) | (self.kp > 9)):
+                raise ValueError("retained image Kp must be finite and within 0–9")
         self.common_valid = common_valid[self.selected_indices]
         self.missing_fraction = missing_fraction[self.selected_indices]
         self.weight = np.min(self.quality, axis=1, keepdims=True)
@@ -812,11 +860,16 @@ class WICSI12ArrayDataset(Dataset):
         target[:, ~mask[0]] = 0.0
         weight = self.weight[index]
         encoder_input = np.concatenate((target, weight), axis=0)
-        return {
+        batch = {
             "encoder_input": torch.from_numpy(encoder_input),
             "target": torch.from_numpy(target),
             "mask": torch.from_numpy(mask),
             "weight": torch.from_numpy(weight),
             "variance": torch.from_numpy(self.transformed_variance[index]),
+            "physical_target": torch.from_numpy(np.where(mask, self.values[index], 0.0)),
+            "physical_standard_deviation": torch.from_numpy(np.where(mask, self.standard_deviation[index], 0.0)),
             "index": int(self.selected_indices[index]),
         }
+        if self.kp is not None:
+            batch["kp"] = torch.tensor(self.kp[index], dtype=torch.float32)
+        return batch

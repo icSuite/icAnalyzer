@@ -66,6 +66,12 @@ class FakeProduct:
             "proton_energy_uncertainty_constant": 0.0,
             "count_source": "background_subtracted",
             "spatial_smoothing_kernel": "none",
+            "method_quality_weight_method": (
+                "WIC auroral-quality field defined as 1 minus the Product-1 "
+                "fuvpy dgweight"
+            ),
+            "method_quality_weight_spatial_propagation": "none",
+            "method_quality_weight_floor": 1e-6,
         }
         self.read_log = []
         for name in REQUIRED_CAMERA_FIELDS:
@@ -156,10 +162,10 @@ def test_si13_validity_does_not_mask_wic_si12_training_fields():
     assert loaded["valid"][:, :, 0, 0].all()
 
 
-def test_inverts_upstream_background_fit_weight_before_applying_coverage():
+def test_uses_product2_auroral_quality_weight_before_applying_coverage():
     product = FakeProduct()
-    product.arrays["method_quality_weight"][:, 0, 0] = 0.0
-    product.arrays["method_quality_weight"][:, 0, 1] = 1.0
+    product.arrays["method_quality_weight"][:, 0, 0] = 1.0
+    product.arrays["method_quality_weight"][:, 0, 1] = 0.0
     product.arrays["wic_coverage"][:, 0, 0] = 0.5
 
     loaded = load_precipitation_cs(
@@ -171,11 +177,26 @@ def test_inverts_upstream_background_fit_weight_before_applying_coverage():
     np.testing.assert_allclose(loaded["quality"][:, 1, 0, 0], 1.0)
     np.testing.assert_allclose(loaded["quality"][:, :, 0, 1], 0.0)
     assert loaded["metadata"]["quality_weight_source"] == (
-        "one_minus_method_quality_weight_times_channel_coverage"
+        "method_quality_weight_times_channel_coverage"
     )
     assert loaded["metadata"]["upstream_quality_weight_interpretation"] == (
-        "background_fit_weight"
+        "auroral_quality_weight"
     )
+    assert "1 minus" in loaded["metadata"]["method_quality_weight_method"]
+
+
+def test_rejects_product2_without_explicit_auroral_weight_orientation():
+    product = FakeProduct()
+    product.attrs["method_quality_weight_method"] = "unrecorded"
+
+    try:
+        load_precipitation_cs(
+            "or_0042.nc", product_loader=lambda _path: product
+        )
+    except ValueError as error:
+        assert "explicitly defines auroral quality" in str(error)
+    else:
+        raise AssertionError("ambiguous Product-2 quality weight was accepted")
 
 
 def test_negative_camera_values_are_clipped_and_reported_as_upstream_problem():
@@ -422,6 +443,7 @@ def test_fits_one_training_precision_scale_per_channel():
     )
 
     assert weighting["kind"] == "training_median_precision_v1"
+    assert weighting["measurement_uncertainty_in_loss"] is True
     np.testing.assert_allclose(weighting["precision_scale"], [0.625, 0.15625])
     assert weighting["frame_stride"] == 1
     assert weighting["scale_sample_count"] == [8, 8]
@@ -429,7 +451,9 @@ def test_fits_one_training_precision_scale_per_channel():
         [item["median"] for item in weighting["relative_precision_diagnostics"]],
         [1.0, 1.0],
     )
-    assert weighting["loss_reduction"] == "mean_valid_support_per_sample_channel"
+    assert weighting["loss_reduction"] == (
+        "global_effective_weight_sum_times_state_size"
+    )
 
 
 def test_orbit_split_has_no_overlap():

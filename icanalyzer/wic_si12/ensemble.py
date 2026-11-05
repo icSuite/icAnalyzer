@@ -19,8 +19,8 @@ def correct_wic_roundoff(samples, transform):
     """Set only float32 roundoff below the physical WIC boundary to zero."""
 
     samples = np.asarray(samples)
-    if samples.ndim != 4 or samples.shape[1] != 2:
-        raise ValueError("decoded samples must have shape (sample, 2, y, x)")
+    if samples.ndim != 4 or samples.shape[1] < 1:
+        raise ValueError("decoded samples must have shape (sample, channel, y, x)")
 
     wic = samples[:, 0]
     negative = wic < 0
@@ -56,6 +56,8 @@ def sample_decoded_ensemble(
     device="cpu",
     seed=0,
     return_latent=False,
+    support_mask=None,
+    kp=None,
 ):
     """Decode exactly ``n_samples`` paired corrected-WIC/SI12 fields."""
 
@@ -69,9 +71,30 @@ def sample_decoded_ensemble(
     generator.manual_seed(int(seed))
     model = model.to(device)
     model.eval()
+    field_names = getattr(model, "field_names", None)
+    if field_names is not None and len(field_names) != transform.channel_count:
+        raise ValueError("model output fields and channel transform do not align")
+    conditioned = getattr(model, "kp_conditioning", None) is not None
+    if conditioned and kp is None:
+        raise ValueError("Kp-conditioned sampling requires an explicit requested Kp")
+    if not conditioned and kp is not None:
+        raise ValueError("cannot request Kp from an unconditional model")
+    if conditioned:
+        kp = np.asarray(kp, dtype=np.float32)
+        if kp.ndim == 0:
+            kp = np.full(n_samples, kp, dtype=np.float32)
+        if kp.shape != (n_samples,) or not np.isfinite(kp).all() or np.any((kp < 0) | (kp > 9)):
+            raise ValueError("sample Kp must be a finite 0–9 scalar or one value per member")
+    if support_mask is not None:
+        support_mask = np.asarray(support_mask, dtype=bool)
+        if support_mask.shape != tuple(model.image_shape) or not support_mask.any():
+            raise ValueError("support_mask must match the grid and contain supported cells")
+        supported = torch.as_tensor(support_mask, device=device)[None, None]
+        physical_zero = transform.transform(np.zeros((1, transform.channel_count, 1, 1), dtype=np.float32))
+        physical_zero = torch.as_tensor(physical_zero, device=device)
 
     physical = np.empty(
-        (n_samples, 2, *model.image_shape), dtype=np.float32
+        (n_samples, transform.channel_count, *model.image_shape), dtype=np.float32
     )
     latent_samples = (
         np.empty((n_samples, model.latent_dim), dtype=np.float32)
@@ -89,8 +112,15 @@ def sample_decoded_ensemble(
             )
             if return_latent:
                 latent_samples[start:stop] = latent.cpu().numpy()
-            transformed = model.decode(latent)
+            condition_arguments = {"kp": torch.as_tensor(kp[start:stop], device=device)} if conditioned else {}
+            transformed = model.decode(latent, **condition_arguments)
+            if support_mask is not None:
+                # Numeric placeholders only: never fabricate zero-valued training targets.
+                # Mask BEFORE exponentiation to avoid overflow outside learned support.
+                transformed = torch.where(supported, transformed, physical_zero)
             physical[start:stop] = transform.inverse(transformed).cpu().numpy()
+            if support_mask is not None:
+                physical[start:stop, :, ~support_mask] = 0.0
 
     if not return_latent:
         return physical

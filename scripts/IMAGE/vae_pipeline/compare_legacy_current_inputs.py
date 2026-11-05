@@ -271,11 +271,11 @@ def run(arguments):
             "quality_weights": {
                 "legacy": "one minus combined robust weight w",
                 "current": (
-                    "one minus method_quality_weight, times channel coverage"
+                    "method_quality_weight, times channel coverage"
                 ),
                 "interpretation": (
-                    "upstream weights measure background-fit conformity and are "
-                    "inverted to weight auroral-interest pixels"
+                    "legacy w is a background-fit weight requiring inversion; "
+                    "Product-2 method_quality_weight is already auroral quality"
                 ),
             },
         },

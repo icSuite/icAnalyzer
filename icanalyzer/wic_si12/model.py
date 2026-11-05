@@ -8,6 +8,8 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+from .count_likelihood import count_space_reconstruction_loss
+
 
 #%% Partial convolution
 
@@ -78,6 +80,9 @@ class SplineWICSI12VAE(nn.Module):
         spline_control_points=30,
         spline_degree=3,
         quality_weight_in_encoder=True,
+        decoder_feature_size=18,
+        kp_conditioning=None,
+        field_names=("wic_corrected", "si12")
     ):
         super().__init__()
         self.image_shape = tuple(int(value) for value in image_shape)
@@ -85,10 +90,26 @@ class SplineWICSI12VAE(nn.Module):
         self.spline_control_points = int(spline_control_points)
         self.spline_degree = int(spline_degree)
         self.quality_weight_in_encoder = bool(quality_weight_in_encoder)
+        self.decoder_feature_size = int(decoder_feature_size)
+        self.kp_conditioning = None if kp_conditioning is None else dict(kp_conditioning)
+        self.field_names = tuple(str(name) for name in field_names)
+        if not self.field_names or any(not name for name in self.field_names) or len(set(self.field_names)) != len(self.field_names):
+            raise ValueError("field_names must contain distinct nonempty names")
+        condition_size = 0
+        if self.kp_conditioning is not None:
+            condition_size = int(self.kp_conditioning.get("embedding_dim", 8))
+            condition_values = [self.kp_conditioning[name] for name in ("center", "scale", "training_min", "training_max")]
+            if not np.isfinite(condition_values).all() or self.kp_conditioning["scale"] <= 0 or condition_size < 1:
+                raise ValueError("Kp normalization must be finite with positive scale and embedding size")
+            if not 0 <= self.kp_conditioning["training_min"] <= self.kp_conditioning["training_max"] <= 9:
+                raise ValueError("training Kp range must lie within 0–9")
+            self.kp_conditioning["embedding_dim"] = condition_size
+        if self.decoder_feature_size not in (18, 30):
+            raise ValueError("decoder feature size must be 18 or 30")
         if self.spline_control_points <= self.spline_degree:
             raise ValueError("spline control-point count must exceed its degree")
 
-        encoder_channels = 3 if self.quality_weight_in_encoder else 2
+        encoder_channels = len(self.field_names) + int(self.quality_weight_in_encoder)
         self.enc_pconv1 = PartialConv2d(
             encoder_channels, 16, kernel_size=3, stride=2, padding=1,
             return_mask=True
@@ -116,21 +137,27 @@ class SplineWICSI12VAE(nn.Module):
         self.encoded_shape = tuple(encoded.shape[1:])
         self.flatten_dim = int(encoded.numel())
 
-        self.fc_mu = nn.Linear(self.flatten_dim, self.latent_dim)
-        self.fc_logvar = nn.Linear(self.flatten_dim, self.latent_dim)
-        self.fc_decode = nn.Linear(self.latent_dim, self.flatten_dim)
+        if condition_size:
+            self.kp_embedding = nn.Sequential(nn.Linear(1, condition_size), nn.SiLU(), nn.Linear(condition_size, condition_size), nn.SiLU())
+        self.fc_mu = nn.Linear(self.flatten_dim + condition_size, self.latent_dim)
+        self.fc_logvar = nn.Linear(self.flatten_dim + condition_size, self.latent_dim)
+        self.fc_decode = nn.Linear(self.latent_dim + condition_size, self.flatten_dim)
 
         self.decoder_seed_shape = (9, 9)
         self.up1 = nn.Upsample(size=self.decoder_seed_shape, mode="nearest")
         self.dec_conv1 = nn.Conv2d(64, 32, kernel_size=3, padding=1)
         self.dec_bn1 = nn.BatchNorm2d(32)
-        self.up2 = nn.Upsample(scale_factor=2, mode="nearest")
+        # Preserve the legacy path unless the spatial-resolution test is requested.
+        if self.decoder_feature_size == 18:
+            self.up2 = nn.Upsample(scale_factor=2, mode="nearest")
+        else:
+            self.up2 = nn.Upsample(size=(self.decoder_feature_size, self.decoder_feature_size), mode="nearest")
         self.dec_conv2 = nn.Conv2d(32, 16, kernel_size=3, padding=1)
         self.dec_bn2 = nn.BatchNorm2d(16)
         self.spline_resize = nn.AdaptiveAvgPool2d(
             (self.spline_control_points, self.spline_control_points)
         )
-        self.spline_conv = nn.Conv2d(16, 2, kernel_size=3, padding=1)
+        self.spline_conv = nn.Conv2d(16, len(self.field_names), kernel_size=3, padding=1)
 
         self.register_buffer(
             "row_basis",
@@ -154,7 +181,25 @@ class SplineWICSI12VAE(nn.Module):
         values = F.relu(self.enc_bn3(values))
         return values, mask
 
-    def encode(self, values, valid):
+    def _kp_features(self, kp, reference):
+        """Kp is a global image condition; it is never obscured by pixel masks."""
+        if self.kp_conditioning is None:
+            if kp is not None:
+                raise ValueError("cannot supply Kp to an unconditional model")
+            return None
+        if kp is None:
+            raise ValueError("Kp-conditioned model requires explicit Kp")
+        kp = torch.as_tensor(kp, device=reference.device, dtype=reference.dtype)
+        if kp.ndim == 0:
+            kp = kp.expand(reference.shape[0])
+        if kp.shape == (reference.shape[0],):
+            kp = kp[:, None]
+        if kp.shape != (reference.shape[0], 1) or not torch.isfinite(kp).all() or torch.any((kp < 0) | (kp > 9)):
+            raise ValueError("Kp must be a finite 0–9 scalar or one value per image")
+        normalized = (kp - self.kp_conditioning["center"]) / self.kp_conditioning["scale"]
+        return self.kp_embedding(normalized)
+
+    def encode(self, values, valid, kp=None):
         if valid is None:
             raise ValueError("partial-convolution encoder requires a validity mask")
         common_mask = torch.all(valid.to(dtype=torch.bool), dim=1, keepdim=True)
@@ -162,6 +207,9 @@ class SplineWICSI12VAE(nn.Module):
             values, common_mask.to(dtype=values.dtype)
         )
         hidden = hidden.reshape(hidden.shape[0], -1)
+        condition = self._kp_features(kp, hidden)
+        if condition is not None:
+            hidden = torch.cat((hidden, condition), dim=1)
         return self.fc_mu(hidden), self.fc_logvar(hidden)
 
     @staticmethod
@@ -169,7 +217,10 @@ class SplineWICSI12VAE(nn.Module):
         standard_deviation = torch.exp(0.5 * logvar)
         return mu + torch.randn_like(standard_deviation) * standard_deviation
 
-    def decode_coefficients(self, latent):
+    def decode_coefficients(self, latent, kp=None):
+        condition = self._kp_features(kp, latent)
+        if condition is not None:
+            latent = torch.cat((latent, condition), dim=1)
         hidden = self.fc_decode(latent)
         hidden = hidden.reshape(latent.shape[0], *self.encoded_shape)
         hidden = self.up1(hidden)
@@ -179,22 +230,24 @@ class SplineWICSI12VAE(nn.Module):
         hidden = self.spline_resize(hidden)
         return self.spline_conv(hidden)
 
-    def decode(self, latent):
-        coefficients = self.decode_coefficients(latent)
+    def decode(self, latent, kp=None):
+        condition_arguments = {} if kp is None else {"kp": kp}
+        coefficients = self.decode_coefficients(latent, **condition_arguments)
         return torch.einsum(
-            "yi,bcij,xj->bcyx",
-            self.row_basis,
-            coefficients,
+            "xi,bcij,yj->bcyx",
             self.column_basis,
+            coefficients,
+            self.row_basis,
         )
 
-    def forward(self, encoder_input, valid=None):
-        mu, logvar = self.encode(encoder_input, valid)
+    def forward(self, encoder_input, valid=None, kp=None):
+        condition_arguments = {} if kp is None else {"kp": kp}
+        mu, logvar = self.encode(encoder_input, valid, **condition_arguments)
         latent = self.reparameterize(mu, logvar)
-        return self.decode(latent), mu, logvar
+        return self.decode(latent, **condition_arguments), mu, logvar
 
     def configuration(self):
-        return {
+        configuration = {
             "model": "SplineWICSI12VAE",
             "image_shape": list(self.image_shape),
             "latent_dim": self.latent_dim,
@@ -203,14 +256,21 @@ class SplineWICSI12VAE(nn.Module):
             "encoder": "partial_convolution",
             "encoder_channels": [self.enc_pconv1.in_channels, 16, 32, 64],
             "encoder_input_fields": (
-                ["wic_corrected", "si12", "auroral_interest_weight"]
+                [*self.field_names, "auroral_interest_weight"]
                 if self.quality_weight_in_encoder
-                else ["wic_corrected", "si12"]
+                else list(self.field_names)
             ),
+            "field_names": list(self.field_names),
             "quality_weight_in_encoder": self.quality_weight_in_encoder,
             "decoder_seed_shape": list(self.decoder_seed_shape),
-            "decoder_channels": [64, 32, 16, 2],
+            "decoder_channels": [64, 32, 16, len(self.field_names)],
         }
+        # Old artifacts imply size 18; retain their exact default configuration.
+        if self.decoder_feature_size != 18:
+            configuration["decoder_feature_size"] = self.decoder_feature_size
+        if self.kp_conditioning is not None:
+            configuration["kp_conditioning"] = dict(self.kp_conditioning)
+        return configuration
 
     @classmethod
     def from_configuration(cls, configuration):
@@ -224,6 +284,9 @@ class SplineWICSI12VAE(nn.Module):
             quality_weight_in_encoder=configuration.get(
                 "quality_weight_in_encoder", False
             ),
+            decoder_feature_size=configuration.get("decoder_feature_size", 18),
+            kp_conditioning=configuration.get("kp_conditioning"),
+            field_names=configuration.get("field_names", ("wic_corrected", "si12"))
         )
 
 
@@ -336,8 +399,27 @@ def vae_loss(
     mu,
     logvar,
     beta=1.0,
+    transformed_variance=None,
+    precision_scale=None,
+    variance_floor=1e-3,
+    maximum_relative_precision=100.0,
+    model_error_std=None,
+    count_observed=None,
+    count_standard_deviation=None,
+    count_configuration=None,
 ):
-    """Return the legacy weighted reconstruction loss and summed KL term."""
+    """Return the legacy-scaled reconstruction loss and summed KL term.
+
+    When transformed measurement variance is supplied, inverse variance
+    modifies the channel-specific residual weights. Dividing the resulting
+    weight sum by the channel count preserves the literal legacy reduction
+    when all relative precisions equal one.
+
+    With model_error_std, use fixed-reference Gaussian terms
+    tau**2 * (error**2 / (variance + tau**2) + log1p(variance / tau**2)).
+    Divide by quality sum, not precision sum. This is a scaled likelihood,
+    not an untempered ELBO; it exactly matches legacy MSE at zero variance.
+    """
 
     if reconstructed.shape != target.shape or reconstructed.ndim != 4:
         raise ValueError("reconstructed and target must share shape (batch, channel, y, x)")
@@ -352,11 +434,90 @@ def vae_loss(
         torch.zeros_like(weight, dtype=reconstructed.dtype),
     )
     weight = torch.clamp(weight, min=0.0)
+    if count_configuration is not None:
+        if transformed_variance is not None or model_error_std is not None or precision_scale is not None:
+            raise ValueError("count likelihood cannot also use a log-space uncertainty loss")
+        reconstruction_loss = count_space_reconstruction_loss(
+            reconstructed, count_observed, count_standard_deviation, mask, weight, count_configuration
+        )
+        kl_loss = -0.5 * torch.sum(1.0 + logvar - mu.pow(2) - logvar.exp())
+        return {"total": reconstruction_loss + float(beta) * kl_loss,
+                "reconstruction": reconstruction_loss, "kl": kl_loss}
+    likelihood_offset = reconstructed.new_zeros(())
+    if model_error_std is not None:
+        if transformed_variance is None or transformed_variance.shape != target.shape:
+            raise ValueError("Gaussian uncertainty requires variance with the target shape")
+        if precision_scale is not None:
+            raise ValueError("Gaussian uncertainty cannot also use median precision scaling")
+        error_std = torch.as_tensor(model_error_std, dtype=reconstructed.dtype, device=reconstructed.device)
+        if error_std.shape != (target.shape[1],) or not torch.all(torch.isfinite(error_std) & (error_std > 0)):
+            raise ValueError("model_error_std must contain one finite positive value per channel")
+        variance = transformed_variance.to(dtype=reconstructed.dtype)
+        finite_variance = torch.isfinite(variance) & (variance >= 0)
+        if torch.any((weight > 0) & ~finite_variance):
+            raise ValueError("Gaussian uncertainty received invalid measurement variance on weighted cells")
+        variance = torch.where(finite_variance, variance, torch.zeros_like(variance))
+        model_variance = error_std.square().reshape(1, -1, 1, 1)
+
+        # Fixed reference scaling of Gaussian NLL: zero measurement variance
+        # reproduces legacy MSE, and measurement errors only attenuate weight.
+        effective_weight = weight * model_variance / (variance + model_variance)
+        weight_sum = weight.sum()
+        likelihood_offset = torch.sum(weight * model_variance * torch.log1p(variance / model_variance))
+    elif transformed_variance is None:
+        effective_weight = weight
+        weight_sum = effective_weight.sum()
+    else:
+        if transformed_variance.shape != target.shape:
+            raise ValueError(
+                "transformed_variance must have the same shape as the target"
+            )
+        variance_floor = float(variance_floor)
+        maximum_relative_precision = float(maximum_relative_precision)
+        if not np.isfinite(variance_floor) or variance_floor <= 0:
+            raise ValueError("variance_floor must be finite and positive")
+        if (
+            not np.isfinite(maximum_relative_precision)
+            or maximum_relative_precision <= 0
+        ):
+            raise ValueError(
+                "maximum_relative_precision must be finite and positive"
+            )
+
+        if precision_scale is None:
+            raise ValueError(
+                "precision_scale is required with transformed_variance"
+            )
+        precision_scale = torch.as_tensor(
+            precision_scale,
+            dtype=reconstructed.dtype,
+            device=reconstructed.device,
+        )
+        if precision_scale.shape != (target.shape[1],):
+            raise ValueError("precision_scale must contain one value per channel")
+        if not torch.all(torch.isfinite(precision_scale) & (precision_scale > 0)):
+            raise ValueError("precision_scale values must be finite and positive")
+
+        variance = transformed_variance.to(dtype=reconstructed.dtype)
+        finite_variance = torch.isfinite(variance) & (variance >= 0)
+        precision = torch.where(
+            finite_variance,
+            1.0 / torch.clamp(variance, min=variance_floor),
+            torch.zeros_like(variance),
+        )
+        relative_precision = precision / precision_scale.reshape(1, -1, 1, 1)
+        relative_precision = torch.clamp(
+            relative_precision, max=maximum_relative_precision
+        )
+        effective_weight = weight * relative_precision
+        weight_sum = effective_weight.sum() / target.shape[1]
+
     squared_error = (reconstructed - target)**2
-    weight_sum = weight.sum()
     state_size = int(np.prod(target.shape[1:]))
     reconstruction_loss = (
-        torch.sum(weight * squared_error) / (weight_sum + 1e-8) * state_size
+        (torch.sum(effective_weight * squared_error) + likelihood_offset)
+        / (weight_sum + 1e-8)
+        * state_size
     )
     kl_loss = -0.5 * torch.sum(
         1.0 + logvar - mu.pow(2) - logvar.exp()

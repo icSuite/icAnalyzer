@@ -26,7 +26,7 @@ CONFIG = {
     'LATENT_DIM': 36,
     'BATCH_SIZE': 8,
     'LR': 1e-4,
-    'EPOCHS': 1000,
+    'EPOCHS': 200, # 1000
     'SEED': 1,
     'SPARSITY_THRESHOLD': .33,
     'DEVICE': torch.device("cuda" if torch.cuda.is_available() else "cpu")
