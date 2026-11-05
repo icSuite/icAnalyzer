@@ -23,6 +23,11 @@ The generic trainer is `scripts/CVAE/train_wic_cvae.py`; the former
 `train_automatic_wic_cvae.py` name was removed because the same trainer accepts
 manual- and automatic-mask caches.
 
+Manual cache preparation is portable across machines through
+`--annotation-data-root`. Missing absolute paths stored in the annotation JSON
+are relocated by preserving their suffix below `IMAGE_FUV`; the resolved root
+and target-grid file are recorded in provenance.
+
 Real Product-2 orbit85 preparation from the manual JSON retained106 frames
 (37 full,69 partial), excluded16 and reported3 unmatched timestamps at the5%
 intrinsic-valid cutoff. A one-epoch CPU WIC training smoke completed and saved

@@ -41,6 +41,13 @@ spawned-worker IPC checks. Next action is the full manual WIC training run with
 all outputs outside the repository. Portfolio impact: no priority or deadline
 change.
 
+Server preparation initially failed because the annotation JSON records the
+original workstation's absolute `IMAGE_FUV` paths. The WIC cache command now
+accepts `--annotation-data-root`; missing recorded paths are relocated by
+preserving their suffix below `IMAGE_FUV` under the supplied machine-local
+root. The JSON remains unchanged, and the resolved root/grid path are recorded
+in cache provenance.
+
 ## Supported CVAE implementation extracted from legacy WIC/SI12 package (2026-11-05)
 
 `scripts/CVAE/` is now the supported automatic-CVAE command boundary. Its seven

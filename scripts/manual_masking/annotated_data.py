@@ -43,14 +43,37 @@ def load_good_orbit_intervals(filename):
     return intervals
 
 
-def annotation_times(record):
+def relocated_annotation_path(filename, data_root=None):
+    """Resolve a recorded IMAGE_FUV path under an optional machine-local root."""
+
+    recorded = Path(filename).expanduser()
+    if recorded.is_file():
+        return recorded.resolve()
+    if data_root is None:
+        return recorded
+
+    data_root = Path(data_root).expanduser().resolve()
+    parts = recorded.parts
+    try:
+        root_index = parts.index("IMAGE_FUV")
+    except ValueError as error:
+        raise ValueError(f"cannot relocate annotation path outside IMAGE_FUV: {recorded}") from error
+    relocated = data_root.joinpath(*parts[root_index + 1:])
+    if not relocated.is_file():
+        raise FileNotFoundError(f"annotation source is missing at both {recorded} and {relocated}")
+    return relocated
+
+
+def annotation_times(record, data_root=None):
     """Read the time axis actually used to review this orbit (legacy or CS)."""
+
+    source_file = relocated_annotation_path(record["source_file"], data_root)
     if record.get("frame_index_space") == "native_cs":
         from icreader import load
-        with load(record["source_file"]) as product:
+        with load(source_file) as product:
             times = np.asarray(product.time, dtype="datetime64[us]")
     else:
-        with Dataset(record["source_file"]) as nc:
+        with Dataset(source_file) as nc:
             reference = datetime.fromisoformat(nc.reference_time)
             times = [reference + timedelta(seconds=float(t)) for t in nc.variables["time"][:]]
         times = np.asarray(times, dtype="datetime64[us]")
@@ -59,7 +82,7 @@ def annotation_times(record):
     return times
 
 
-def load_annotations(filename, segments=None):
+def load_annotations(filename, segments=None, data_root=None):
     filename = Path(filename).expanduser().resolve()
     contents = filename.read_bytes()
     document = json.loads(contents)
@@ -73,13 +96,14 @@ def load_annotations(filename, segments=None):
     source_times = {}
     timeline_hash = hashlib.sha256()
     for orbit, record in sorted(records.items()):
-        times = annotation_times(record)
+        times = annotation_times(record, data_root=data_root)
         source_times[orbit] = times
         timeline_hash.update(str(orbit).encode())
         timeline_hash.update(times.tobytes())
 
     # Read the actual target grid to prevent using masks on a different grid.
-    with Dataset(document["target_grid_file"]) as nc:
+    target_grid_file = relocated_annotation_path(document["target_grid_file"], data_root)
+    with Dataset(target_grid_file) as nc:
         grid = nc.groups["grid"]
         projection = CSprojection(grid.position, grid.orientation)
         lon, lat = projection.cube2geo(np.asarray(grid.variables["xi"][:]), np.asarray(grid.variables["eta"][:]))
@@ -91,6 +115,9 @@ def load_annotations(filename, segments=None):
         "outside_original_grid": "Frame classes and drawn geometry apply across the entire native grid" if all(decode_mask(record["target_annotated_runs"], shape=(46, 46)).all() for record in records.values()) else "per-orbit explicit target_annotated_runs domain",
         "missing_fraction_policy": "intrinsic product validity before manual masking"
     }
+    if data_root is not None:
+        provenance["annotation_data_root"] = str(Path(data_root).expanduser().resolve())
+        provenance["resolved_target_grid_file"] = str(target_grid_file)
     if any(record.get("frame_index_space") == "native_cs" for record in records.values()):
         provenance["time_matching"] = "nearest per-orbit annotation source frame within 1 second; unmatched frames excluded"
     annotations = {"records": records, "source_times": source_times, "grid": {"mlat": lat, "mlt": (lon / 15) % 24}, "provenance": provenance}

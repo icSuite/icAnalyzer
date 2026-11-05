@@ -218,7 +218,7 @@ def prepare(arguments, product_loader=load):
         estimated_frames = sum(records[path.stem]["frames"] for path in files)
         alignment = "same Product-2 file and exact timestamp; frozen automatic mask AND native WIC/quality/coverage support"
     else:
-        annotations = load_annotations(arguments.annotations)
+        annotations = load_annotations(arguments.annotations, data_root=arguments.annotation_data_root)
         completed_orbits = set(annotations["records"])
         files = [path for path in files if int(path.stem[3:]) in completed_orbits]
         if not files:
@@ -371,6 +371,7 @@ def parse_arguments(argv=None):
     selection = parser.add_mutually_exclusive_group(required=True)
     selection.add_argument("--masks", type=Path, help="exported automatic-mask directory")
     selection.add_argument("--annotations", type=Path, help="completed schema-2 manual annotation JSON")
+    parser.add_argument("--annotation-data-root", type=Path, help="machine-local IMAGE_FUV root used to relocate paths stored in the annotation JSON")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--orbits", type=int, nargs="+")
     parser.add_argument("--seed", type=int, default=1)
@@ -378,6 +379,8 @@ def parse_arguments(argv=None):
     parser.add_argument("--test-fraction", type=float, default=0.15)
     parser.add_argument("--minimum-valid-fraction", type=float, default=0.05)
     arguments = parser.parse_args(argv)
+    if arguments.annotation_data_root is not None and arguments.annotations is None:
+        parser.error("--annotation-data-root requires --annotations")
     if not np.isfinite(arguments.minimum_valid_fraction) or not 0 <= arguments.minimum_valid_fraction <= 1:
         parser.error("--minimum-valid-fraction must lie within 0--1")
     arguments.maximum_missing_fraction = 1.0 - arguments.minimum_valid_fraction
