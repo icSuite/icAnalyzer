@@ -44,7 +44,6 @@ For a manual-mask WIC cache, use a fresh output directory:
 ```bash
 PYTHONPATH=. python scripts/CVAE/prepare_wic_cvae_cache.py \
   --annotations data/partial_image_annotations_46x46.json \
-  --annotation-data-root ~/Dropbox/work/data/IMAGE_FUV \
   --minimum-valid-fraction 0.05 \
   --output data/training_data/manual_wic_cvae_fuvpy_bs2d_valid5
 ```

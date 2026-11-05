@@ -1,13 +1,13 @@
 # Current State
 
-Last reviewed: 2026-11-05 (generic CVAE cache preparation)
-Repository snapshot: `vae/wic-si12` at `be31406`; `main` remains at `7c71591`
+Last reviewed: 2026-11-05 (self-contained manual annotations)
+Repository snapshot: `vae/wic-si12` at `0140fe0`; `main` remains at `7c71591`
 Worktree: substantial uncommitted implementation and memory changes; user edits preserved
 
 ## Manual or automatic WIC cache preparation is now one workflow (2026-11-05)
 
 `scripts/CVAE/prepare_wic_cvae_cache.py` is the canonical WIC preparation
-command. It requires either completed schema-2 `--annotations` or an exported
+command. It requires either completed schema-3 `--annotations` or an exported
 automatic `--masks` directory and records the selected policy as generic
 `mask_source` provenance. Full and partial manual reviews are retained; rejected
 and unmatched frames are excluded. Per-frame annotation class and original
@@ -23,10 +23,12 @@ The generic trainer is `scripts/CVAE/train_wic_cvae.py`; the former
 `train_automatic_wic_cvae.py` name was removed because the same trainer accepts
 manual- and automatic-mask caches.
 
-Manual cache preparation is portable across machines through
-`--annotation-data-root`. Missing absolute paths stored in the annotation JSON
-are relocated by preserving their suffix below `IMAGE_FUV`; the resolved root
-and target-grid file are recorded in provenance.
+The manual annotation JSON is self-contained. Every orbit embeds the reviewed
+UTC time axis and the document embeds the 46x46 MLAT/MLT grid. Schema 3 has no
+source/grid file paths, nested migration records, or runtime fallback to the
+retired `IMAGE_FUV` corpus. The 27 inherited rebased keyframes retain an
+explicit `human_reviewed: false` flag, preserving Model-2 selection semantics.
+Native-grid line geometry reproduces all 505 stored raster masks exactly.
 
 Real Product-2 orbit85 preparation from the manual JSON retained106 frames
 (37 full,69 partial), excluded16 and reported3 unmatched timestamps at the5%
@@ -90,7 +92,7 @@ sample or figure was created or modified.
 The first repository-cleanup boundary is implemented. The manual subsystem has
 one annotation GUI and four support modules under `scripts/manual_masking/`.
 Three obsolete labeling/overview scripts, two completed migration utilities and
-two retired quality plots were deleted. The canonical schema-2 annotation file
+two retired quality plots were deleted. The canonical schema-3 annotation file
 was verified to contain 92 orbits with full 46x46 review domains before repair
 compatibility was removed.
 

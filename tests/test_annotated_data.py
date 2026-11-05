@@ -116,10 +116,11 @@ def test_native_rebase_preserves_dropped_keyframe_mask_and_review_footprint(monk
     monkeypatch.setattr(native, "annotation_times", lambda record: times)
     # The late mask's original keyframe (3) is absent in the native file.
     indices = np.array([1, 2, 4])
-    record = native.native_orbit_record(document, 85, "native.nc", times[indices], indices)
+    record = native.native_orbit_record(document, 85, times[indices], indices)
     assert record["frame_index_space"] == "native_cs" and record["mask_shape"] == [46, 46]
     assert record["review_status"] == "complete" and record["full_good_stop"] == 1
-    assert record["legacy_annotation"] == old
+    assert "legacy_annotation" not in record
+    assert all(payload.get("human_reviewed") is False for payload in record["keyframes"].values())
     for frame, original in enumerate(indices):
         expected = store.propagated_mask(old, original, shape=(46, 46)) & footprint
         actual = store.propagated_mask(record, frame) & store.decode_mask(record["target_annotated_runs"], shape=(46, 46))
@@ -127,23 +128,19 @@ def test_native_rebase_preserves_dropped_keyframe_mask_and_review_footprint(monk
     assert "2" in record["keyframes"]  # Initial late-partial keyframe survives.
 
 
-def test_native_annotation_times_use_CF_reader_not_legacy_reference_time(monkeypatch):
-    from contextlib import nullcontext
-    from types import SimpleNamespace
-    import icreader
+def test_annotation_times_are_embedded():
     from scripts.manual_masking.annotated_data import annotation_times
 
     times = np.array(["2000-01-01", "2000-01-02"], dtype="datetime64[us]")
-    monkeypatch.setattr(icreader, "load", lambda filename: nullcontext(SimpleNamespace(time=times)))
-    record = {"orbit": 85, "n_frames": 2, "frame_index_space": "native_cs", "source_file": "native.nc"}
+    record = {"orbit": 85, "n_frames": 2, "source_times_utc": np.datetime_as_string(times, unit="us").tolist()}
     np.testing.assert_array_equal(annotation_times(record), times)
 
 
 def test_new_native_review_uses_source_ids_and_roundtrips_46x46_masks(tmp_path):
     document = store.empty_document()
-    document.update(schema_version=2, mask_shape=[46, 46])
+    document.update(schema_version=3, mask_shape=[46, 46])
     times = np.datetime64("2000-01-01", "us") + np.arange(3) * np.timedelta64(120, "s")
-    record = native.native_orbit_record(document, 85, tmp_path / "native.nc", times, np.array([99, 102, 108]), seed=(100, 105))
+    record = native.native_orbit_record(document, 85, times, np.array([99, 102, 108]), seed=(100, 105))
     assert record["full_good_start"] == record["full_good_stop"] == 1
     assert store.decode_mask(record["target_annotated_runs"], shape=(46, 46)).all()
     store.set_boundary(record, "usable_start", 0)
@@ -157,10 +154,9 @@ def test_new_native_review_uses_source_ids_and_roundtrips_46x46_masks(tmp_path):
     loaded = store.load_document(path)["orbits"]["0085"]
     np.testing.assert_array_equal(store.propagated_mask(loaded, 0), mask)
     assert loaded["boundary_times"]["usable_start"] == str(times[0])
-    # Legacy readers retain the old default shape.
-    legacy = store.new_orbit_record(86, 1)
-    store.set_keyframe(legacy, 0, np.ones((36, 36), bool))
-    assert store.exact_keyframe_mask(legacy, 0).shape == (36, 36)
+    fresh = store.new_orbit_record(86, 1)
+    store.set_keyframe(fresh, 0, np.ones((46, 46), bool))
+    assert store.exact_keyframe_mask(fresh, 0).shape == (46, 46)
 
 
 def test_native_GUI_mask_edits_save_and_feed_both_pipeline_options(tmp_path, monkeypatch):
@@ -174,7 +170,7 @@ def test_native_GUI_mask_edits_save_and_feed_both_pipeline_options(tmp_path, mon
     monkeypatch.setattr(gui, "load_native_images", lambda *args: (channels, ("Hall", "Pedersen", "auroral quality", "coverage", "corrected WIC"), times, np.arange(3), sza))
     path = tmp_path / "annotations.json"
     document = store.empty_document()
-    document.update(schema_version=2, mask_shape=[46, 46], cursor={"orbit": 84, "page_start": 0, "frame": 0})
+    document.update(schema_version=3, mask_shape=[46, 46], cursor={"orbit": 84, "page_start": 0, "frame": 0})
     store.save_document_atomic(document, path)
     viewer = gui.PartialImageAnnotator(tmp_path, None, path, tmp_path / "missing.csv")
     assert viewer.orbit == 85  # Missing converted cursor orbit does not block startup.
@@ -268,8 +264,8 @@ def test_annotation_navigation_skips_empty_images_without_marking_rejected(tmp_p
     monkeypatch.setattr(gui, "load_native_images", images)
     monkeypatch.setattr(native, "annotation_times", lambda record: times)
     document = store.empty_document()
-    document.update(schema_version=2, mask_shape=[46, 46], cursor={"orbit": 86})
-    record = native.native_orbit_record(document, 87, tmp_path / "or_0087.nc", times, np.arange(2), seed=(0, 1))
+    document.update(schema_version=3, mask_shape=[46, 46], cursor={"orbit": 86})
+    record = native.native_orbit_record(document, 87, times, np.arange(2), seed=(0, 1))
     store.mark_complete(record)
     path = tmp_path / "annotations.json"
     store.save_document_atomic(document, path)

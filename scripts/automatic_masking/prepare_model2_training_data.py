@@ -18,18 +18,11 @@ FIELDS = ("wic_corrected", "method_quality_weight", "wic_coverage", "sza", "dza"
 SOURCE = Path("/home/bing/Dropbox/work/data/IMAGE_FUV/precipitation_cs/image_apex_130km_46x46_v1/IR_hardy_smoothed_wic0p8_si120_si131p2")
 
 
-def human_keyframe(record, frame, review_times):
+def human_keyframe(record, frame):
     payload = record.get("keyframes", {}).get(str(frame))
     if payload is None or not payload.get("updated_at"):
         return False
-    legacy = record.get("legacy_annotation")
-    if legacy is None:
-        return True
-    inherited = [int(f) for f, p in legacy.get("keyframes", {}).items() if p.get("updated_at") == payload["updated_at"]]
-    if not inherited:
-        return True
-    old_times = annotation_times(legacy)
-    return any(abs(review_times[frame] - old_times[f]) <= np.timedelta64(2, "s") for f in inherited)
+    return payload.get("human_reviewed", True)
 
 
 def active_keyframe(record, frame):
@@ -90,7 +83,7 @@ def main():
         if len(set(nearest[selected])) != len(selected):
             raise ValueError(f"Nonunique source/review exposure matches in orbit{key}")
         footprint = decode_mask(record["target_annotated_runs"], shape=(46, 46))
-        human_frames = {f for f in map(int, record["keyframes"]) if human_keyframe(record, f, review_times)}
+        human_frames = {f for f in map(int, record["keyframes"]) if human_keyframe(record, f)}
         kept = 0
         for frame in selected:
             reviewed_frame = int(nearest[frame])

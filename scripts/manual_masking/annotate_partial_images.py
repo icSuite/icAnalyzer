@@ -21,8 +21,7 @@ from matplotlib.path import Path as MatplotlibPath
 from matplotlib.widgets import Button, LassoSelector
 from scripts.manual_masking.native_annotations import load_native_images, native_orbit_record, stamp_native_record
 from scripts.manual_masking.annotation_store import decode_mask, encode_mask
-from scripts.manual_masking.annotated_data import annotation_times
-from scripts.manual_masking.annotation_geometry import line_side_mask, source_pixel_coordinates
+from scripts.manual_masking.annotation_geometry import line_side_mask
 
 try:
     from .annotation_store import (
@@ -162,10 +161,6 @@ class MaskEditor:
             line = copy.deepcopy(self.geometry)
             line.pop("kind")
             self.geometry = {"kind": "line_set", "lines": [line]}
-        self.source_coordinates = None
-        if self.geometry is not None and self.geometry.get("kind") == "line_set":
-            if any("source_points" in line for line in self.geometry["lines"]):
-                self.source_coordinates = source_pixel_coordinates(self.record, parent.document["target_grid_file"])
         self.mode = "line"
         self.line_start: tuple[float, float] | None = None
         self.line_artists: list[object] = []
@@ -448,7 +443,7 @@ class MaskEditor:
         points = line.get("points")
         if not isinstance(points, list) or len(points) != 2:
             raise ValueError("Saved line does not contain two points")
-        return line_side_mask(line, MASK_SHAPE, self.source_coordinates)
+        return line_side_mask(line, MASK_SHAPE)
 
     def _line_entries(self) -> list[dict[str, object]]:
         if self.geometry is None or self.geometry.get("kind") != "line_set":
@@ -646,9 +641,9 @@ class PartialImageAnnotator:
         self.show_empty_orbits = show_empty_orbits
         self.document = load_document(self.annotation_file)
         if not self.annotation_file.exists():
-            self.document.update(schema_version=2, mask_shape=[46, 46], coordinate_system="target image pixels (column, row)")
-        if self.document.get("schema_version") != 2 or self.document.get("mask_shape") != [46, 46]:
-            raise ValueError("use the converted 46x46 JSON; original 36x36 annotations are not edited by this tool")
+            self.document.update(schema_version=3, mask_shape=[46, 46], coordinate_system="target image pixels (column, row)")
+        if self.document.get("schema_version") != 3 or self.document.get("mask_shape") != [46, 46]:
+            raise ValueError("use the self-contained schema-3 46x46 annotation JSON")
         self.seeds = load_good_segment_seeds(segment_file)
         self.orbits = discover_orbits(
             self.overview_directory,
@@ -749,16 +744,10 @@ class PartialImageAnnotator:
             raise EmptyImageOrbit(f"Orbit{self.orbit} has no finite image pixels")
         self.channel_index %= len(self.channels)
         self.n_frames = len(self.times)
-        self.record = native_orbit_record(self.document, self.orbit, source, self.times, source_wic, self.seeds.get(self.orbit))
-        legacy = self.record.get("legacy_annotation")
-        if self._resume_legacy_cursor and legacy is not None and self.document.get("frame_index_space", "").startswith("original"):
-            old_times = annotation_times(legacy)
-            old_frame = min(self.selected_frame, len(old_times) - 1)
-            self.selected_frame = int(np.argmin(np.abs(self.times - old_times[old_frame])))
-            self.page_start = (self.selected_frame // PAGE_SIZE) * PAGE_SIZE
+        self.record = native_orbit_record(self.document, self.orbit, self.times, source_wic, self.seeds.get(self.orbit))
         self._resume_legacy_cursor = False
         self.footprint = decode_mask(self.record["target_annotated_runs"], shape=MASK_SHAPE)
-        self.document["frame_index_space"] = "per orbit: native_cs records use their CS source_file; untouched converted records retain the original time axis"
+        self.document["frame_index_space"] = "per-orbit source_times_utc"
         self.document["outside_source_grid"] = "Frame classes and drawn geometry apply across the entire native 46x46 grid"
         if hasattr(self, "channel_button"):
             self.channel_button.label.set_text(f"Channel: {self.channel_names[self.channel_index]}")

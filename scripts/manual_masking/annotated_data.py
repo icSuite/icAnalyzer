@@ -2,15 +2,12 @@
 
 #%% Read reviewed annotations and the original frame time axes
 
-from datetime import datetime, timedelta
 import csv
 import hashlib
 import json
 from pathlib import Path
 
 import numpy as np
-from netCDF4 import Dataset
-from secsy import CSprojection
 
 from scripts.manual_masking.annotation_store import decode_mask, frame_class, propagated_mask
 
@@ -43,51 +40,25 @@ def load_good_orbit_intervals(filename):
     return intervals
 
 
-def relocated_annotation_path(filename, data_root=None):
-    """Resolve a recorded IMAGE_FUV path under an optional machine-local root."""
+def annotation_times(record):
+    """Read the self-contained time axis used to review this orbit."""
 
-    recorded = Path(filename).expanduser()
-    if recorded.is_file():
-        return recorded.resolve()
-    if data_root is None:
-        return recorded
-
-    data_root = Path(data_root).expanduser().resolve()
-    parts = recorded.parts
-    try:
-        root_index = parts.index("IMAGE_FUV")
-    except ValueError as error:
-        raise ValueError(f"cannot relocate annotation path outside IMAGE_FUV: {recorded}") from error
-    relocated = data_root.joinpath(*parts[root_index + 1:])
-    if not relocated.is_file():
-        raise FileNotFoundError(f"annotation source is missing at both {recorded} and {relocated}")
-    return relocated
-
-
-def annotation_times(record, data_root=None):
-    """Read the time axis actually used to review this orbit (legacy or CS)."""
-
-    source_file = relocated_annotation_path(record["source_file"], data_root)
-    if record.get("frame_index_space") == "native_cs":
-        from icreader import load
-        with load(source_file) as product:
-            times = np.asarray(product.time, dtype="datetime64[us]")
-    else:
-        with Dataset(source_file) as nc:
-            reference = datetime.fromisoformat(nc.reference_time)
-            times = [reference + timedelta(seconds=float(t)) for t in nc.variables["time"][:]]
-        times = np.asarray(times, dtype="datetime64[us]")
+    if "source_times_utc" not in record:
+        raise ValueError(f"orbit {record.get('orbit')}: annotation is missing source_times_utc")
+    times = np.asarray(record["source_times_utc"], dtype="datetime64[us]")
     if len(times) != record["n_frames"] or np.any(np.diff(times) <= np.timedelta64(0, "us")):
         raise ValueError(f"orbit {record.get('orbit')}: annotation source time axis changed or is not increasing")
     return times
 
 
-def load_annotations(filename, segments=None, data_root=None):
+def load_annotations(filename, segments=None):
     filename = Path(filename).expanduser().resolve()
     contents = filename.read_bytes()
     document = json.loads(contents)
-    if document.get("schema_version") != 2 or document.get("mask_shape") != [46, 46]:
-        raise ValueError("--annotations requires the converted 46x46 annotation JSON")
+    if document.get("schema_version") != 3 or document.get("mask_shape") != [46, 46]:
+        raise ValueError("--annotations requires the self-contained schema-3 46x46 annotation JSON")
+    if "target_grid" not in document:
+        raise ValueError("annotation is missing the embedded target_grid")
     reviewed_statuses = ("complete", "no_usable") if segments is not None else ("complete",)
     records = {int(orbit): record for orbit, record in document["orbits"].items() if record["review_status"] in reviewed_statuses}
     if not records:
@@ -96,17 +67,15 @@ def load_annotations(filename, segments=None, data_root=None):
     source_times = {}
     timeline_hash = hashlib.sha256()
     for orbit, record in sorted(records.items()):
-        times = annotation_times(record, data_root=data_root)
+        times = annotation_times(record)
         source_times[orbit] = times
         timeline_hash.update(str(orbit).encode())
         timeline_hash.update(times.tobytes())
 
-    # Read the actual target grid to prevent using masks on a different grid.
-    target_grid_file = relocated_annotation_path(document["target_grid_file"], data_root)
-    with Dataset(target_grid_file) as nc:
-        grid = nc.groups["grid"]
-        projection = CSprojection(grid.position, grid.orientation)
-        lon, lat = projection.cube2geo(np.asarray(grid.variables["xi"][:]), np.asarray(grid.variables["eta"][:]))
+    lat = np.asarray(document["target_grid"]["mlat"], dtype=float)
+    mlt = np.asarray(document["target_grid"]["mlt"], dtype=float)
+    if lat.shape != (46, 46) or mlt.shape != (46, 46):
+        raise ValueError("embedded target_grid must contain 46x46 mlat and mlt arrays")
     provenance = {
         "filename": str(filename), "sha256": hashlib.sha256(contents).hexdigest(),
         "source_times_sha256": timeline_hash.hexdigest(), "completed_orbits": len(records),
@@ -115,12 +84,10 @@ def load_annotations(filename, segments=None, data_root=None):
         "outside_original_grid": "Frame classes and drawn geometry apply across the entire native grid" if all(decode_mask(record["target_annotated_runs"], shape=(46, 46)).all() for record in records.values()) else "per-orbit explicit target_annotated_runs domain",
         "missing_fraction_policy": "intrinsic product validity before manual masking"
     }
-    if data_root is not None:
-        provenance["annotation_data_root"] = str(Path(data_root).expanduser().resolve())
-        provenance["resolved_target_grid_file"] = str(target_grid_file)
+    provenance["annotation_context"] = "embedded source_times_utc and target_grid"
     if any(record.get("frame_index_space") == "native_cs" for record in records.values()):
         provenance["time_matching"] = "nearest per-orbit annotation source frame within 1 second; unmatched frames excluded"
-    annotations = {"records": records, "source_times": source_times, "grid": {"mlat": lat, "mlt": (lon / 15) % 24}, "provenance": provenance}
+    annotations = {"records": records, "source_times": source_times, "grid": {"mlat": lat, "mlt": mlt}, "provenance": provenance}
     if segments is not None:
         segments = Path(segments).expanduser().resolve()
         annotations["csv_intervals"] = load_good_orbit_intervals(segments)

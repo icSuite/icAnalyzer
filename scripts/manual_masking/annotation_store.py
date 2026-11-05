@@ -1,7 +1,7 @@
 """Persistent annotation state and temporal mask propagation.
 
-The annotation file stores orbit-level boundaries and sparse mask keyframes.
-Legacy records default to 36x36; native records declare their 46x46 shape.
+The annotation file stores orbit-level boundaries and sparse 46x46 mask
+keyframes.
 """
 
 from __future__ import annotations
@@ -18,8 +18,8 @@ from typing import Any
 import numpy as np
 
 
-SCHEMA_VERSION = 1
-MASK_SHAPE = (36, 36)
+SCHEMA_VERSION = 3
+MASK_SHAPE = (46, 46)
 BOUNDARY_FIELDS = (
     "usable_start",
     "full_good_start",
@@ -36,6 +36,8 @@ def empty_document() -> dict[str, Any]:
     now = utc_now()
     return {
         "schema_version": SCHEMA_VERSION,
+        "mask_shape": list(MASK_SHAPE),
+        "coordinate_system": "target image pixels (column, row)",
         "created_at": now,
         "updated_at": now,
         "cursor": {"orbit": None, "page_start": 0, "frame": 0},
@@ -51,10 +53,10 @@ def load_document(path: str | Path) -> dict[str, Any]:
     with path.open(encoding="utf-8") as stream:
         document = json.load(stream)
 
-    if document.get("schema_version") not in (1, 2):
+    if document.get("schema_version") != SCHEMA_VERSION:
         raise ValueError(
             f"Unsupported annotation schema {document.get('schema_version')}; "
-            "expected 1 or 2"
+            f"expected {SCHEMA_VERSION}"
         )
     if not isinstance(document.get("orbits"), dict):
         raise ValueError("Annotation document is missing the 'orbits' mapping")

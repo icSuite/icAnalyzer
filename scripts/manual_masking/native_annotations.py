@@ -2,14 +2,11 @@
 
 #%% Native images and their actual grid
 
-from copy import deepcopy
 from pathlib import Path
 import warnings
 
 import numpy as np
 from icreader import load
-from netCDF4 import Dataset
-from secsy import CSprojection
 
 from scripts.manual_masking.annotated_data import annotation_times
 from scripts.manual_masking.annotation_store import BOUNDARY_FIELDS, decode_mask, encode_mask, frame_class, keyframe_frames, new_orbit_record, orbit_key, propagated_mask
@@ -62,16 +59,14 @@ def load_native_images(filename, document):
         else:
             warnings.warn(f"WIC companion not found for {filename.name}: {companion}", stacklevel=2)
 
-    if "target_grid_file" in document:
-        with Dataset(document["target_grid_file"]) as nc:
-            grid = nc.groups["grid"]
-            projection = CSprojection(grid.position, grid.orientation)
-            lon, lat = projection.cube2geo(np.asarray(grid.variables["xi"][:]), np.asarray(grid.variables["eta"][:]))
-        difference = (local_time - lon / 15 + 12) % 24 - 12
+    if "target_grid" in document:
+        lat = np.asarray(document["target_grid"]["mlat"], dtype=float)
+        target_mlt = np.asarray(document["target_grid"]["mlt"], dtype=float)
+        difference = (local_time - target_mlt + 12) % 24 - 12
         if not np.allclose(latitude, lat, atol=1e-6) or not np.allclose(difference, 0, atol=1e-6):
-            raise ValueError("native images differ from the converted annotation grid")
+            raise ValueError("native images differ from the embedded annotation grid")
     else:
-        document["target_grid_file"] = str(filename)
+        document["target_grid"] = {"mlat": latitude.tolist(), "mlt": local_time.tolist()}
     if sza is not None and sza.shape != channels[0].shape:
         raise ValueError("SZA shape differs from annotation images")
     return channels, names, times, source_wic, sza
@@ -79,7 +74,7 @@ def load_native_images(filename, document):
 
 #%% Preserve old masks while moving an opened orbit to the native time axis
 
-def native_orbit_record(document, orbit, filename, times, source_wic, seed=None):
+def native_orbit_record(document, orbit, times, source_wic, seed=None):
     times = np.asarray(times, dtype="datetime64[us]")
     if len(times) == 0 or np.any(np.diff(times) <= np.timedelta64(0, "us")):
         raise ValueError("native frame times must be nonempty and strictly increasing")
@@ -91,7 +86,11 @@ def native_orbit_record(document, orbit, filename, times, source_wic, seed=None)
         return old
 
     record = new_orbit_record(orbit, len(times))
-    record.update(mask_shape=[46, 46], frame_index_space="native_cs", source_file=str(Path(filename).resolve()), target_annotated_runs=encode_mask(np.ones((46, 46), dtype=bool)))
+    record.update(
+        mask_shape=[46, 46], frame_index_space="native_cs",
+        source_times_utc=np.datetime_as_string(times, unit="us").tolist(),
+        target_annotated_runs=encode_mask(np.ones((46, 46), dtype=bool))
+    )
     if old is None:
         # CSV boundaries are detector WIC IDs, not CS array indices.
         if seed is not None:
@@ -110,7 +109,6 @@ def native_orbit_record(document, orbit, filename, times, source_wic, seed=None)
         classes = [frame_class(old, int(frame)) if found else "bad" for frame, found in zip(nearest, matched)]
         accepted = np.flatnonzero(np.isin(classes, ("full", "partial")))
         full = np.flatnonzero(np.asarray(classes) == "full")
-        record["legacy_annotation"] = deepcopy(old)
         record["target_annotated_runs"] = old["target_annotated_runs"]
         record["notes"] = old.get("notes", "")
         record["review_status"] = old["review_status"]
@@ -128,7 +126,8 @@ def native_orbit_record(document, orbit, filename, times, source_wic, seed=None)
                     mask = propagated_mask(old, int(nearest[frame]), shape=(46, 46)) & footprint
                 if previous_mask is None or not np.array_equal(mask, previous_mask):
                     earlier = [number for number in keyframe_frames(old) if number <= nearest[frame]]
-                    payload = deepcopy(old["keyframes"][str(earlier[-1])]) if earlier and classes[frame] == "partial" else {}
+                    payload = dict(old["keyframes"][str(earlier[-1])]) if earlier and classes[frame] == "partial" else {}
+                    payload["human_reviewed"] = False
                     payload.update(valid_runs=encode_mask(mask), valid_fraction=float(mask.mean()), source_time=str(times[frame]))
                     record["keyframes"][str(frame)] = payload
                 previous_mask = mask

@@ -1,15 +1,15 @@
 # Handoff - Latest
 
 Last updated: 2026-11-05
-Last reviewed: 2026-11-05 (generic CVAE cache preparation)
-Repository snapshot: `vae/wic-si12` at `be31406` with substantial uncommitted changes; `main` remains at `7c71591`
+Last reviewed: 2026-11-05 (self-contained manual annotations)
+Repository snapshot: `vae/wic-si12` at `0140fe0` with uncommitted schema-3 annotation changes; `main` remains at `7c71591`
 
 ## Generic WIC and explicit Hall/Pedersen cache commands ready (2026-11-05)
 
 The canonical WIC entries are now `prepare_wic_cvae_cache.py` and
 `train_wic_cvae.py`; Hall/Pedersen preparation is `prepare_cvae_hp_cache.py`.
 The WIC preparation command requires exactly one selection
-source: `--annotations` for the schema-2 manual JSON or `--masks` for a frozen
+source: `--annotations` for the schema-3 manual JSON or `--masks` for a frozen
 automatic-mask corpus. Hall/Pedersen preparation remains explicitly tied to
 the automatic WIC masks. Old preparation filenames have no live source, test or
 README references.
@@ -41,12 +41,15 @@ spawned-worker IPC checks. Next action is the full manual WIC training run with
 all outputs outside the repository. Portfolio impact: no priority or deadline
 change.
 
-Server preparation initially failed because the annotation JSON records the
-original workstation's absolute `IMAGE_FUV` paths. The WIC cache command now
-accepts `--annotation-data-root`; missing recorded paths are relocated by
-preserving their suffix below `IMAGE_FUV` under the supplied machine-local
-root. The JSON remains unchanged, and the resolved root/grid path are recorded
-in cache provenance.
+Server preparation exposed an obsolete dependency on absolute workstation
+paths. The canonical annotation is now schema 3 and self-contained: all 92
+orbit time axes and the 46x46 MLAT/MLT grid are embedded. Old source/grid paths,
+nested migration records and source-grid geometry were removed; no relocation
+option or old-data fallback remains. The 27 inherited rebased keyframes carry
+an explicit provenance flag so Model-2 preparation retains the prior human-edit
+selection. All 505 retained native line geometries exactly reproduce their
+authoritative raster masks. The server can generate the WIC cache from the new
+Product-2 source plus the repository annotation JSON alone.
 
 ## Supported CVAE implementation extracted from legacy WIC/SI12 package (2026-11-05)
 
@@ -88,7 +91,7 @@ overwritten.
 Repository cleanup began at the user-selected scientific boundary. Manual
 annotation now consists of one GUI plus four support modules under
 `scripts/manual_masking/`; obsolete predecessors, completed migration utilities
-and retired diagnostics were removed after the 92-orbit schema-2 annotation file
+and retired diagnostics were removed after the 92-orbit annotation file
 was verified fully repaired.
 
 Automatic masking is now a nine-module implementation under
