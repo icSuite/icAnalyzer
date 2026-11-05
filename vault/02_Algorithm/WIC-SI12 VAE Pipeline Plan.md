@@ -1,9 +1,13 @@
 # WIC/SI12 VAE Pipeline Plan
 
-Last reviewed: 2026-10-01
-Status: Legacy-lineage spline/partial-convolution architecture restored in the
-current Product-2 pipeline; input negatives are clipped and reported; a new
-full run is pending
+Last reviewed: 2026-10-03
+Status: Historical implementation roadmap; checkpoints below reflect their
+recorded dates, not current model settings or outstanding tasks
+
+For the live experiment order, verified results, and settings carried forward,
+use [VAE Test Plan](<VAE Test Plan.md>) and the project Current State note.
+Later decisions supersede this roadmap's historical quality-weight orientation,
+encoder channels, loss reduction, and statements that full training is pending.
 
 Commit `e923875` restores the model lineage that had been lost in the first
 rewrite: partial convolution, the tensor-product spline decoder,

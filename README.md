@@ -19,6 +19,17 @@ git clone https://github.com/BingMM/icAnalyzer.git
 cd icAnalyzer  
 pip install -e .
 
+## Code organization
+
+- [`scripts/manual_masking/`](scripts/manual_masking/) contains manual IMAGE
+  annotation, storage, conversion, and review tools.
+- [`scripts/automatic_masking/`](scripts/automatic_masking/) contains the
+  CNN/U-Net and Model1/Model2 masking workflows.
+- [`scripts/CVAE/`](scripts/CVAE/) contains the supported Hall/Pedersen and WIC
+  conditional-VAE workflows.
+- [`scripts/IMAGE/vae_pipeline/`](scripts/IMAGE/vae_pipeline/) contains older
+  VAE analyses, diagnostics, and presentation workflows.
+
 ## License
 
 This project is licensed under the MIT License. See the `LICENSE` file for details.

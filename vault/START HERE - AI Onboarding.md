@@ -1,6 +1,6 @@
 # START HERE - AI Onboarding
 
-Last reviewed: 2026-07-26
+Last reviewed: 2026-10-03
 
 This is the human and Obsidian entry point for the `icAnalyzer` project vault.
 The machine-readable operating contract is the repository-root
@@ -33,5 +33,6 @@ self-validating evidence.
 - [Vault Conventions](<00_Meta/Vault Conventions.md>)
 - [Project Brief](<01_Project/Project Brief.md>)
 - [Current State](<01_Project/Current State.md>)
+- [VAE Test Plan and settings ledger](<02_Algorithm/VAE Test Plan.md>)
 - [Decision Log](<03_Decisions/Decision Log.md>)
 - [Handoff - Latest](<05_Handoff/Handoff - Latest.md>)
