@@ -1,8 +1,26 @@
 # Handoff - Latest
 
-Last updated: 2026-11-05
-Last reviewed: 2026-11-05 (self-contained manual annotations)
-Repository snapshot: `vae/wic-si12` at `0140fe0` with uncommitted schema-3 annotation changes; `main` remains at `7c71591`
+Last updated: 2026-11-06
+Last reviewed: 2026-11-06 (multi-sample CVAE training option)
+Repository snapshot: `vae/wic-si12` at `2d04bc0` with uncommitted CVAE and memory changes; `main` remains at `7c71591`
+
+## Multi-sample latent training implemented as an opt-in (2026-11-06)
+
+`train_wic_cvae.py` and `train_automatic_cvae.py` now accept
+`--latent-samples K`, with the legacy-compatible default `1`. For `K>1`, the
+shared model encodes each image once, draws K latent realizations and decodes
+them in one flattened GPU batch. The loss averages reconstruction over K and
+counts the analytic KL once; beta, physical batch size and optimizer-step count
+are unchanged. Held-out evaluation uses the same K, the artifact configuration
+records it, and downstream Kp samplers require no changes.
+
+Focused checks cover exact `K=1` behavior, multi-sample shapes, averaged-loss
+semantics and both saved trainer configurations. Forty-two relevant checks pass
+with the sandbox-incompatible multiprocessing-socket test deselected; command
+help and diff checks pass. CUDA throughput and scientific benefit have not been
+measured. Next comparison: launch a fresh WIC run from the same cache and
+settings with `--latent-samples 4`, then compare against the completed
+one-sample baseline rather than replacing it.
 
 ## Generic WIC and explicit Hall/Pedersen cache commands ready (2026-11-05)
 
@@ -67,6 +85,19 @@ per-image `.item()`/`.tolist()` synchronization and preserves the hole policy,
 unchanged targets and sparse-mask guard. Artifacts record the resolved backend.
 Two focused backend/invariant checks pass and all changed files parse; local
 CUDA execution could not be tested because CUDA is unavailable on this host.
+Server validation subsequently showed a modest speedup and peak GPU utilization
+around22%, confirming the CUDA path works but that hole generation was only a
+secondary bottleneck. At the scientifically comparable batch264, the remaining
+limit is the small46x46 workload and per-batch overhead rather than GPU memory
+or raw compute capacity.
+
+The proposed uses of spare compute are recorded in
+`vault/02_Algorithm/CVAE Compute Scaling Experiments.md`. Priority order is
+multi-sample latent training, seed-level sample ensembling, active-latent
+diagnostics before increasing latent dimension, and a 30x30 internal decoder-grid
+test before broader architecture growth. Multi-sample latent training is now
+implemented but not scientifically evaluated; the other experiments remain
+proposals.
 
 ## Supported CVAE implementation extracted from legacy WIC/SI12 package (2026-11-05)
 

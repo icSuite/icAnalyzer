@@ -246,6 +246,44 @@ class SplineConditionalVAE(nn.Module):
         latent = self.reparameterize(mu, logvar)
         return self.decode(latent, **condition_arguments), mu, logvar
 
+    def forward_samples(self, encoder_input, valid=None, kp=None, latent_samples=1):
+        """Encode once and decode several reparameterized latent draws in parallel."""
+
+        latent_samples = int(latent_samples)
+        if latent_samples < 1:
+            raise ValueError("latent_samples must be positive")
+        if latent_samples == 1:
+            return self.forward(encoder_input, valid, kp=kp)
+
+        condition_arguments = {} if kp is None else {"kp": kp}
+        mu, logvar = self.encode(encoder_input, valid, **condition_arguments)
+        standard_deviation = torch.exp(0.5 * logvar)
+        noise = torch.randn(
+            mu.shape[0], latent_samples, mu.shape[1],
+            dtype=mu.dtype, device=mu.device
+        )
+        latent = mu[:, None] + noise * standard_deviation[:, None]
+
+        repeated_condition = {}
+        if kp is not None:
+            kp = torch.as_tensor(kp, dtype=mu.dtype, device=mu.device)
+            if kp.ndim == 0:
+                repeated_condition["kp"] = kp
+            elif kp.shape[0] == mu.shape[0]:
+                repeated_condition["kp"] = kp.repeat_interleave(
+                    latent_samples, dim=0
+                )
+            else:
+                raise ValueError("Kp must have one value per encoded image")
+        reconstructed = self.decode(
+            latent.reshape(mu.shape[0] * latent_samples, mu.shape[1]),
+            **repeated_condition
+        )
+        reconstructed = reconstructed.reshape(
+            mu.shape[0], latent_samples, *reconstructed.shape[1:]
+        )
+        return reconstructed, mu, logvar
+
     def configuration(self):
         configuration = {
             "model": "SplineConditionalVAE",

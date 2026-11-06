@@ -60,3 +60,10 @@ CVAE above.
 Both trainers accept `--hole-device auto|cpu|cuda`. The default `auto` retains
 the historical CPU implementation for CPU training and uses vectorized CUDA
 hole generation for CUDA training. Run artifacts record the resolved backend.
+
+Both trainers also accept `--latent-samples K` (default `1`). For `K>1`, the
+encoder runs once per image and the decoder evaluates all K reparameterized
+latent draws as one flattened GPU batch. The reconstruction terms are averaged
+across draws and the analytic KL term is evaluated once, so batch size, beta
+and optimizer-update semantics do not change. This affects training and
+held-out loss evaluation only; the fixed-Kp sampling commands are unchanged.

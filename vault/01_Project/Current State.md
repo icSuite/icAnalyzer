@@ -1,8 +1,23 @@
 # Current State
 
-Last reviewed: 2026-11-05 (self-contained manual annotations)
-Repository snapshot: `vae/wic-si12` at `0140fe0`; `main` remains at `7c71591`
+Last reviewed: 2026-11-06 (multi-sample CVAE training option)
+Repository snapshot: `vae/wic-si12` at `2d04bc0`; `main` remains at `7c71591`
 Worktree: substantial uncommitted implementation and memory changes; user edits preserved
+
+## Multi-sample latent training is available as an opt-in (2026-11-06)
+
+Both supported trainers now accept `--latent-samples K`, defaulting to `1`.
+At `K>1`, each image is encoded once and all K reparameterized latent draws are
+decoded in one flattened `batch*K` call. Reconstruction terms are averaged over
+the draws while the analytic KL term is evaluated once. Batch size, optimizer
+updates and beta semantics are therefore unchanged. Final validation/test loss
+uses the same K, artifacts record `latent_samples`, and fixed-Kp sampling is
+unchanged. `K=1` delegates to the original forward path exactly.
+
+Focused model, loss and WIC/Hall-Pedersen trainer checks pass: 42 checks pass
+with the known sandbox-only spawned-worker socket test deselected. CUDA speed
+and scientific quality versus the completed one-sample WIC baseline still need
+evaluation on Dynamit; no new scientific model run was launched locally.
 
 ## Manual or automatic WIC cache preparation is now one workflow (2026-11-05)
 
@@ -44,6 +59,17 @@ The original targets remain unchanged, sparse masks that would be emptied are
 skipped, and the resolved backend is recorded in the artifact. Focused CPU
 invariant/reproducibility checks pass; this workstation has no available CUDA
 device, so final CUDA performance validation belongs to the Dynamit run.
+The first Dynamit run with CUDA holes completed batches slightly faster and
+raised peak GPU utilization to about 22%. Hole placement was therefore a real
+but secondary bottleneck; the small 46x46 model at batch264 remains unable to
+saturate the RTX6000 Ada.
+
+Future compute-for-quality experiments are prioritized in
+`vault/02_Algorithm/CVAE Compute Scaling Experiments.md`. The leading proposal
+was 4--8 latent samples per encoded image and is now available as the opt-in
+`--latent-samples` experiment. Seed-level model ensembles and diagnostic-gated
+latent/decoder capacity tests remain proposals, not decisions to enlarge the
+current model.
 
 Real Product-2 orbit85 preparation from the manual JSON retained106 frames
 (37 full,69 partial), excluded16 and reported3 unmatched timestamps at the5%

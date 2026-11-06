@@ -80,6 +80,7 @@ def run(arguments):
         mask_source = {"kind": "automatic", **metadata["automatic_masks"]}
     configuration = {name: getattr(arguments, name) for name in (
         "epochs", "batch_size", "latent_dim", "learning_rate", "beta",
+        "latent_samples",
         "spline_control_points", "spline_degree", "scheduler_factor",
         "scheduler_patience", "scheduler_minimum_learning_rate"
     )}
@@ -140,7 +141,8 @@ def run(arguments):
             scheduler_patience=arguments.scheduler_patience,
             scheduler_minimum_learning_rate=arguments.scheduler_minimum_learning_rate,
             hole_probability=arguments.hole_probability if arguments.training_holes else 0.0,
-            hole_size=arguments.hole_size, hole_device=arguments.hole_device
+            hole_size=arguments.hole_size, hole_device=arguments.hole_device,
+            latent_samples=arguments.latent_samples
         )
         configuration["selected_epoch"] = model.best_validation_epoch or arguments.epochs
         configuration["selected_validation_total"] = model.best_validation_total
@@ -157,6 +159,7 @@ def run(arguments):
                     model, loaders[name], optimizer=None, device=torch.device(device),
                     beta=arguments.beta, training=False,
                     loss_configuration=loss_configuration,
+                    latent_samples=arguments.latent_samples,
                     progress_description=f"{name} evaluation"
                 )
         save_run_artifact(
@@ -191,6 +194,7 @@ def parse_arguments(argv=None):
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--seed", type=int)
     for name, default in (("epochs", 500), ("batch-size", 264), ("latent-dim", 36),
+                          ("latent-samples", 1),
                           ("spline-control-points", 30), ("spline-degree", 3),
                           ("scheduler-patience", 10), ("max-open-orbits", 64),
                           ("num-workers", 2), ("prefetch-factor", 2)):
@@ -204,8 +208,9 @@ def parse_arguments(argv=None):
     parser.add_argument("--hole-size", type=int, default=12)
     parser.add_argument("--hole-device", choices=("auto", "cpu", "cuda"), default="auto")
     arguments = parser.parse_args(argv)
-    if arguments.epochs < 1 or arguments.batch_size < 1 or arguments.latent_dim < 1:
-        parser.error("epochs, batch size and latent dimension must be positive")
+    if (arguments.epochs < 1 or arguments.batch_size < 1 or
+            arguments.latent_dim < 1 or arguments.latent_samples < 1):
+        parser.error("epochs, batch size, latent dimension and latent samples must be positive")
     if not np.isfinite(arguments.beta) or arguments.beta < 0:
         parser.error("beta must be finite and nonnegative")
     if arguments.num_workers < 0 or arguments.prefetch_factor < 1:

@@ -18,6 +18,31 @@ from icanalyzer.cvae.cache import AutomaticFieldDataset
 from scripts.CVAE.prepare_wic_cvae_cache import WIC_CACHE_FORMAT, load_annotated_wic, load_masked_wic
 
 
+def test_multi_sample_forward_encodes_once_and_decodes_parallel_draws():
+    conditioning = dict(center=2.0, scale=1.0, training_min=0.0, training_max=9.0, embedding_dim=3)
+    model = SplineConditionalVAE(
+        image_shape=(8, 8), latent_dim=4, spline_control_points=4,
+        spline_degree=2, kp_conditioning=conditioning,
+        field_names=("wic_corrected",)
+    ).eval()
+    values = torch.randn(2, 2, 8, 8)
+    valid = torch.ones(2, 1, 8, 8, dtype=torch.bool)
+    kp = torch.tensor([1.0, 4.0])
+
+    torch.manual_seed(17)
+    expected = model(values, valid, kp=kp)
+    torch.manual_seed(17)
+    unchanged = model.forward_samples(values, valid, kp=kp, latent_samples=1)
+    for actual, reference in zip(unchanged, expected):
+        torch.testing.assert_close(actual, reference)
+
+    reconstructed, mu, logvar = model.forward_samples(
+        values, valid, kp=kp, latent_samples=3
+    )
+    assert reconstructed.shape == (2, 3, 1, 8, 8)
+    assert mu.shape == logvar.shape == (2, 4)
+
+
 def test_one_field_transform_model_artifact_and_sampling(tmp_path):
     transform = ChannelTransform([1], [0.2], [0.7], kind=ChannelTransform.LOG10_KIND)
     physical = np.arange(24, dtype=np.float32).reshape(2, 1, 3, 4)
@@ -184,6 +209,7 @@ def test_one_field_disk_cache_and_training_artifact(tmp_path, monkeypatch):
     import scripts.CVAE.train_wic_cvae as trainer
 
     def skip_training(model, *args, **kwargs):
+        assert kwargs["latent_samples"] == 4
         model.best_validation_epoch = 1
         model.best_validation_total = 0.5
         return model, [{"epoch": 1}]
@@ -193,7 +219,8 @@ def test_one_field_disk_cache_and_training_artifact(tmp_path, monkeypatch):
     output = tmp_path / "run"
     arguments = trainer.parse_arguments([
         str(cache), "--output", str(output), "--device", "cpu",
-        "--num-workers", "0", "--latent-dim", "2", "--spline-control-points", "5"
+        "--num-workers", "0", "--latent-dim", "2", "--latent-samples", "4",
+        "--spline-control-points", "5"
     ])
     summary = trainer.run(arguments)
     loaded, transform, artifact = load_run_artifact(output / "wic_cvae.pt")
@@ -202,6 +229,7 @@ def test_one_field_disk_cache_and_training_artifact(tmp_path, monkeypatch):
     assert artifact["data_provenance"]["mask_source"]["kind"] == "manual"
     assert loaded.field_names == ("wic_corrected",)
     assert transform.channel_count == 1
+    assert artifact["training_configuration"]["latent_samples"] == 4
 
     import scripts.CVAE.sample_wic_at_kp as sampler
 

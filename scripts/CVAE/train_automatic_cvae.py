@@ -68,7 +68,7 @@ def run(arguments):
         limit = "uncapped" if arguments.coverage_balance == "full" else f"{arguments.coverage_max_boost:g}"
         print(f"Coverage weighting: balance={arguments.coverage_balance}, sigma={arguments.coverage_sigma:g} pixels, maximum boost={limit}; training frames per Kp bin: {coverage['training_frames_per_bin']}.", flush=True)
 
-    configuration = {name: getattr(arguments, name) for name in ("epochs", "batch_size", "latent_dim", "learning_rate", "beta", "spline_control_points", "spline_degree", "scheduler_factor", "scheduler_patience", "scheduler_minimum_learning_rate")}
+    configuration = {name: getattr(arguments, name) for name in ("epochs", "batch_size", "latent_dim", "latent_samples", "learning_rate", "beta", "spline_control_points", "spline_degree", "scheduler_factor", "scheduler_patience", "scheduler_minimum_learning_rate")}
     configuration.update({
         "seed": seed, "device": device, "input_product_type": "conductance_cs", "field_names": ["Hall", "Pedersen"], "field_units": "S",
         "dataset_backend": metadata["cache_format"], "maximum_missing_fraction": metadata["maximum_missing_fraction"],
@@ -115,7 +115,7 @@ def run(arguments):
             scheduler_factor=arguments.scheduler_factor, scheduler_patience=arguments.scheduler_patience,
             scheduler_minimum_learning_rate=arguments.scheduler_minimum_learning_rate,
             hole_probability=arguments.hole_probability if arguments.training_holes else 0.0, hole_size=arguments.hole_size,
-            hole_device=arguments.hole_device
+            hole_device=arguments.hole_device, latent_samples=arguments.latent_samples
         )
         configuration["selected_epoch"] = model.best_validation_epoch or arguments.epochs
         configuration["selected_validation_total"] = model.best_validation_total
@@ -126,7 +126,7 @@ def run(arguments):
         evaluation = {}
         for name in ("validation", "test"):
             if loaders[name] is not None:
-                evaluation[name] = _run_epoch(model, loaders[name], optimizer=None, device=torch.device(device), beta=arguments.beta, training=False, loss_configuration=loss_configuration, progress_description=f"{name} evaluation")
+                evaluation[name] = _run_epoch(model, loaders[name], optimizer=None, device=torch.device(device), beta=arguments.beta, training=False, loss_configuration=loss_configuration, latent_samples=arguments.latent_samples, progress_description=f"{name} evaluation")
         save_run_artifact(artifact, model, transform, history, configuration, provenance, metadata["split_files"], evaluation=evaluation, artifact_type=CONDUCTANCE_CVAE_ARTIFACT_TYPE)
         summary = {
             "artifact": "automatic_cvae.pt", "artifact_type": CONDUCTANCE_CVAE_ARTIFACT_TYPE, "dataset_backend": metadata["cache_format"],
@@ -151,7 +151,7 @@ def parse_arguments(argv=None):
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--seed", type=int, help="training RNG seed; default is the frozen cache split seed")
-    for name, default in (("epochs", 1000), ("batch-size", 8), ("latent-dim", 36), ("spline-control-points", 30), ("spline-degree", 3), ("scheduler-patience", 10), ("max-open-orbits", 64), ("num-workers", 2), ("prefetch-factor", 2)):
+    for name, default in (("epochs", 1000), ("batch-size", 8), ("latent-dim", 36), ("latent-samples", 1), ("spline-control-points", 30), ("spline-degree", 3), ("scheduler-patience", 10), ("max-open-orbits", 64), ("num-workers", 2), ("prefetch-factor", 2)):
         parser.add_argument("--" + name, type=int, default=default)
     for name, default in (("learning-rate", 1e-4), ("beta", 1.0), ("scheduler-factor", 0.5), ("scheduler-minimum-learning-rate", 0.0), ("cache-mib", 512)):
         parser.add_argument("--" + name, type=float, default=default)
@@ -180,8 +180,8 @@ def parse_arguments(argv=None):
             parser.error("--" + name.replace("_", "-") + " requires --measurement-uncertainty")
         if getattr(arguments, name) is None:
             setattr(arguments, name, default)
-    if arguments.epochs < 1 or arguments.batch_size < 1:
-        parser.error("epochs and batch size must be positive")
+    if arguments.epochs < 1 or arguments.batch_size < 1 or arguments.latent_samples < 1:
+        parser.error("epochs, batch size and latent samples must be positive")
     if not np.isfinite(arguments.beta) or arguments.beta < 0:
         parser.error("beta must be finite and nonnegative")
     if arguments.precision_scale_samples < 1:

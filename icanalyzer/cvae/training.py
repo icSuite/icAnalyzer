@@ -138,6 +138,7 @@ def _run_epoch(
     hole_size=12,
     hole_generator=None,
     hole_device="cpu",
+    latent_samples=1,
     progress_description=None,
 ):
     device = torch.device(device)
@@ -216,7 +217,15 @@ def _run_epoch(
                 if "kp" not in batch:
                     raise ValueError("Kp-conditioned training/evaluation requires per-image Kp labels")
                 condition_arguments["kp"] = batch["kp"].to(device, non_blocking=non_blocking)
-            reconstructed, mu, logvar = model(encoder_input, input_mask, **condition_arguments)
+            if latent_samples == 1:
+                reconstructed, mu, logvar = model(
+                    encoder_input, input_mask, **condition_arguments
+                )
+            else:
+                reconstructed, mu, logvar = model.forward_samples(
+                    encoder_input, input_mask,
+                    latent_samples=latent_samples, **condition_arguments
+                )
             losses = vae_loss(
                 reconstructed,
                 target,
@@ -256,6 +265,7 @@ def train_vae(
     hole_probability=0.0,
     hole_size=12,
     hole_device="auto",
+    latent_samples=1,
 ):
     """Train with separate, consistently reduced reconstruction and KL logs."""
 
@@ -265,6 +275,8 @@ def train_vae(
         raise ValueError("hole_probability must be finite and between zero and one")
     if not isinstance(hole_size, (int, np.integer)) or hole_size < 1:
         raise ValueError("hole_size must be a positive integer")
+    if not isinstance(latent_samples, (int, np.integer)) or latent_samples < 1:
+        raise ValueError("latent_samples must be a positive integer")
     if not np.isfinite(learning_rate) or learning_rate <= 0:
         raise ValueError("learning_rate must be finite and positive")
     if not np.isfinite(scheduler_factor) or not 0 < scheduler_factor < 1:
@@ -306,7 +318,7 @@ def train_vae(
     best_validation_epoch = None
     best_state = None
 
-    print(f"Training VAE on {device}: {epochs} epochs, {len(train_loader)} training batches per epoch.", flush=True)
+    print(f"Training VAE on {device}: {epochs} epochs, {len(train_loader)} training batches per epoch; {latent_samples} latent sample(s) per image.", flush=True)
     if hole_probability > 0:
         print(f"Training-hole generation: {resolved_hole_device}.", flush=True)
     with tqdm(total=epochs, desc="VAE epochs", unit="epoch", position=0, dynamic_ncols=True) as progress:
@@ -319,6 +331,7 @@ def train_vae(
                 beta,
                 training=True,
                 loss_configuration=loss_configuration,
+                latent_samples=latent_samples,
                 progress_description=f"Epoch {epoch}/{epochs} train",
                 **hole_arguments,
             )
@@ -332,6 +345,7 @@ def train_vae(
                     beta=beta,
                     training=False,
                     loss_configuration=loss_configuration,
+                    latent_samples=latent_samples,
                     progress_description=f"Epoch {epoch}/{epochs} validation",
                 )
                 validation_total = record["validation"]["total"]

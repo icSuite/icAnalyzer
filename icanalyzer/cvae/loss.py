@@ -164,8 +164,15 @@ def vae_loss(
     not an untempered ELBO; it exactly matches legacy MSE at zero variance.
     """
 
-    if reconstructed.shape != target.shape or reconstructed.ndim != 4:
-        raise ValueError("reconstructed and target must share shape (batch, channel, y, x)")
+    if reconstructed.ndim == 4:
+        if reconstructed.shape != target.shape:
+            raise ValueError("reconstructed and target must share shape (batch, channel, y, x)")
+    elif reconstructed.ndim == 5:
+        expected = (target.shape[0], reconstructed.shape[1], *target.shape[1:])
+        if reconstructed.shape != expected or reconstructed.shape[1] < 1:
+            raise ValueError("multi-sample reconstruction must have shape (batch, sample, channel, y, x)")
+    else:
+        raise ValueError("reconstructed values must contain one or more latent samples")
     expected_support_shape = (target.shape[0], 1, *target.shape[-2:])
     if mask.shape != expected_support_shape or weight.shape != expected_support_shape:
         raise ValueError("mask and weight must have shape (batch, 1, y, x)")
@@ -246,7 +253,12 @@ def vae_loss(
         effective_weight = weight * relative_precision
         weight_sum = effective_weight.sum() / target.shape[1]
 
-    squared_error = (reconstructed - target)**2
+    if reconstructed.ndim == 5:
+        squared_error = torch.mean(
+            (reconstructed - target[:, None])**2, dim=1
+        )
+    else:
+        squared_error = (reconstructed - target)**2
     state_size = int(np.prod(target.shape[1:]))
     reconstruction_loss = (
         (torch.sum(effective_weight * squared_error) + likelihood_offset)

@@ -113,6 +113,29 @@ def loss_batch():
         mask=torch.tensor([[[[True, True]]], [[[True, True]]], [[[True, False]]]]), kp=torch.tensor([0., 2., 9.]))
 
 
+def test_multi_sample_loss_averages_reconstruction_and_counts_kl_once():
+    target = torch.zeros(2, 1, 2, 2)
+    mask = torch.ones(2, 1, 2, 2, dtype=torch.bool)
+    weight = torch.ones(2, 1, 2, 2)
+    mu = torch.tensor([[0.2, -0.1], [0.3, 0.4]])
+    logvar = torch.tensor([[0.1, -0.2], [0.0, 0.3]])
+    first = torch.full_like(target, 0.5)
+    second = torch.full_like(target, 1.5)
+    beta = 0.4
+
+    individual = [
+        vae_loss(sample, target, mask, weight, mu, logvar, beta=beta)
+        for sample in (first, second)
+    ]
+    combined = vae_loss(
+        torch.stack((first, second), dim=1),
+        target, mask, weight, mu, logvar, beta=beta
+    )
+    for name in ("total", "reconstruction", "kl"):
+        expected = torch.mean(torch.stack([loss[name] for loss in individual]))
+        torch.testing.assert_close(combined[name], expected)
+
+
 class FixedModel(torch.nn.Module):
     def forward(self, values, mask):
         self.inputs = values.clone(), mask.clone()
@@ -241,17 +264,19 @@ def test_trainer_saves_fitted_maps_and_restores_them_for_evaluation(tmp_path, mo
 
     def skip_scientific_training(model, *args, **kwargs):
         assert kwargs["loss_configuration"]["coverage_weighting"]["training_frames_per_bin"] == [2]
+        assert kwargs["latent_samples"] == 3
         model.best_validation_epoch = None
         model.best_validation_total = None
         return model, []
 
     monkeypatch.setattr(trainer, "train_vae", skip_scientific_training)
     output = tmp_path / "run"
-    args = parse_arguments([str(cache), "--output", str(output), "--device", "cpu", "--num-workers", "0", "--batch-size", "2", "--latent-dim", "2", "--spline-control-points", "5", "--coverage-weighting", "--coverage-balance", balance_mode])
+    args = parse_arguments([str(cache), "--output", str(output), "--device", "cpu", "--num-workers", "0", "--batch-size", "2", "--latent-dim", "2", "--latent-samples", "3", "--spline-control-points", "5", "--coverage-weighting", "--coverage-balance", balance_mode])
     summary = trainer.run(args)
     loaded, _, _ = load_run_artifact(output / "automatic_cvae.pt")
     saved = json.loads((output / "coverage_weighting.json").read_text())
     assert saved["balance_mode"] == balance_mode
     assert saved == loaded.loss_configuration["coverage_weighting"]
     assert (output / "coverage_weighting.npz").exists()
+    assert summary["training_configuration"]["latent_samples"] == 3
     assert summary["held_out_evaluation"]["test"]["reconstruction"] >= 0
