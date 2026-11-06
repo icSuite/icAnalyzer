@@ -56,3 +56,7 @@ The former `scripts/IMAGE/vae_pipeline/` directory retains the older
 WIC/SI12 VAE, reconstruction studies, diagnostics and presentation scripts.
 Those are not required to prepare, train or sample either supported automatic
 CVAE above.
+
+Both trainers accept `--hole-device auto|cpu|cuda`. The default `auto` retains
+the historical CPU implementation for CPU training and uses vectorized CUDA
+hole generation for CUDA training. Run artifacts record the resolved backend.

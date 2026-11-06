@@ -31,7 +31,7 @@ def set_random_seed(seed):
 #%% Training
 
 def add_training_holes(encoder_input, mask, probability, hole_size, generator):
-    """Remove one square from selected inputs, retaining the original targets."""
+    """Legacy CPU hole generation retained for exact historical reproduction."""
 
     if probability == 0:
         return encoder_input, mask
@@ -59,6 +59,73 @@ def add_training_holes(encoder_input, mask, probability, hole_size, generator):
     return damaged_input, input_mask
 
 
+def add_training_holes_vectorized(encoder_input, mask, probability, hole_size, generator):
+    """Remove one square per selected image without per-image device synchronization."""
+
+    if probability == 0:
+        return encoder_input, mask
+    height, width = encoder_input.shape[-2:]
+    if not 1 <= hole_size < min(height, width):
+        raise ValueError("hole_size must be positive and smaller than the image dimensions")
+    if encoder_input.device != mask.device:
+        raise ValueError("encoder input and mask must be on the same device")
+
+    batch_size = encoder_input.shape[0]
+    selected = torch.rand(
+        batch_size, device=mask.device, generator=generator
+    ) < probability
+    support = mask[:, 0].reshape(batch_size, -1)
+    selected &= support.any(dim=1)
+    indices = torch.nonzero(selected, as_tuple=False).flatten()
+
+    damaged_input = encoder_input.clone()
+    input_mask = mask.clone()
+    if indices.numel() == 0:
+        return damaged_input, input_mask
+
+    choices = torch.multinomial(
+        support[indices].to(dtype=torch.float32), 1,
+        replacement=True, generator=generator
+    ).flatten()
+    center_row = torch.div(choices, width, rounding_mode="floor")
+    center_column = choices % width
+    top = (center_row - hole_size // 2).clamp(0, height - hole_size)
+    left = (center_column - hole_size // 2).clamp(0, width - hole_size)
+
+    rows = torch.arange(height, device=mask.device)[None, :, None]
+    columns = torch.arange(width, device=mask.device)[None, None, :]
+    holes = (
+        (rows >= top[:, None, None])
+        & (rows < top[:, None, None] + hole_size)
+        & (columns >= left[:, None, None])
+        & (columns < left[:, None, None] + hole_size)
+    )
+    remaining = mask[indices] & ~holes[:, None]
+    keep = remaining.flatten(1).any(dim=1)
+    kept_indices = indices[keep]
+    kept_holes = holes[keep]
+
+    input_mask[kept_indices] = remaining[keep]
+    full_holes = torch.zeros(
+        (batch_size, height, width), dtype=torch.bool, device=mask.device
+    )
+    full_holes[kept_indices] = kept_holes
+    damaged_input.masked_fill_(full_holes[:, None], 0.0)
+    return damaged_input, input_mask
+
+
+def resolve_hole_device(requested, training_device):
+    """Resolve automatic hole placement while retaining an explicit CPU option."""
+
+    if requested not in ("auto", "cpu", "cuda"):
+        raise ValueError("hole device must be auto, cpu or cuda")
+    training_device = torch.device(training_device)
+    resolved = training_device.type if requested == "auto" else requested
+    if resolved == "cuda" and training_device.type != "cuda":
+        raise ValueError("CUDA hole generation requires CUDA training")
+    return resolved
+
+
 def _run_epoch(
     model,
     loader,
@@ -70,6 +137,7 @@ def _run_epoch(
     hole_probability=0.0,
     hole_size=12,
     hole_generator=None,
+    hole_device="cpu",
     progress_description=None,
 ):
     device = torch.device(device)
@@ -92,9 +160,18 @@ def _run_epoch(
         encoder_input = batch["encoder_input"]
         input_mask = batch["mask"]
         if training and hole_probability > 0:
-            encoder_input, input_mask = add_training_holes(
-                encoder_input, input_mask, hole_probability, hole_size, hole_generator
-            )
+            if hole_device == "cuda":
+                encoder_input = encoder_input.to(device, non_blocking=non_blocking)
+                input_mask = input_mask.to(device, non_blocking=non_blocking)
+                encoder_input, input_mask = add_training_holes_vectorized(
+                    encoder_input, input_mask, hole_probability, hole_size,
+                    hole_generator
+                )
+            else:
+                encoder_input, input_mask = add_training_holes(
+                    encoder_input, input_mask, hole_probability, hole_size,
+                    hole_generator
+                )
         encoder_input = encoder_input.to(device, non_blocking=non_blocking)
         input_mask = input_mask.to(device, non_blocking=non_blocking)
         target = batch["target"].to(device, non_blocking=non_blocking)
@@ -178,6 +255,7 @@ def train_vae(
     scheduler_minimum_learning_rate=0.0,
     hole_probability=0.0,
     hole_size=12,
+    hole_device="auto",
 ):
     """Train with separate, consistently reduced reconstruction and KL logs."""
 
@@ -201,14 +279,19 @@ def train_vae(
             "scheduler_minimum_learning_rate must be finite and nonnegative"
         )
     loss_configuration = validate_loss_configuration(loss_configuration)
+    device = torch.device(device)
+    resolved_hole_device = resolve_hole_device(hole_device, device)
     set_random_seed(seed)
-    hole_generator = torch.Generator().manual_seed(int(seed) + 3) if hole_probability > 0 else None
+    hole_generator = (
+        torch.Generator(device=resolved_hole_device).manual_seed(int(seed) + 3)
+        if hole_probability > 0 else None
+    )
     hole_arguments = {
         "hole_probability": hole_probability,
         "hole_size": hole_size,
-        "hole_generator": hole_generator
+        "hole_generator": hole_generator,
+        "hole_device": resolved_hole_device
     } if hole_probability > 0 else {}
-    device = torch.device(device)
     model = model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -224,6 +307,8 @@ def train_vae(
     best_state = None
 
     print(f"Training VAE on {device}: {epochs} epochs, {len(train_loader)} training batches per epoch.", flush=True)
+    if hole_probability > 0:
+        print(f"Training-hole generation: {resolved_hole_device}.", flush=True)
     with tqdm(total=epochs, desc="VAE epochs", unit="epoch", position=0, dynamic_ncols=True) as progress:
         for epoch in range(1, epochs + 1):
             train_metrics = _run_epoch(

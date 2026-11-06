@@ -35,6 +35,16 @@ WIC training now keeps spawned DataLoader workers alive between epochs when
 mapping delay that dominated the first batch of every epoch on Dynamit; the
 setting is recorded in the run artifact configuration.
 
+Supported WIC and Hall/Pedersen CVAE trainers now expose
+`--hole-device auto|cpu|cuda`. `auto` retains the historical per-image CPU
+implementation for CPU training and selects a fully batched CUDA implementation
+for CUDA training. The CUDA path samples selected images and valid centers,
+constructs square holes and applies masks without per-image host synchronization.
+The original targets remain unchanged, sparse masks that would be emptied are
+skipped, and the resolved backend is recorded in the artifact. Focused CPU
+invariant/reproducibility checks pass; this workstation has no available CUDA
+device, so final CUDA performance validation belongs to the Dynamit run.
+
 Real Product-2 orbit85 preparation from the manual JSON retained106 frames
 (37 full,69 partial), excluded16 and reported3 unmatched timestamps at the5%
 intrinsic-valid cutoff. A one-epoch CPU WIC training smoke completed and saved

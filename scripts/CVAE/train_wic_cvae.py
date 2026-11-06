@@ -22,6 +22,7 @@ from icanalyzer.cvae.loss import LEGACY_LOSS_CONFIGURATION
 from icanalyzer.cvae.model import SplineConditionalVAE
 from icanalyzer.cvae.training import (
     _run_epoch,
+    resolve_hole_device,
     set_random_seed,
     train_vae,
     training_device
@@ -41,6 +42,7 @@ def run(arguments):
     if metadata.get("field_names") != ["wic_corrected"] or metadata.get("input_product_type") != "precipitation_cs":
         raise ValueError("expected a one-field corrected-WIC Product-2 cache")
     seed = metadata["seed"] if arguments.seed is None else arguments.seed
+    hole_device = resolve_hole_device(arguments.hole_device, device)
 
     datasets = {}
     for name in ("train", "validation", "test"):
@@ -96,7 +98,8 @@ def run(arguments):
         "pin_memory": device == "cuda", "uncertainty_arrays_loaded": False,
         "training_holes": {
             "probability": arguments.hole_probability, "size": arguments.hole_size,
-            "seed": seed + 3, "target_policy": "original observed cells retained"
+            "seed": seed + 3, "device": hole_device,
+            "target_policy": "original observed cells retained"
         } if arguments.training_holes else None,
         "frame_selection": {name: {"used": metadata["used_frames"][name]} for name in datasets},
         "support_policy": f"{mask_source['kind']} mask AND native finite WIC/quality/coverage support"
@@ -137,7 +140,7 @@ def run(arguments):
             scheduler_patience=arguments.scheduler_patience,
             scheduler_minimum_learning_rate=arguments.scheduler_minimum_learning_rate,
             hole_probability=arguments.hole_probability if arguments.training_holes else 0.0,
-            hole_size=arguments.hole_size
+            hole_size=arguments.hole_size, hole_device=arguments.hole_device
         )
         configuration["selected_epoch"] = model.best_validation_epoch or arguments.epochs
         configuration["selected_validation_total"] = model.best_validation_total
@@ -199,6 +202,7 @@ def parse_arguments(argv=None):
     parser.add_argument("--training-holes", action="store_true")
     parser.add_argument("--hole-probability", type=float, default=0.5)
     parser.add_argument("--hole-size", type=int, default=12)
+    parser.add_argument("--hole-device", choices=("auto", "cpu", "cuda"), default="auto")
     arguments = parser.parse_args(argv)
     if arguments.epochs < 1 or arguments.batch_size < 1 or arguments.latent_dim < 1:
         parser.error("epochs, batch size and latent dimension must be positive")

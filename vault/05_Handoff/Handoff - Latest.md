@@ -58,6 +58,16 @@ epoch. It now sets `persistent_workers=True` whenever `--num-workers` is
 positive and records that choice in the artifact configuration, so worker
 startup and cache mapping are paid only during the first epoch.
 
+After moving the 8.1GB cache from 97%-full NFS into `/dev/shm`, GPU use improved
+but remained limited because artificial training holes were generated one image
+at a time on the CPU. The supported shared CVAE trainer now has
+`--hole-device auto|cpu|cuda`: CUDA training defaults to a vectorized GPU path,
+while `cpu` preserves the historical implementation. The batched path has no
+per-image `.item()`/`.tolist()` synchronization and preserves the hole policy,
+unchanged targets and sparse-mask guard. Artifacts record the resolved backend.
+Two focused backend/invariant checks pass and all changed files parse; local
+CUDA execution could not be tested because CUDA is unavailable on this host.
+
 ## Supported CVAE implementation extracted from legacy WIC/SI12 package (2026-11-05)
 
 `scripts/CVAE/` is now the supported automatic-CVAE command boundary. Its seven

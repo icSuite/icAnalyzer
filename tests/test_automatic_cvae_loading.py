@@ -8,7 +8,11 @@ import torch
 from torch.utils.data import DataLoader
 
 from icanalyzer.cvae.data import ChannelTransform
-from icanalyzer.cvae.training import add_training_holes
+from icanalyzer.cvae.training import (
+    add_training_holes,
+    add_training_holes_vectorized,
+    resolve_hole_device
+)
 import icanalyzer.cvae.training as workflow
 from scripts.CVAE.prepare_cvae_hp_cache import AutomaticConductanceDataset, CACHE_FORMAT
 from scripts.CVAE.train_automatic_cvae import parse_arguments, run, training_device
@@ -122,6 +126,43 @@ def test_workers_preserve_shuffled_batches_holes_and_main_rng(tmp_path):
     assert torch.equal(serial_rng, parallel_rng)
     for expected, actual in zip(serial, parallel):
         assert all(torch.equal(a, b) for a, b in zip(expected, actual))
+
+
+def test_vectorized_training_holes_are_reproducible_and_keep_targets_usable():
+    encoder_input = torch.ones(4, 2, 8, 8)
+    mask = torch.ones(4, 1, 8, 8, dtype=torch.bool)
+    original_input = encoder_input.clone()
+    original_mask = mask.clone()
+
+    first = add_training_holes_vectorized(
+        encoder_input, mask, 1.0, 3, torch.Generator().manual_seed(9)
+    )
+    repeated = add_training_holes_vectorized(
+        encoder_input, mask, 1.0, 3, torch.Generator().manual_seed(9)
+    )
+    assert all(torch.equal(left, right) for left, right in zip(first, repeated))
+    damaged, input_mask = first
+    assert torch.all((~input_mask).sum(dim=(1, 2, 3)) == 9)
+    assert torch.equal(damaged, input_mask.expand_as(damaged).float())
+    assert torch.equal(encoder_input, original_input)
+    assert torch.equal(mask, original_mask)
+
+    sparse = torch.zeros(1, 1, 8, 8, dtype=torch.bool)
+    sparse[0, 0, 4, 4] = True
+    unchanged, unchanged_mask = add_training_holes_vectorized(
+        torch.ones(1, 2, 8, 8), sparse, 1.0, 3,
+        torch.Generator().manual_seed(9)
+    )
+    assert torch.equal(unchanged_mask, sparse)
+    assert torch.all(unchanged == 1)
+
+
+def test_hole_device_defaults_to_training_device():
+    assert resolve_hole_device("auto", "cpu") == "cpu"
+    assert resolve_hole_device("auto", "cuda") == "cuda"
+    assert resolve_hole_device("cpu", "cuda") == "cpu"
+    with pytest.raises(ValueError, match="requires CUDA training"):
+        resolve_hole_device("cuda", "cpu")
 
 
 def test_epoch_metrics_match_original_float64_accumulation(monkeypatch):

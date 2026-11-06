@@ -18,7 +18,7 @@ from icanalyzer.cvae.artifacts import CONDUCTANCE_CVAE_ARTIFACT_TYPE, save_run_a
 from icanalyzer.cvae.data import fit_kp_conditioning
 from icanalyzer.cvae.loss import LEGACY_LOSS_CONFIGURATION, gaussian_uncertainty_configuration
 from icanalyzer.cvae.model import SplineConditionalVAE
-from icanalyzer.cvae.training import _run_epoch, set_random_seed, train_vae, training_device
+from icanalyzer.cvae.training import _run_epoch, resolve_hole_device, set_random_seed, train_vae, training_device
 from scripts.CVAE.prepare_cvae_hp_cache import AutomaticConductanceDataset, cached_coverage_weighting, cached_precision_configuration, read_cache
 
 
@@ -30,6 +30,7 @@ def run(arguments):
         raise FileExistsError("choose a new run directory; existing runs are never overwritten")
     metadata = read_cache(cache)
     seed = metadata["seed"] if arguments.seed is None else arguments.seed
+    hole_device = resolve_hole_device(arguments.hole_device, device)
     include_uncertainty = arguments.measurement_uncertainty or arguments.gaussian_uncertainty
     # Divide the training mapping budget across workers, not duplicate it.
     datasets = {}
@@ -76,7 +77,7 @@ def run(arguments):
         "cache_mib_per_split": arguments.cache_mib, "max_open_orbits_per_worker": arguments.max_open_orbits,
         "num_workers": arguments.num_workers, "prefetch_factor": arguments.prefetch_factor, "pin_memory": device == "cuda",
         "uncertainty_arrays_loaded": include_uncertainty,
-        "training_holes": {"probability": arguments.hole_probability, "size": arguments.hole_size, "seed": seed + 3, "target_policy": "original_observed_cells_retained"} if arguments.training_holes else None,
+        "training_holes": {"probability": arguments.hole_probability, "size": arguments.hole_size, "seed": seed + 3, "device": hole_device, "target_policy": "original_observed_cells_retained"} if arguments.training_holes else None,
         "frame_selection": {name: {"used": metadata["used_frames"][name]} for name in datasets},
         "support_policy": "retained training common-valid support; no synthetic background targets"
     })
@@ -113,7 +114,8 @@ def run(arguments):
             learning_rate=arguments.learning_rate, beta=arguments.beta, device=device, seed=seed, loss_configuration=loss_configuration,
             scheduler_factor=arguments.scheduler_factor, scheduler_patience=arguments.scheduler_patience,
             scheduler_minimum_learning_rate=arguments.scheduler_minimum_learning_rate,
-            hole_probability=arguments.hole_probability if arguments.training_holes else 0.0, hole_size=arguments.hole_size
+            hole_probability=arguments.hole_probability if arguments.training_holes else 0.0, hole_size=arguments.hole_size,
+            hole_device=arguments.hole_device
         )
         configuration["selected_epoch"] = model.best_validation_epoch or arguments.epochs
         configuration["selected_validation_total"] = model.best_validation_total
@@ -156,6 +158,7 @@ def parse_arguments(argv=None):
     parser.add_argument("--training-holes", action="store_true")
     parser.add_argument("--hole-probability", type=float, default=0.5)
     parser.add_argument("--hole-size", type=int, default=12)
+    parser.add_argument("--hole-device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--coverage-weighting", action="store_true", help="Fit smoothed training-only quality coverage and boost underrepresented pixels in the loss")
     parser.add_argument("--coverage-balance", choices=("capped", "full"), default="capped", help="Use capped compensation or the full uncapped inverse of smoothed coverage")
     parser.add_argument("--coverage-sigma", type=float, default=1.5, help="Gaussian width in grid pixels, before inversion (default: 1.5)")
