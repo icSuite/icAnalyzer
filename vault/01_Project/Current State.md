@@ -1,8 +1,8 @@
 # Current State
 
-Last reviewed: 2026-11-06 (conditioning-importance benchmark)
-Repository snapshot: `vae/wic-si12` at `80c7dc5`; `main` remains at `7c71591`
-Worktree: substantial uncommitted implementation and memory changes; user edits preserved
+Last reviewed: 2026-11-07 (year-blocked conditioning result)
+Repository snapshot: `vae/wic-si12` at `6708d83`; `main` remains at `7c71591`
+Worktree: user annotation and generated-output changes preserved
 
 ## SuperMAG conditioning preparation and importance benchmark ready (2026-11-06)
 
@@ -38,11 +38,41 @@ All groups use the same jointly finite population. The observed-total target
 is deliberately named as mask-dependent; PCA is deferred until this simpler
 exact-join benchmark has been inspected.
 
-All 12 focused WIC-CVAE pipeline checks pass. A five-tree, 1,000-training-frame
-manual-cache run completed end to end, verifying mechanics and serialization;
-its scores are not scientific results. Next: run the default year-blocked
-benchmark on the frozen Model1+Model2 automatic WIC cache, inspect fold and
-per-target stability, then decide which variables merit lag/history features.
+The full 1,000-tree automatic-cache result is available externally at
+`~/Dropbox/work/data/IMAGE_CVAE/conditioning/importance_model1_model2_20261107`.
+It uses 235,919 jointly finite frames. Held-out-year overall R2 is 0.162, 0.154,
+0.085 and -0.113 for 2000--2003. Brightness and centroid are predictable in the
+first three folds; width and dawn/dusk asymmetry are weak, and the 2003 fold
+(only January--May, 13,528 frames) shows a domain shift rather than predictor-
+range extrapolation.
+Month matching does not remove the shift: January 2003 centroid latitude is
+66.48 degrees versus 67.93/67.83 in 2001/2002, and April--May 2003 remains
+roughly 3--4 degrees below 2001. Median valid image support is also much lower
+in 2003 than 2001 (0.273 versus 0.472), implicating mask/viewing/instrument
+sampling as well as any seasonal physics. Pure seasonality is not established.
+
+SML is the clearest brightness predictor: drop-group delta R2 is about 0.096
+for both total and mean brightness, and is positive in every year. SMR and the
+density+dynamic-pressure group contribute most to peak/centroid morphology;
+By+Bz adds a smaller but stable morphology/asymmetry signal. Newell adds almost
+nothing conditionally, but it is strongly redundant with Bz and therefore is
+not disproven as a compact replacement variable. Raw velocity is weak and
+unstable after the other groups are present. The stored scalar overall score is
+variance-weighted in physical target units, so variable selection must use the
+per-target results rather than that scalar alone.
+
+The discovery benchmark is now broadened rather than narrowing candidates in
+stages. Its full model has 42 inputs: every retained SuperMAG field, Kp,
+raw/cyclic day of year, cyclic UT, centered-dipole tilt, and cyclic encodings
+of electrojet MLT and IMF clock angle. Every input receives separate drop-column
+and permutation scores. Physically correlated blocks are additionally scored
+together, rather than replacing the individual results, and Kp-only plus
+Kp-and-time models are explicit references. Uniform-average R2 is now the main
+cross-target summary; variance-weighted and per-target values are retained.
+Station counts are diagnostic quality covariates, not presumed production CVAE
+conditions. A full broad run is pending; only after it should compact candidate
+sets and lag/history variants be selected. PCA remains deferred. All 12 focused
+WIC-CVAE pipeline checks and a 42-feature end-to-end smoke pass.
 
 ## Multi-sample latent training is available as an opt-in (2026-11-06)
 

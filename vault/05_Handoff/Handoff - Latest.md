@@ -1,8 +1,8 @@
 # Handoff - Latest
 
-Last updated: 2026-11-06
-Last reviewed: 2026-11-06 (conditioning-importance benchmark)
-Repository snapshot: `vae/wic-si12` at `80c7dc5` with uncommitted conditioning and user annotation changes; `main` remains at `7c71591`
+Last updated: 2026-11-07
+Last reviewed: 2026-11-07 (year-blocked conditioning result)
+Repository snapshot: `vae/wic-si12` at `6708d83` with user annotation and generated-output changes preserved; `main` remains at `7c71591`
 
 ## SuperMAG conditioning-data and importance stages implemented (2026-11-06)
 
@@ -38,13 +38,46 @@ delta R2, both overall and by target. Weighted target standardization is fitted
 inside each training fold. The observed-total target is explicitly
 mask-dependent, and results are predictive rather than causal.
 
-Twelve focused WIC-CVAE tests pass. A tiny manual-cache cache-split run verifies
-the exact join, fit and output serialization only; do not interpret its scores.
-The next scientific action is the documented year-blocked run against the
-frozen Model1+Model2 automatic WIC cache. Inspect fold consistency and target-
-specific importance before adding time histories. PCA remains deferred until
-the simpler summaries and mask effects are understood. Portfolio impact:
-Central update needed: No.
+The full 1,000-tree year-blocked run against the frozen Model1+Model2 cache is
+complete and transferred locally to
+`~/Dropbox/work/data/IMAGE_CVAE/conditioning/importance_model1_model2_20261107`.
+It contains 235,919 jointly finite frames. Full-model held-out R2 for 2000,
+2001, 2002 and 2003 is 0.162, 0.154, 0.085 and -0.113. The last fold contains
+only 13,528 January--May frames; its predictors remain within the training
+ranges, so the failure indicates temporal/observational domain shift rather
+than simple tree extrapolation.
+It is not explained by calendar season alone: within-month centroid latitude
+is still lower in 2003 (January 66.48 degrees versus 67.93/67.83 in 2001/2002;
+April--May roughly 3--4 degrees below 2001). Median valid support is 0.273 in
+2003 versus 0.472 in 2001, so mask/viewing/instrument sampling is a leading
+confounder. Diagnose on common months and comparable support before adding a
+seasonal CVAE condition.
+
+Per-target importance is the decision evidence. SML is the strongest brightness
+driver (drop-group delta R2 about 0.096 for observed total and 0.098 for mean
+brightness). SMR and density+dynamic pressure primarily explain peak and
+centroid latitude. By+Bz has a smaller stable morphology/asymmetry contribution.
+Newell's conditional contribution is negligible but is redundant with Bz, so
+this does not show that Newell is useless as a compact replacement. Raw
+velocity adds little after the other variables. The reported scalar overall R2
+is variance-weighted in physical target units and must not replace the target-
+specific comparison.
+
+The benchmark has now been generalized for broad discovery. The full model has
+42 inputs: all retained SuperMAG fields, Kp, raw/cyclic DOY, cyclic UT,
+centered-dipole tilt, and cyclic electrojet-MLT/clock-angle encodings. By, Bz,
+density, pressure and every other input receive individual drop-column and
+permutation importance. Correlated physical blocks are also tested jointly so
+individual redundancy is not mistaken for irrelevance. Kp-only and Kp-and-time
+reference models are reported. The primary scalar is uniform-average R2, with
+variance-weighted and per-target scores retained. Station counts are diagnostic
+quality inputs and must not automatically enter a production CVAE.
+
+The 42-feature loader, derived time coordinates, individual/group scoring and
+reference models pass 12 focused tests and an end-to-end manual-cache smoke.
+Next: commit and run this broad benchmark on the same automatic cache; only
+then select compact candidate sets and histories. Do not generalize the CVAE
+yet. PCA remains deferred. Portfolio impact: Central update needed: No.
 
 ## Multi-sample latent training implemented as an opt-in (2026-11-06)
 

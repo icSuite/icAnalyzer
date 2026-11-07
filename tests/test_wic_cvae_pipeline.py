@@ -66,7 +66,11 @@ def test_supermag_reader_alignment_and_core_coverage(tmp_path):
 
 
 def test_conditioning_benchmark_morphology_targets_are_explicit():
-    from scripts.CVAE.analyze_conditioning_importance import morphology_targets
+    from scripts.CVAE.analyze_conditioning_importance import (
+        FEATURE_NAMES,
+        morphology_targets,
+        time_features,
+    )
 
     wic = np.asarray([[[1., 3.], [1., 3.]], [[0., 0.], [0., 0.]]])
     valid = np.ones_like(wic, dtype=bool)
@@ -79,6 +83,13 @@ def test_conditioning_benchmark_morphology_targets_are_explicit():
     )
     assert np.isnan(targets[1, 2:]).all()
     np.testing.assert_array_equal(valid_fraction, [1, 1])
+
+    derived = time_features(np.asarray([
+        "2000-01-01T00:00:00", "2000-07-02T12:00:00"
+    ], dtype="datetime64[s]"))
+    np.testing.assert_allclose(derived["day_of_year"], [1, 184.5])
+    np.testing.assert_allclose(derived["dipole_tilt"], [-25.82656, 25.70220], atol=1e-4)
+    assert {"kp", "day_of_year_sin", "day_of_year_cos", "dipole_tilt"} <= set(FEATURE_NAMES)
 
 
 def test_multi_sample_forward_encodes_once_and_decodes_parallel_draws():

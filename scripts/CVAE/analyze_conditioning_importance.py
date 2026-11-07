@@ -11,23 +11,113 @@ from sklearn.ensemble import ExtraTreesRegressor
 from sklearn.metrics import r2_score
 
 from icanalyzer.cvae.cache import file_sha256
+from icanalyzer.cvae.conditioning import SUPERMAG_SOURCE_COLUMNS
 from scripts.CVAE.prepare_conditioning_data import CONDITIONING_FORMAT
 
 
-FEATURE_GROUPS = {
-    "sml": ("sml",),
-    "smr": ("smr",),
-    "imf_by_bz": ("by_gsm", "bz_gsm"),
-    "newell": ("newell",),
-    "velocity": ("vx_gse", "vy_gse", "vz_gsm"),
+RAW_FEATURE_NAMES = tuple(SUPERMAG_SOURCE_COLUMNS.values())
+DERIVED_FEATURE_NAMES = (
+    "kp", "day_of_year", "day_of_year_sin", "day_of_year_cos",
+    "ut_sin", "ut_cos", "dipole_tilt",
+    "sml_mlt_sin", "sml_mlt_cos", "smu_mlt_sin", "smu_mlt_cos",
+    "clock_angle_sin", "clock_angle_cos",
+)
+FEATURE_NAMES = RAW_FEATURE_NAMES + DERIVED_FEATURE_NAMES
+GROUPED_IMPORTANCE = {
+    "auroral_electrojet": ("sme", "sml", "smu"),
+    "electrojet_location": (
+        "sml_mlat", "sml_mlt", "sml_mlt_sin", "sml_mlt_cos",
+        "smu_mlat", "smu_mlt", "smu_mlt_sin", "smu_mlt_cos",
+    ),
+    "ring_current": ("smr", "smr_00", "smr_06", "smr_12", "smr_18"),
+    "station_coverage": tuple(
+        name for name in RAW_FEATURE_NAMES if name.endswith("station_count")
+    ),
+    "imf": ("bx_gsm", "by_gsm", "bz_gsm"),
+    "solar_wind_velocity": ("vx_gse", "vy_gse", "vz_gsm"),
+    "clock_angle": ("clock_angle_gsm", "clock_angle_sin", "clock_angle_cos"),
     "plasma": ("density", "dynamic_pressure"),
+    "coupling_functions": ("epsilon", "newell"),
+    "seasonal_geometry": (
+        "day_of_year", "day_of_year_sin", "day_of_year_cos", "dipole_tilt"
+    ),
+    "universal_time": ("ut_sin", "ut_cos"),
 }
-FEATURE_NAMES = tuple(name for group in FEATURE_GROUPS.values() for name in group)
+IMPORTANCE_SETS = {
+    **{name: (name,) for name in FEATURE_NAMES},
+    **{f"group_{name}": fields for name, fields in GROUPED_IMPORTANCE.items()},
+}
+REFERENCE_MODELS = {
+    "kp_only": ("kp",),
+    "kp_and_time": (
+        "kp", "day_of_year", "day_of_year_sin", "day_of_year_cos",
+        "ut_sin", "ut_cos", "dipole_tilt",
+    ),
+}
 TARGET_NAMES = (
     "log_observed_total_wic", "log_mean_wic", "peak_mlat",
     "brightness_centroid_mlat", "brightness_width_mlat",
     "dawn_dusk_mean_asymmetry",
 )
+
+
+def time_features(time):
+    """Cyclic time coordinates and centered-dipole tilt at epoch 2001.5."""
+
+    time = np.asarray(time, dtype="datetime64[us]")
+    year_start = time.astype("datetime64[Y]")
+    next_year = year_start + np.timedelta64(1, "Y")
+    day_start = time.astype("datetime64[D]")
+    year = year_start.astype(int) + 1970
+    day_of_year = (day_start - year_start.astype("datetime64[D]")).astype(int) + 1
+    seconds = (time - day_start) / np.timedelta64(1, "s")
+    year_fraction = (
+        (time - year_start.astype("datetime64[us]"))
+        / (next_year.astype("datetime64[us]") - year_start.astype("datetime64[us]"))
+    )
+    day_phase = 2 * np.pi * year_fraction
+    ut_phase = 2 * np.pi * seconds / 86400
+
+    # Richmond's Astronomical Almanac subsolar approximation, valid 1601--2100.
+    if np.min(year) <= 1600 or np.max(year) >= 2100:
+        raise ValueError("dipole tilt is implemented only for years 1601--2099")
+    year_from_2000 = year - 2000
+    leap_years = np.floor((year - 1601) / 4) - 99
+    centuries = 3 - np.floor((year - 1601) / 100)
+    leap_years = np.where(year <= 1900, leap_years + centuries, leap_years)
+    mean_longitude_0 = -79.549 - .238699 * (year_from_2000 - 4 * leap_years) + .0308514 * leap_years
+    mean_anomaly_0 = -2.472 - .2558905 * (year_from_2000 - 4 * leap_years) - .0379617 * leap_years
+    days = seconds / 86400 - 1.5 + day_of_year
+    mean_longitude = mean_longitude_0 + .9856474 * days
+    mean_anomaly = np.deg2rad(mean_anomaly_0 + .9856003 * days)
+    ecliptic_longitude = mean_longitude + 1.915 * np.sin(mean_anomaly) + .020 * np.sin(2 * mean_anomaly)
+    ecliptic_longitude = np.deg2rad(ecliptic_longitude)
+    days_from_2000 = days + 365 * year_from_2000 + leap_years
+    obliquity = np.deg2rad(23.439 - 4e-7 * days_from_2000)
+    right_ascension = np.arctan2(
+        np.cos(obliquity) * np.sin(ecliptic_longitude),
+        np.cos(ecliptic_longitude)
+    )
+    declination = np.arcsin(np.sin(obliquity) * np.sin(ecliptic_longitude))
+    equation_of_time = mean_longitude - np.rad2deg(right_ascension)
+    equation_of_time -= 360 * np.round(equation_of_time / 360)
+    subsolar_longitude = np.deg2rad(
+        180 - (seconds / 240 + equation_of_time)
+    )
+    sun = np.column_stack((
+        np.cos(declination) * np.cos(subsolar_longitude),
+        np.cos(declination) * np.sin(subsolar_longitude),
+        np.sin(declination),
+    ))
+    dipole_axis_2001_5 = np.asarray([.05683683, -.17125208, .98358645])
+    dipole_tilt = np.rad2deg(np.arcsin(sun @ dipole_axis_2001_5))
+    return {
+        "day_of_year": day_of_year + seconds / 86400,
+        "day_of_year_sin": np.sin(day_phase),
+        "day_of_year_cos": np.cos(day_phase),
+        "ut_sin": np.sin(ut_phase), "ut_cos": np.cos(ut_phase),
+        "dipole_tilt": dipole_tilt,
+    }
 
 
 #%% Exact conditioning join and interpretable WIC targets
@@ -85,7 +175,10 @@ def load_benchmark_data(cache_directory, conditioning_directory):
     grid = cache_manifest["grid"]
     mlat = np.asarray(grid["mlat"], dtype=np.float64)
     mlt = np.asarray(grid["mlt"], dtype=np.float64)
-    collected = {name: [] for name in ("features", "targets", "valid_fraction", "orbit", "time", "split")}
+    collected = {
+        name: [] for name in
+        ("features", "targets", "valid_fraction", "orbit", "time", "split")
+    }
     for row in cache_manifest["orbits"]:
         if not row.get("shard"):
             continue
@@ -94,6 +187,7 @@ def load_benchmark_data(cache_directory, conditioning_directory):
             selected = frames["eligible"].astype(bool)
             frame = frames["source_frame"][selected]
             time = frames["time"][selected].astype("datetime64[us]")
+            kp = frames["kp"][selected]
         key = int(row["orbit"]) * 1_000_000 + frame.astype(np.int64)
         positions = np.searchsorted(sorted_key, key)
         if np.any(positions == len(sorted_key)) or np.any(sorted_key[np.minimum(positions, len(sorted_key) - 1)] != key):
@@ -105,7 +199,22 @@ def load_benchmark_data(cache_directory, conditioning_directory):
         physical = np.load(shard / "physical.npy", mmap_mode="r")
         valid = np.load(shard / "valid.npy", mmap_mode="r")
         targets, valid_fraction = morphology_targets(physical[selected, 0], valid[selected], mlat, mlt)
-        collected["features"].append(np.column_stack([condition[name][positions] for name in FEATURE_NAMES]))
+        features = {
+            name: condition[name][positions] for name in RAW_FEATURE_NAMES
+        }
+        features.update(time_features(time))
+        features.update({
+            "kp": kp,
+            "sml_mlt_sin": np.sin(2 * np.pi * features["sml_mlt"] / 24),
+            "sml_mlt_cos": np.cos(2 * np.pi * features["sml_mlt"] / 24),
+            "smu_mlt_sin": np.sin(2 * np.pi * features["smu_mlt"] / 24),
+            "smu_mlt_cos": np.cos(2 * np.pi * features["smu_mlt"] / 24),
+            "clock_angle_sin": np.sin(np.deg2rad(features["clock_angle_gsm"])),
+            "clock_angle_cos": np.cos(np.deg2rad(features["clock_angle_gsm"])),
+        })
+        collected["features"].append(np.column_stack([
+            features[name] for name in FEATURE_NAMES
+        ]).astype(np.float32))
         collected["targets"].append(targets)
         collected["valid_fraction"].append(valid_fraction)
         collected["orbit"].append(np.full(len(frame), row["orbit"], dtype=np.int32))
@@ -118,12 +227,15 @@ def load_benchmark_data(cache_directory, conditioning_directory):
 
 def scores(target, predicted, weight):
     overall = float(r2_score(
+        target, predicted, sample_weight=weight, multioutput="uniform_average"
+    ))
+    variance_weighted = float(r2_score(
         target, predicted, sample_weight=weight, multioutput="variance_weighted"
     ))
     per_target = r2_score(
         target, predicted, sample_weight=weight, multioutput="raw_values"
     )
-    return overall, {
+    return overall, variance_weighted, {
         name: float(value) for name, value in zip(TARGET_NAMES, per_target)
     }
 
@@ -182,15 +294,22 @@ def run(arguments):
             x_train, scaled_train, sample_weight=train_weight
         )
         full_prediction = full.predict(x_test) * target_scale + target_center
-        full_score, full_target_scores = scores(y_test, full_prediction, weight)
+        full_score, full_variance_score, full_target_scores = scores(
+            y_test, full_prediction, weight
+        )
+        print(
+            f"{name}: full uniform R2={full_score:.4f}; "
+            f"{len(train_indices)} train, {len(test_indices)} held out",
+            flush=True
+        )
         importance = {}
-        for group, names in FEATURE_GROUPS.items():
+        for position, (group, names) in enumerate(IMPORTANCE_SETS.items(), start=1):
             columns = [FEATURE_NAMES.index(field) for field in names]
             retained = [column for column in range(len(FEATURE_NAMES)) if column not in columns]
             reduced = model(arguments, arguments.seed + 100 + number).fit(
                 x_train[:, retained], scaled_train, sample_weight=train_weight
             )
-            reduced_score, reduced_target_scores = scores(
+            reduced_score, reduced_variance_score, reduced_target_scores = scores(
                 y_test,
                 reduced.predict(x_test[:, retained]) * target_scale + target_center,
                 weight
@@ -198,13 +317,19 @@ def run(arguments):
             permuted = x_test.copy()
             permutation = rng.permutation(len(permuted))
             permuted[:, columns] = permuted[permutation][:, columns]
-            permutation_score, permutation_target_scores = scores(
+            permutation_score, permutation_variance_score, permutation_target_scores = scores(
                 y_test, full.predict(permuted) * target_scale + target_center,
                 weight
             )
             importance[group] = {
                 "drop_group_delta_r2": full_score - reduced_score,
                 "permutation_delta_r2": full_score - permutation_score,
+                "drop_group_delta_variance_weighted_r2": (
+                    full_variance_score - reduced_variance_score
+                ),
+                "permutation_delta_variance_weighted_r2": (
+                    full_variance_score - permutation_variance_score
+                ),
                 "drop_group_delta_r2_by_target": {
                     target: full_target_scores[target] - reduced_target_scores[target]
                     for target in TARGET_NAMES
@@ -214,16 +339,43 @@ def run(arguments):
                     for target in TARGET_NAMES
                 },
             }
+            print(
+                f"  importance {position}/{len(IMPORTANCE_SETS)}: {group}",
+                flush=True
+            )
+        references = {}
+        for reference, names in REFERENCE_MODELS.items():
+            columns = [FEATURE_NAMES.index(field) for field in names]
+            fitted = model(arguments, arguments.seed + 1000 + number).fit(
+                x_train[:, columns], scaled_train, sample_weight=train_weight
+            )
+            prediction = (
+                fitted.predict(x_test[:, columns]) * target_scale + target_center
+            )
+            reference_score, reference_variance_score, target_scores = scores(
+                y_test, prediction, weight
+            )
+            references[reference] = {
+                "r2": reference_score,
+                "variance_weighted_r2": reference_variance_score,
+                "r2_by_target": target_scores,
+            }
         fold_results.append({
             "fold": name, "train_frames": len(train_indices),
             "test_frames": len(test_indices), "full_r2": full_score,
-            "full_r2_by_target": full_target_scores, "importance": importance
+            "full_variance_weighted_r2": full_variance_score,
+            "full_r2_by_target": full_target_scores,
+            "reference_models": references, "importance": importance
         })
 
     aggregate = {}
-    for group in FEATURE_GROUPS:
+    for group in IMPORTANCE_SETS:
         aggregate[group] = {}
-        for metric in ("drop_group_delta_r2", "permutation_delta_r2"):
+        for metric in (
+            "drop_group_delta_r2", "permutation_delta_r2",
+            "drop_group_delta_variance_weighted_r2",
+            "permutation_delta_variance_weighted_r2",
+        ):
             values = [fold["importance"][group][metric] for fold in fold_results]
             aggregate[group][metric] = float(np.mean(values))
             aggregate[group][metric + "_fold_std"] = float(np.std(values))
@@ -237,16 +389,41 @@ def run(arguments):
     output.mkdir(parents=True)
     np.savez_compressed(output / "benchmark_data.npz", **data, feature_names=FEATURE_NAMES, target_names=TARGET_NAMES)
     result = {
-        "feature_groups": FEATURE_GROUPS, "target_names": TARGET_NAMES,
+        "feature_names": FEATURE_NAMES,
+        "individual_importance": list(FEATURE_NAMES),
+        "grouped_importance": GROUPED_IMPORTANCE,
+        "reference_models": REFERENCE_MODELS, "target_names": TARGET_NAMES,
         "split_mode": arguments.split_mode, "jointly_finite_frames": len(data["features"]),
         "folds": fold_results, "aggregate_importance": aggregate,
         "cache_manifest_sha256": file_sha256(Path(arguments.cache).expanduser() / "manifest.json"),
         "conditioning_manifest_sha256": file_sha256(Path(arguments.conditioning).expanduser() / "manifest.json"),
         "target_training": "weighted standardization within each training fold",
-        "interpretation": "predictive importance for masked WIC summaries; not causal attribution",
+        "time_feature_provenance": {
+            "day_of_year": "UTC, with cyclic sine/cosine encoding",
+            "universal_time": "UTC cyclic sine/cosine encoding",
+            "dipole_tilt": (
+                "Richmond Astronomical Almanac subsolar position and fixed "
+                "centered-dipole IGRF axis at epoch 2001.5"
+            ),
+        },
+        "interpretation": (
+            "predictive importance for masked WIC summaries; individual values "
+            "can be suppressed by correlated predictors and are not causal attribution"
+        ),
     }
     (output / "importance.json").write_text(json.dumps(result, indent=2) + "\n")
-    print(json.dumps(aggregate, indent=2), flush=True)
+    print(f"Saved conditioning benchmark: {output}", flush=True)
+    print("Uniform-average importance ranking:", flush=True)
+    for name in sorted(
+        aggregate,
+        key=lambda item: aggregate[item]["permutation_delta_r2"],
+        reverse=True
+    ):
+        print(
+            f"  {name:32s} drop={aggregate[name]['drop_group_delta_r2']:+.5f} "
+            f"permutation={aggregate[name]['permutation_delta_r2']:+.5f}",
+            flush=True
+        )
     return result
 
 

@@ -13,9 +13,13 @@ modify a CVAE cache or model.
 
 `analyze_conditioning_importance.py` joins that table exactly to an existing
 WIC cache by orbit, source-frame index and timestamp. It evaluates named
-parameter groups against interpretable masked-WIC brightness and morphology
-targets with held-out years, drop-group refits and grouped permutation. This
-selects candidate conditioning variables; it does not train or alter a CVAE.
+parameters against interpretable masked-WIC brightness and morphology targets
+with held-out years, drop-column refits and permutation. The full discovery
+model begins broadly: every retained SuperMAG field plus Kp, raw/cyclic day of
+year, cyclic UT, centered-dipole tilt and cyclic MLT/clock-angle encodings.
+Every input receives individual importance; correlated physical blocks are
+also tested jointly, and Kp-only is an explicit reference model. This selects
+candidate conditioning variables; it does not train or alter a CVAE.
 
 Existing spline artifacts created before the package/class rename remain
 loadable. New models must explicitly name their modeled fields, so WIC and
@@ -72,16 +76,23 @@ Model1+Model2 automatic WIC cache:
 PYTHONPATH=. python scripts/CVAE/analyze_conditioning_importance.py \
   ~/Dropbox/work/data/IMAGE_CVAE/training_data/automatic_wic_cvae_model1_model2_fuvpy_bs2d_valid5_20261106 \
   ~/Dropbox/work/data/IMAGE_CVAE/conditioning/supermag_all \
-  --output ~/Dropbox/work/data/IMAGE_CVAE/conditioning/importance_model1_model2_20261106 \
+  --output ~/Dropbox/work/data/IMAGE_CVAE/conditioning/importance_model1_model2_broad_20261107 \
   --split-mode year \
+  --trees 500 \
+  --maximum-training-frames 1000000 \
   --threads 4
 ```
 
 The benchmark uses only the jointly finite predictor population and
 standardizes all WIC targets within each training fold. Its total-brightness
 target is explicitly the observed masked total and therefore remains sensitive
-to mask coverage. `--split-mode cache` exists only for a quick mechanical smoke
-on a small manual cache; its scores are not the scientific comparison.
+to mask coverage. Uniform-average R2 is the primary cross-target summary, and
+the output also retains variance-weighted and per-target scores. Station counts
+are included as diagnostic observation-quality inputs, not presumed production
+CVAE conditions. Individual importance can be suppressed by correlated inputs,
+so it must be interpreted together with the grouped results. `--split-mode
+cache` exists only for a quick mechanical smoke on a small manual cache; its
+scores are not the scientific comparison.
 
 For a manual-mask WIC cache, use a fresh output directory:
 
