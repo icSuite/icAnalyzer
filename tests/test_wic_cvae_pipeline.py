@@ -27,6 +27,10 @@ from icanalyzer.cvae.conditioning import (
     read_supermag_file,
 )
 from scripts.CVAE.prepare_wic_cvae_cache import WIC_CACHE_FORMAT, load_annotated_wic, load_masked_wic
+from scripts.CVAE.select_conditioning_cases import (
+    condition_record,
+    representative_indices,
+)
 
 
 def test_supermag_reader_alignment_and_core_coverage(tmp_path):
@@ -196,6 +200,42 @@ def test_named_conditioning_exact_join_dataset_and_model(tmp_path):
     })
     assert requested.shape == (len(CONDITIONING_FEATURE_NAMES),)
     assert requested[-2] == 1
+
+
+def test_condition_case_selection_uses_distinct_observed_rows():
+    random = np.random.default_rng(42)
+    count = 2000
+    day_phase = random.uniform(0, 2 * np.pi, count)
+    clock_phase = random.uniform(0, 2 * np.pi, count)
+    matrix = np.column_stack((
+        -random.lognormal(5.2, .7, count),
+        random.normal(-15, 25, count),
+        random.normal(0, 5, count),
+        random.normal(0, 5, count),
+        random.normal(-450, 70, count),
+        random.lognormal(.5, .5, count),
+        random.lognormal(8, .7, count),
+        random.choice(np.arange(0, 7.33, .33), count),
+        np.sin(day_phase), np.cos(day_phase),
+        random.uniform(-30, 30, count),
+        np.sin(clock_phase), np.cos(clock_phase),
+    )).astype(np.float32)
+
+    selected = representative_indices(matrix)
+    assert [label for label, _, _ in selected] == [
+        "typical", "quiet", "active_substorm", "storm",
+        "by_negative", "by_positive", "bz_south", "bz_north",
+    ]
+    assert len({index for _, index, _ in selected}) == len(selected)
+    for label, index, candidate_count in selected:
+        record = condition_record(
+            label, matrix[index], 85, index,
+            np.datetime64("2001-04-01T06:00:00"), candidate_count
+        )
+        round_trip = conditioning_vector_from_record(record)
+        np.testing.assert_allclose(round_trip, matrix[index], atol=2e-6)
+        assert record["source_orbit"] == 85
+        assert record["regime_candidate_frames"] == candidate_count
 
 
 def test_multi_sample_forward_encodes_once_and_decodes_parallel_draws():

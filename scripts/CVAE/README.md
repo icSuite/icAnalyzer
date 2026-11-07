@@ -40,6 +40,8 @@ Hall/Pedersen artifacts cannot silently inherit the old WIC/SI12 labels.
   disk-backed cache.
 - `train_wic_cvae.py`: train the one-channel WIC CVAE with historical scalar
   Kp conditioning or the selected 11-feature condition vector.
+- `select_conditioning_cases.py`: select representative complete condition
+  vectors from actual cache-aligned training frames for ensemble sampling.
 - `sample_wic_at_kp.py`: draw WIC at selected Kp or named 11-feature conditions
   and propagate each member through collapsed Zhang--Paxton and Fang electron
   conductance.
@@ -55,6 +57,7 @@ PYTHONPATH=. python scripts/CVAE/sample_conductance_at_kp.py --help
 
 PYTHONPATH=. python scripts/CVAE/prepare_wic_cvae_cache.py --help
 PYTHONPATH=. python scripts/CVAE/train_wic_cvae.py --help
+PYTHONPATH=. python scripts/CVAE/select_conditioning_cases.py --help
 PYTHONPATH=. python scripts/CVAE/sample_wic_at_kp.py --help
 PYTHONPATH=. python scripts/CVAE/plot_wic_at_kp.py --help
 ```
@@ -133,6 +136,19 @@ conditions. DOY and clock angle are converted to cyclic pairs internally:
     "dipole_tilt": 10
   }
 ]
+```
+
+Rather than inventing combinations of correlated parameters, generate the
+JSON from complete, actually observed training rows. The default cases are
+typical, quiet, active-substorm, storm, By negative/positive and Bz
+south/north. Within each explicitly thresholded regime, the chosen row is
+nearest the regime's multivariate median:
+
+```bash
+PYTHONPATH=. python scripts/CVAE/select_conditioning_cases.py \
+  ~/IMAGE_CVAE/training_data/automatic_wic_cvae_model1_model2_fuvpy_bs2d_valid5_20261106 \
+  ~/IMAGE_CVAE/conditioning/supermag_all \
+  --output ~/IMAGE_CVAE/conditioning/sample_conditions.json
 ```
 
 ```bash
