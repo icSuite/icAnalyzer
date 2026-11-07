@@ -15,7 +15,70 @@ from icanalyzer.cvae.data import ChannelTransform, split_orbit_files
 from icanalyzer.cvae.ensemble import sample_decoded_ensemble
 from icanalyzer.cvae.model import SplineConditionalVAE
 from icanalyzer.cvae.cache import AutomaticFieldDataset
+from icanalyzer.cvae.conditioning import (
+    SUPERMAG_SOURCE_COLUMNS,
+    align_conditioning,
+    conditioning_coverage,
+    read_supermag_file,
+)
 from scripts.CVAE.prepare_wic_cvae_cache import WIC_CACHE_FORMAT, load_annotated_wic, load_masked_wic
+
+
+def test_supermag_reader_alignment_and_core_coverage(tmp_path):
+    filename = tmp_path / "year_2000.txt"
+    headers = ["year", "month", "day", "hour", "min", "sec"] + list(SUPERMAG_SOURCE_COLUMNS)
+    first_values = list(range(1, len(SUPERMAG_SOURCE_COLUMNS) + 1))
+    second_values = list(range(101, 101 + len(SUPERMAG_SOURCE_COLUMNS)))
+    newell = list(SUPERMAG_SOURCE_COLUMNS).index("Newell CF (Wb/s)")
+    first_values[newell] = 999999
+    rows = [
+        [2000, 1, 1, 0, 0, 0, *first_values],
+        [2000, 1, 1, 0, 1, 0, *second_values],
+    ]
+    filename.write_text(
+        "SuperMAG test export downloaded from service on test-time.\n"
+        "Data revision 6\n"
+        + "\t".join(f"<{name}>" for name in headers) + "\n"
+        + "\n".join("\t".join(map(str, row)) for row in rows)
+        + "\n<br />\n<b>trailing download-service error</b>\n"
+    )
+
+    supermag, provenance = read_supermag_file(filename)
+    assert provenance["data_revision"] == 6
+    assert provenance["rows"] == 2
+    assert provenance["ignored_trailing_nondata_rows"] == 2
+    assert np.isnan(supermag["newell"][0])
+    assert supermag["newell"][1] == second_values[newell]
+
+    query = np.asarray([
+        "2000-01-01T00:00:20", "2000-01-01T00:00:50",
+        "2000-01-01T00:03:00"
+    ], dtype="datetime64[s]")
+    aligned = align_conditioning(supermag, query, maximum_offset_seconds=30)
+    np.testing.assert_array_equal(aligned["time_matched"], [True, True, False])
+    np.testing.assert_allclose(aligned["time_offset_seconds"][:2], [20, -10])
+    assert aligned["sml"][0] == first_values[1]
+    assert aligned["sml"][1] == second_values[1]
+    assert np.isnan(aligned["sml"][2])
+    coverage = conditioning_coverage(aligned)
+    assert coverage["time_matched_frames"] == 2
+    assert coverage["core_joint_finite_frames"] == 1
+
+
+def test_conditioning_benchmark_morphology_targets_are_explicit():
+    from scripts.CVAE.analyze_conditioning_importance import morphology_targets
+
+    wic = np.asarray([[[1., 3.], [1., 3.]], [[0., 0.], [0., 0.]]])
+    valid = np.ones_like(wic, dtype=bool)
+    mlat = np.asarray([[60., 60.], [70., 70.]])
+    mlt = np.asarray([[6., 18.], [6., 18.]])
+    targets, valid_fraction = morphology_targets(wic, valid, mlat, mlt)
+
+    np.testing.assert_allclose(
+        targets[0], [np.log10(9), np.log10(3), 60, 65, 5, .5]
+    )
+    assert np.isnan(targets[1, 2:]).all()
+    np.testing.assert_array_equal(valid_fraction, [1, 1])
 
 
 def test_multi_sample_forward_encodes_once_and_decodes_parallel_draws():

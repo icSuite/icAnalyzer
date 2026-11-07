@@ -1,8 +1,50 @@
 # Handoff - Latest
 
 Last updated: 2026-11-06
-Last reviewed: 2026-11-06 (multi-sample CVAE training option)
-Repository snapshot: `vae/wic-si12` at `2d04bc0` with uncommitted CVAE and memory changes; `main` remains at `7c71591`
+Last reviewed: 2026-11-06 (conditioning-importance benchmark)
+Repository snapshot: `vae/wic-si12` at `80c7dc5` with uncommitted conditioning and user annotation changes; `main` remains at `7c71591`
+
+## SuperMAG conditioning-data and importance stages implemented (2026-11-06)
+
+Keep one supported `scripts/CVAE/` workflow. Do not create a copied
+`CVAE_kp`; Kp will be the scalar compatibility case of a future named
+conditioning vector. The model remains unchanged while parameter information
+and availability are measured.
+
+`prepare_conditioning_data.py` now reads external yearly SuperMAG text files,
+preserves revision/download/hash provenance, converts `999999` to NaN, selects
+SML/SMU/SME, global/sector SMR and station counts, IMF/solar-wind parameters,
+clock angle, epsilon and Newell coupling, and aligns them to Product-2 frames.
+Nearest-minute matching is limited to 30 seconds and no gaps are filled. Output
+is a new external directory containing `conditioning.npz` and `manifest.json`;
+existing outputs are never overwritten.
+
+The user completed the combined 2000--2003 table at
+`~/Dropbox/work/data/IMAGE_CVAE/conditioning/supermag_all`: 2,103,840 unique
+SuperMAG minutes aligned to 400,554 Product-2 frames. All frame times match.
+SML/SMR coverage is 100%, By/Bz 92.47%, velocity and density about 81.97%,
+dynamic pressure 82.26%, and Newell 81.51%. The By/Bz/SML/SMR/Newell core is
+jointly finite for 323,596 frames (80.79%). The 2002 download's two trailing
+HTML/PHP timeout lines are recorded and ignored; malformed in-series rows still
+fail. The repository's user-edited annotation JSON remains untouched.
+
+`analyze_conditioning_importance.py` is now the independent second stage. It
+joins a one-field WIC cache exactly by orbit, source-frame index and timestamp;
+constructs explicit brightness, peak latitude, centroid, width and dawn/dusk
+summary targets; and compares SML, SMR, IMF By+Bz, Newell, velocity and plasma
+groups on the same jointly finite frames. The default evaluation holds out one
+year at a time and reports full-model R2 plus drop-group and grouped-permutation
+delta R2, both overall and by target. Weighted target standardization is fitted
+inside each training fold. The observed-total target is explicitly
+mask-dependent, and results are predictive rather than causal.
+
+Twelve focused WIC-CVAE tests pass. A tiny manual-cache cache-split run verifies
+the exact join, fit and output serialization only; do not interpret its scores.
+The next scientific action is the documented year-blocked run against the
+frozen Model1+Model2 automatic WIC cache. Inspect fold consistency and target-
+specific importance before adding time histories. PCA remains deferred until
+the simpler summaries and mask effects are understood. Portfolio impact:
+Central update needed: No.
 
 ## Multi-sample latent training implemented as an opt-in (2026-11-06)
 

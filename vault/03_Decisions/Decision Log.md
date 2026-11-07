@@ -1,5 +1,15 @@
 # Decision Log
 
+## 2026-11-06 — Generalize one CVAE pipeline rather than fork a Kp copy
+
+Do not rename the supported `scripts/CVAE/` workflow to `CVAE_kp` or duplicate
+its cache, model, loss, training and sampling machinery. Kp will remain the
+one-feature compatibility case of a future named conditioning vector. Before
+changing the model, prepare a source-independent, frame-aligned SuperMAG table
+and quantify coverage and predictive importance. Generated conditioning data
+belongs outside the repository; current Kp artifacts and samplers remain
+unchanged until the useful parameter set has been selected.
+
 ## 2026-11-05 — Use generic WIC and explicit H/P cache preparation names
 
 The canonical WIC commands are `prepare_wic_cvae_cache.py` and

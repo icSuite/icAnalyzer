@@ -4,6 +4,19 @@ This directory contains the two supported Kp-conditional CVAE workflows. Both
 use the generic spline model, cache loaders, losses, training loop, artifact
 format and ensemble machinery under `icanalyzer/cvae/`.
 
+`prepare_conditioning_data.py` is the independent first step toward replacing
+scalar Kp with a selected space-weather conditioning vector. It reads yearly
+SuperMAG text exports, converts `999999` fill values to missing data, aligns
+the selected one-minute parameters to Product-2 frame times and writes a
+compact external table plus quantitative coverage/provenance. It does not
+modify a CVAE cache or model.
+
+`analyze_conditioning_importance.py` joins that table exactly to an existing
+WIC cache by orbit, source-frame index and timestamp. It evaluates named
+parameter groups against interpretable masked-WIC brightness and morphology
+targets with held-out years, drop-group refits and grouped permutation. This
+selects candidate conditioning variables; it does not train or alter a CVAE.
+
 Existing spline artifacts created before the package/class rename remain
 loadable. New models must explicitly name their modeled fields, so WIC and
 Hall/Pedersen artifacts cannot silently inherit the old WIC/SI12 labels.
@@ -38,6 +51,37 @@ PYTHONPATH=. python scripts/CVAE/train_wic_cvae.py --help
 PYTHONPATH=. python scripts/CVAE/sample_wic_at_kp.py --help
 PYTHONPATH=. python scripts/CVAE/plot_wic_at_kp.py --help
 ```
+
+Prepare the combined conditioning table outside the repository:
+
+```bash
+PYTHONPATH=. python scripts/CVAE/prepare_conditioning_data.py \
+  --supermag-dir /media/bing/LaCie/supermag_data \
+  --source ~/Dropbox/work/data/IMAGE_FUV_new/precipitation_cs/image_apex_130km_46x46_v1/IR_hardy_smoothed_wic1_si121_si131 \
+  --output ~/Dropbox/work/data/IMAGE_CVAE/conditioning/supermag_all
+```
+
+The output includes all Product-2 frames overlapping the supplied SuperMAG
+time span. Nearest-minute alignment is limited to 30 seconds by default;
+long gaps and source fill values remain missing rather than being interpolated.
+
+Run the scientific parameter benchmark against the corresponding frozen
+Model1+Model2 automatic WIC cache:
+
+```bash
+PYTHONPATH=. python scripts/CVAE/analyze_conditioning_importance.py \
+  ~/Dropbox/work/data/IMAGE_CVAE/training_data/automatic_wic_cvae_model1_model2_fuvpy_bs2d_valid5_20261106 \
+  ~/Dropbox/work/data/IMAGE_CVAE/conditioning/supermag_all \
+  --output ~/Dropbox/work/data/IMAGE_CVAE/conditioning/importance_model1_model2_20261106 \
+  --split-mode year \
+  --threads 4
+```
+
+The benchmark uses only the jointly finite predictor population and
+standardizes all WIC targets within each training fold. Its total-brightness
+target is explicitly the observed masked total and therefore remains sensitive
+to mask coverage. `--split-mode cache` exists only for a quick mechanical smoke
+on a small manual cache; its scores are not the scientific comparison.
 
 For a manual-mask WIC cache, use a fresh output directory:
 

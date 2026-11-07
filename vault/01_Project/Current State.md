@@ -1,8 +1,48 @@
 # Current State
 
-Last reviewed: 2026-11-06 (multi-sample CVAE training option)
-Repository snapshot: `vae/wic-si12` at `2d04bc0`; `main` remains at `7c71591`
+Last reviewed: 2026-11-06 (conditioning-importance benchmark)
+Repository snapshot: `vae/wic-si12` at `80c7dc5`; `main` remains at `7c71591`
 Worktree: substantial uncommitted implementation and memory changes; user edits preserved
+
+## SuperMAG conditioning preparation and importance benchmark ready (2026-11-06)
+
+The generic-conditioning work will extend the existing `scripts/CVAE/`
+pipeline; it will not create a duplicated `CVAE_kp` tree. Kp remains the
+one-feature compatibility case until the candidate parameter set is selected.
+The first independent stage is implemented in
+`scripts/CVAE/prepare_conditioning_data.py` with shared parsing/alignment in
+`icanalyzer/cvae/conditioning.py`. It reads yearly SuperMAG text exports,
+converts the `999999` fill sentinel to NaN, retains index/station-count/solar-
+wind/Newell fields, aligns the one-minute data to Product-2 frames within an
+explicit 30-second limit and writes an external compressed table plus manifest.
+No CVAE cache, architecture, artifact or sampler changed.
+
+The user completed the combined external table at
+`~/Dropbox/work/data/IMAGE_CVAE/conditioning/supermag_all`. Four yearly files
+(2000--2003) contribute 2,103,840 unique one-minute rows. All 400,554 Product-2
+frames match a SuperMAG minute. SML and SMR are 100% finite, By/Bz 92.47%,
+velocity about 81.97%, density about 81.97%, dynamic pressure 82.26%, and
+Newell 81.51%. By/Bz/SML/SMR/Newell are jointly finite for 323,596 frames
+(80.79%). The 2002 file's complete data block has two trailing HTML/PHP timeout
+lines; the reader records and ignores only that trailing suffix while retaining
+a hard failure for malformed rows inside the time series.
+
+`scripts/CVAE/analyze_conditioning_importance.py` now makes an exact
+orbit/source-frame/timestamp join to a one-field WIC cache. It predicts six
+explicit masked-WIC summaries from SML, SMR, IMF By+Bz, Newell, velocity and
+density+dynamic-pressure groups. Evaluation is leave-one-year-out and reports
+both full-versus-drop-group and grouped-permutation delta R2, including
+per-target values. Targets are weighted-standardized inside each training fold
+so the multi-output tree is not dominated by their different physical scales.
+All groups use the same jointly finite population. The observed-total target
+is deliberately named as mask-dependent; PCA is deferred until this simpler
+exact-join benchmark has been inspected.
+
+All 12 focused WIC-CVAE pipeline checks pass. A five-tree, 1,000-training-frame
+manual-cache run completed end to end, verifying mechanics and serialization;
+its scores are not scientific results. Next: run the default year-blocked
+benchmark on the frozen Model1+Model2 automatic WIC cache, inspect fold and
+per-target stability, then decide which variables merit lag/history features.
 
 ## Multi-sample latent training is available as an opt-in (2026-11-06)
 
@@ -18,6 +58,10 @@ Focused model, loss and WIC/Hall-Pedersen trainer checks pass: 42 checks pass
 with the known sandbox-only spawned-worker socket test deselected. CUDA speed
 and scientific quality versus the completed one-sample WIC baseline still need
 evaluation on Dynamit; no new scientific model run was launched locally.
+The user subsequently reports that fixed-Kp ensemble plots from the one- and
+four-sample training runs are essentially indistinguishable. This is a
+qualitative negative result for extra latent draws; quantitative held-out and
+ensemble-score comparison remains pending.
 
 ## Manual or automatic WIC cache preparation is now one workflow (2026-11-05)
 

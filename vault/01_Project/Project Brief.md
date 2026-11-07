@@ -1,6 +1,6 @@
 # Project Brief
 
-Last reviewed: 2026-11-05
+Last reviewed: 2026-11-06
 
 ## Purpose
 
@@ -50,7 +50,9 @@ uncertainties at `https://doi.org/10.5281/zenodo.15579301`.
 - `scripts/automatic_masking/`: the adopted Model1 CNN and Model2 U-Net data
   preparation, training and application workflows (nine implementation modules).
 - `scripts/CVAE/`: the supported Hall/Pedersen and WIC Kp-conditional CVAE
-  cache preparation, training, fixed-Kp sampling and WIC-result plotting.
+  cache preparation, training, fixed-Kp sampling and WIC-result plotting, plus
+  independent SuperMAG-to-IMAGE conditioning-data preparation and time-blocked
+  predictive-importance analysis for the planned generic conditional model.
   WIC preparation accepts manual annotations or automatic masks;
   Hall/Pedersen preparation is `prepare_cvae_hp_cache.py`.
 - `icanalyzer/cvae/`: shared field-agnostic cache, model, loss, training,
