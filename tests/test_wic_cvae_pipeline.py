@@ -87,9 +87,18 @@ def test_conditioning_benchmark_morphology_targets_are_explicit():
     derived = time_features(np.asarray([
         "2000-01-01T00:00:00", "2000-07-02T12:00:00"
     ], dtype="datetime64[s]"))
-    np.testing.assert_allclose(derived["day_of_year"], [1, 184.5])
+    np.testing.assert_allclose(
+        derived["day_of_year_sin"], [0, -0.00858348], atol=1e-8
+    )
+    np.testing.assert_allclose(
+        derived["day_of_year_cos"], [1, -0.99996316], atol=1e-8
+    )
     np.testing.assert_allclose(derived["dipole_tilt"], [-25.82656, 25.70220], atol=1e-4)
-    assert {"kp", "day_of_year_sin", "day_of_year_cos", "dipole_tilt"} <= set(FEATURE_NAMES)
+    assert set(FEATURE_NAMES) == {
+        "sml", "smr", "by_gsm", "bz_gsm", "vx_gse", "dynamic_pressure",
+        "newell", "kp", "day_of_year_sin", "day_of_year_cos", "dipole_tilt",
+        "clock_angle_sin", "clock_angle_cos",
+    }
 
 
 def test_multi_sample_forward_encodes_once_and_decodes_parallel_draws():

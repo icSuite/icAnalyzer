@@ -61,18 +61,15 @@ unstable after the other groups are present. The stored scalar overall score is
 variance-weighted in physical target units, so variable selection must use the
 per-target results rather than that scalar alone.
 
-The discovery benchmark is now broadened rather than narrowing candidates in
-stages. Its full model has 42 inputs: every retained SuperMAG field, Kp,
-raw/cyclic day of year, cyclic UT, centered-dipole tilt, and cyclic encodings
-of electrojet MLT and IMF clock angle. Every input receives separate drop-column
-and permutation scores. Physically correlated blocks are additionally scored
-together, rather than replacing the individual results, and Kp-only plus
-Kp-and-time models are explicit references. Uniform-average R2 is now the main
+The discovery benchmark now tests the user-specified set and no extra
+parameters: SML, SMR, IMF By, IMF Bz, Vx, clock angle, dynamic pressure,
+Newell, Kp, day of year and centered-dipole tilt. DOY and clock angle use paired
+sine/cosine columns internally but each receives one joint drop/permutation
+result. Kp-only is the explicit reference. Uniform-average R2 is the main
 cross-target summary; variance-weighted and per-target values are retained.
-Station counts are diagnostic quality covariates, not presumed production CVAE
-conditions. A full broad run is pending; only after it should compact candidate
-sets and lag/history variants be selected. PCA remains deferred. All 12 focused
-WIC-CVAE pipeline checks and a 42-feature end-to-end smoke pass.
+No conditioning-table regeneration is required. A full rerun is pending; only
+after it should lag/history variants be considered. PCA remains deferred. All
+12 focused WIC-CVAE pipeline checks and an end-to-end smoke pass.
 
 ## Multi-sample latent training is available as an opt-in (2026-11-06)
 

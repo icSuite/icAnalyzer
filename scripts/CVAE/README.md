@@ -15,11 +15,12 @@ modify a CVAE cache or model.
 WIC cache by orbit, source-frame index and timestamp. It evaluates named
 parameters against interpretable masked-WIC brightness and morphology targets
 with held-out years, drop-column refits and permutation. The full discovery
-model begins broadly: every retained SuperMAG field plus Kp, raw/cyclic day of
-year, cyclic UT, centered-dipole tilt and cyclic MLT/clock-angle encodings.
-Every input receives individual importance; correlated physical blocks are
-also tested jointly, and Kp-only is an explicit reference model. This selects
-candidate conditioning variables; it does not train or alter a CVAE.
+model tests exactly SML, SMR, IMF By, IMF Bz, Vx, clock angle, dynamic
+pressure, Newell coupling, Kp, day of year and centered-dipole tilt. Clock
+angle and day of year use paired sine/cosine columns internally and are removed
+or permuted jointly as one conceptual feature. Kp-only is an explicit reference
+model. This selects candidate conditioning variables; it does not train or
+alter a CVAE.
 
 Existing spline artifacts created before the package/class rename remain
 loadable. New models must explicitly name their modeled fields, so WIC and
@@ -87,12 +88,11 @@ The benchmark uses only the jointly finite predictor population and
 standardizes all WIC targets within each training fold. Its total-brightness
 target is explicitly the observed masked total and therefore remains sensitive
 to mask coverage. Uniform-average R2 is the primary cross-target summary, and
-the output also retains variance-weighted and per-target scores. Station counts
-are included as diagnostic observation-quality inputs, not presumed production
-CVAE conditions. Individual importance can be suppressed by correlated inputs,
-so it must be interpreted together with the grouped results. `--split-mode
-cache` exists only for a quick mechanical smoke on a small manual cache; its
-scores are not the scientific comparison.
+the output also retains variance-weighted and per-target scores. Conditional
+importance can be suppressed by correlated inputs, so the results do not by
+themselves establish causality. `--split-mode cache` exists only for a quick
+mechanical smoke on a small manual cache; its scores are not the scientific
+comparison.
 
 For a manual-mask WIC cache, use a fresh output directory:
 

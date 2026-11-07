@@ -11,48 +11,33 @@ from sklearn.ensemble import ExtraTreesRegressor
 from sklearn.metrics import r2_score
 
 from icanalyzer.cvae.cache import file_sha256
-from icanalyzer.cvae.conditioning import SUPERMAG_SOURCE_COLUMNS
 from scripts.CVAE.prepare_conditioning_data import CONDITIONING_FORMAT
 
 
-RAW_FEATURE_NAMES = tuple(SUPERMAG_SOURCE_COLUMNS.values())
-DERIVED_FEATURE_NAMES = (
-    "kp", "day_of_year", "day_of_year_sin", "day_of_year_cos",
-    "ut_sin", "ut_cos", "dipole_tilt",
-    "sml_mlt_sin", "sml_mlt_cos", "smu_mlt_sin", "smu_mlt_cos",
+CONDITIONING_FIELDS = (
+    "sml", "smr", "by_gsm", "bz_gsm", "vx_gse",
+    "clock_angle_gsm", "dynamic_pressure", "newell",
+)
+FEATURE_NAMES = (
+    "sml", "smr", "by_gsm", "bz_gsm", "vx_gse", "dynamic_pressure",
+    "newell", "kp", "day_of_year_sin", "day_of_year_cos", "dipole_tilt",
     "clock_angle_sin", "clock_angle_cos",
 )
-FEATURE_NAMES = RAW_FEATURE_NAMES + DERIVED_FEATURE_NAMES
-GROUPED_IMPORTANCE = {
-    "auroral_electrojet": ("sme", "sml", "smu"),
-    "electrojet_location": (
-        "sml_mlat", "sml_mlt", "sml_mlt_sin", "sml_mlt_cos",
-        "smu_mlat", "smu_mlt", "smu_mlt_sin", "smu_mlt_cos",
-    ),
-    "ring_current": ("smr", "smr_00", "smr_06", "smr_12", "smr_18"),
-    "station_coverage": tuple(
-        name for name in RAW_FEATURE_NAMES if name.endswith("station_count")
-    ),
-    "imf": ("bx_gsm", "by_gsm", "bz_gsm"),
-    "solar_wind_velocity": ("vx_gse", "vy_gse", "vz_gsm"),
-    "clock_angle": ("clock_angle_gsm", "clock_angle_sin", "clock_angle_cos"),
-    "plasma": ("density", "dynamic_pressure"),
-    "coupling_functions": ("epsilon", "newell"),
-    "seasonal_geometry": (
-        "day_of_year", "day_of_year_sin", "day_of_year_cos", "dipole_tilt"
-    ),
-    "universal_time": ("ut_sin", "ut_cos"),
-}
-IMPORTANCE_SETS = {
-    **{name: (name,) for name in FEATURE_NAMES},
-    **{f"group_{name}": fields for name, fields in GROUPED_IMPORTANCE.items()},
+FEATURE_GROUPS = {
+    "sml": ("sml",),
+    "smr": ("smr",),
+    "imf_by": ("by_gsm",),
+    "imf_bz": ("bz_gsm",),
+    "vx": ("vx_gse",),
+    "clock_angle": ("clock_angle_sin", "clock_angle_cos"),
+    "dynamic_pressure": ("dynamic_pressure",),
+    "newell": ("newell",),
+    "kp": ("kp",),
+    "day_of_year": ("day_of_year_sin", "day_of_year_cos"),
+    "dipole_tilt": ("dipole_tilt",),
 }
 REFERENCE_MODELS = {
     "kp_only": ("kp",),
-    "kp_and_time": (
-        "kp", "day_of_year", "day_of_year_sin", "day_of_year_cos",
-        "ut_sin", "ut_cos", "dipole_tilt",
-    ),
 }
 TARGET_NAMES = (
     "log_observed_total_wic", "log_mean_wic", "peak_mlat",
@@ -76,7 +61,6 @@ def time_features(time):
         / (next_year.astype("datetime64[us]") - year_start.astype("datetime64[us]"))
     )
     day_phase = 2 * np.pi * year_fraction
-    ut_phase = 2 * np.pi * seconds / 86400
 
     # Richmond's Astronomical Almanac subsolar approximation, valid 1601--2100.
     if np.min(year) <= 1600 or np.max(year) >= 2100:
@@ -112,10 +96,8 @@ def time_features(time):
     dipole_axis_2001_5 = np.asarray([.05683683, -.17125208, .98358645])
     dipole_tilt = np.rad2deg(np.arcsin(sun @ dipole_axis_2001_5))
     return {
-        "day_of_year": day_of_year + seconds / 86400,
         "day_of_year_sin": np.sin(day_phase),
         "day_of_year_cos": np.cos(day_phase),
-        "ut_sin": np.sin(ut_phase), "ut_cos": np.cos(ut_phase),
         "dipole_tilt": dipole_tilt,
     }
 
@@ -200,15 +182,11 @@ def load_benchmark_data(cache_directory, conditioning_directory):
         valid = np.load(shard / "valid.npy", mmap_mode="r")
         targets, valid_fraction = morphology_targets(physical[selected, 0], valid[selected], mlat, mlt)
         features = {
-            name: condition[name][positions] for name in RAW_FEATURE_NAMES
+            name: condition[name][positions] for name in CONDITIONING_FIELDS
         }
         features.update(time_features(time))
         features.update({
             "kp": kp,
-            "sml_mlt_sin": np.sin(2 * np.pi * features["sml_mlt"] / 24),
-            "sml_mlt_cos": np.cos(2 * np.pi * features["sml_mlt"] / 24),
-            "smu_mlt_sin": np.sin(2 * np.pi * features["smu_mlt"] / 24),
-            "smu_mlt_cos": np.cos(2 * np.pi * features["smu_mlt"] / 24),
             "clock_angle_sin": np.sin(np.deg2rad(features["clock_angle_gsm"])),
             "clock_angle_cos": np.cos(np.deg2rad(features["clock_angle_gsm"])),
         })
@@ -303,7 +281,7 @@ def run(arguments):
             flush=True
         )
         importance = {}
-        for position, (group, names) in enumerate(IMPORTANCE_SETS.items(), start=1):
+        for position, (group, names) in enumerate(FEATURE_GROUPS.items(), start=1):
             columns = [FEATURE_NAMES.index(field) for field in names]
             retained = [column for column in range(len(FEATURE_NAMES)) if column not in columns]
             reduced = model(arguments, arguments.seed + 100 + number).fit(
@@ -340,7 +318,7 @@ def run(arguments):
                 },
             }
             print(
-                f"  importance {position}/{len(IMPORTANCE_SETS)}: {group}",
+                f"  importance {position}/{len(FEATURE_GROUPS)}: {group}",
                 flush=True
             )
         references = {}
@@ -369,7 +347,7 @@ def run(arguments):
         })
 
     aggregate = {}
-    for group in IMPORTANCE_SETS:
+    for group in FEATURE_GROUPS:
         aggregate[group] = {}
         for metric in (
             "drop_group_delta_r2", "permutation_delta_r2",
@@ -390,8 +368,7 @@ def run(arguments):
     np.savez_compressed(output / "benchmark_data.npz", **data, feature_names=FEATURE_NAMES, target_names=TARGET_NAMES)
     result = {
         "feature_names": FEATURE_NAMES,
-        "individual_importance": list(FEATURE_NAMES),
-        "grouped_importance": GROUPED_IMPORTANCE,
+        "tested_features": FEATURE_GROUPS,
         "reference_models": REFERENCE_MODELS, "target_names": TARGET_NAMES,
         "split_mode": arguments.split_mode, "jointly_finite_frames": len(data["features"]),
         "folds": fold_results, "aggregate_importance": aggregate,
@@ -400,15 +377,14 @@ def run(arguments):
         "target_training": "weighted standardization within each training fold",
         "time_feature_provenance": {
             "day_of_year": "UTC, with cyclic sine/cosine encoding",
-            "universal_time": "UTC cyclic sine/cosine encoding",
             "dipole_tilt": (
                 "Richmond Astronomical Almanac subsolar position and fixed "
                 "centered-dipole IGRF axis at epoch 2001.5"
             ),
         },
         "interpretation": (
-            "predictive importance for masked WIC summaries; individual values "
-            "can be suppressed by correlated predictors and are not causal attribution"
+            "predictive importance for masked WIC summaries; correlated predictors "
+            "can suppress conditional importance and results are not causal attribution"
         ),
     }
     (output / "importance.json").write_text(json.dumps(result, indent=2) + "\n")

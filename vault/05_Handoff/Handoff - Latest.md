@@ -63,21 +63,20 @@ velocity adds little after the other variables. The reported scalar overall R2
 is variance-weighted in physical target units and must not replace the target-
 specific comparison.
 
-The benchmark has now been generalized for broad discovery. The full model has
-42 inputs: all retained SuperMAG fields, Kp, raw/cyclic DOY, cyclic UT,
-centered-dipole tilt, and cyclic electrojet-MLT/clock-angle encodings. By, Bz,
-density, pressure and every other input receive individual drop-column and
-permutation importance. Correlated physical blocks are also tested jointly so
-individual redundancy is not mistaken for irrelevance. Kp-only and Kp-and-time
-reference models are reported. The primary scalar is uniform-average R2, with
-variance-weighted and per-target scores retained. Station counts are diagnostic
-quality inputs and must not automatically enter a production CVAE.
+The benchmark now uses exactly the user-specified conceptual features: SML,
+SMR, IMF By, IMF Bz, Vx, clock angle, dynamic pressure, Newell, Kp, DOY and
+centered-dipole tilt. No SME/SMU, station counts, sector SMR, Bx, Vy/Vz,
+density, epsilon or UT inputs enter the model. DOY and clock angle are each
+represented by sine/cosine columns and tested jointly. Kp-only remains the
+reference. Uniform-average R2 is primary, with variance-weighted and per-target
+scores retained.
 
-The 42-feature loader, derived time coordinates, individual/group scoring and
-reference models pass 12 focused tests and an end-to-end manual-cache smoke.
-Next: commit and run this broad benchmark on the same automatic cache; only
-then select compact candidate sets and histories. Do not generalize the CVAE
-yet. PCA remains deferred. Portfolio impact: Central update needed: No.
+The exact feature contract and derived time coordinates pass 12 focused tests
+and an end-to-end manual-cache smoke. The existing conditioning table already
+contains every required source field and does not need regeneration. Next:
+commit and rerun on the same automatic cache; consider histories only after
+reviewing that result. Do not generalize the CVAE yet. PCA remains deferred.
+Portfolio impact: Central update needed: No.
 
 ## Multi-sample latent training implemented as an opt-in (2026-11-06)
 
