@@ -1,7 +1,7 @@
 # Current State
 
-Last reviewed: 2026-11-07 (year-blocked conditioning result)
-Repository snapshot: `vae/wic-si12` at `6708d83`; `main` remains at `7c71591`
+Last reviewed: 2026-11-07 (named-conditioning WIC CVAE implementation)
+Repository snapshot: `vae/wic-si12` at `9be4f5d`; `main` remains at `7c71591`
 Worktree: user annotation and generated-output changes preserved
 
 ## SuperMAG conditioning preparation and importance benchmark ready (2026-11-06)
@@ -51,25 +51,45 @@ roughly 3--4 degrees below 2001. Median valid image support is also much lower
 in 2003 than 2001 (0.273 versus 0.472), implicating mask/viewing/instrument
 sampling as well as any seasonal physics. Pure seasonality is not established.
 
-SML is the clearest brightness predictor: drop-group delta R2 is about 0.096
-for both total and mean brightness, and is positive in every year. SMR and the
-density+dynamic-pressure group contribute most to peak/centroid morphology;
-By+Bz adds a smaller but stable morphology/asymmetry signal. Newell adds almost
-nothing conditionally, but it is strongly redundant with Bz and therefore is
-not disproven as a compact replacement variable. Raw velocity is weak and
-unstable after the other groups are present. The stored scalar overall score is
-variance-weighted in physical target units, so variable selection must use the
-per-target results rather than that scalar alone.
-
 The discovery benchmark now tests the user-specified set and no extra
 parameters: SML, SMR, IMF By, IMF Bz, Vx, clock angle, dynamic pressure,
 Newell, Kp, day of year and centered-dipole tilt. DOY and clock angle use paired
 sine/cosine columns internally but each receives one joint drop/permutation
 result. Kp-only is the explicit reference. Uniform-average R2 is the main
 cross-target summary; variance-weighted and per-target values are retained.
-No conditioning-table regeneration is required. A full rerun is pending; only
-after it should lag/history variants be considered. PCA remains deferred. All
-12 focused WIC-CVAE pipeline checks and an end-to-end smoke pass.
+
+The completed 1,000-tree result is local at
+`~/Dropbox/work/data/IMAGE_CVAE/conditioning/importance_model1_model2_broad_20261107`.
+The full model's uniform-average held-out R2 is 0.261/0.240/0.129/-0.081 for
+2000--2003, versus 0.119/0.126/0.054/-0.044 for Kp alone. Thus the requested
+set improves mean R2 by 0.111 over Kp in 2000--2002 but does not solve 2003.
+SML dominates conditional importance (mean drop 0.0398, permutation 0.1286).
+Dipole tilt, Vx, SMR and dynamic pressure have smaller positive drop scores.
+Kp has high permutation importance but near-zero drop importance because SML
+and the other inputs replace it. By, Bz, clock angle and Newell have small
+conditional scores, as expected from their mutual physical/mathematical
+redundancy; that is not evidence to remove them from an initial all-11 model.
+DOY and tilt fail together in 2003, strengthening the conclusion that the bad
+fold is not merely omitted seasonality. No conditioning-table regeneration is
+required. All 12 focused checks and an end-to-end smoke pass.
+
+The all-11 WIC CVAE path is now implemented in the existing generic pipeline;
+the scalar-Kp path and old artifacts remain supported. `train_wic_cvae.py
+--conditioning <prepared-directory>` exactly joins the existing image cache to
+the prepared table, excludes incomplete-condition frames, fits normalization
+only on the retained training split and embeds the 13 numerical columns (the
+11 conceptual inputs, with cyclic clock-angle and DOY pairs) through a default
+32-dimensional MLP. No new image cache is needed. The sampler accepts named
+JSON condition records, retains Kp for Zhang--Paxton/Fang propagation and
+records both the requested values and internal vector. The saved-ensemble
+plotter handles both Kp and named selections.
+
+Sixty-five focused regression checks pass. A real one-epoch CPU smoke on the
+manual WIC cache retained 5,761/1,291/997 train/validation/test frames, saved
+and reloaded the artifact, sampled a named condition and propagated it through
+the real Apex/Zhang--Paxton/Fang path; saved plot regeneration also passes.
+Next run a five-epoch automatic-cache CUDA smoke on Dynamit, then use a fresh
+output directory for the 500-epoch scientific run if the smoke is healthy.
 
 ## Multi-sample latent training is available as an opt-in (2026-11-06)
 
