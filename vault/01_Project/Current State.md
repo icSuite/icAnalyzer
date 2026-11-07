@@ -1,7 +1,7 @@
 # Current State
 
-Last reviewed: 2026-11-07 (named-conditioning WIC CVAE implementation)
-Repository snapshot: `vae/wic-si12` at `9be4f5d`; `main` remains at `7c71591`
+Last reviewed: 2026-11-07 (observed conditioning-case selection)
+Repository snapshot: `vae/wic-si12` at `a336b0a`; `main` remains at `7c71591`
 Worktree: user annotation and generated-output changes preserved
 
 ## SuperMAG conditioning preparation and importance benchmark ready (2026-11-06)
@@ -88,8 +88,19 @@ Sixty-five focused regression checks pass. A real one-epoch CPU smoke on the
 manual WIC cache retained 5,761/1,291/997 train/validation/test frames, saved
 and reloaded the artifact, sampled a named condition and propagated it through
 the real Apex/Zhang--Paxton/Fang path; saved plot regeneration also passes.
-Next run a five-epoch automatic-cache CUDA smoke on Dynamit, then use a fresh
-output directory for the 500-epoch scientific run if the smoke is healthy.
+The first server sampling attempt exposed that the documented
+`sample_conditions.json` path was only a placeholder. This is now repaired by
+`select_conditioning_cases.py`. It joins the selected WIC-cache split to the
+prepared conditions and writes eight reproducible cases drawn from actual,
+complete rows: typical, quiet, active-substorm, storm, By negative/positive
+and Bz south/north. Regimes use explicit quantiles, then select the observed
+row nearest that regime's multivariate median, so correlated parameters are
+not independently invented. Source orbit/frame/time and manifest hashes are
+recorded. The generated JSON round-trips through the sampler's exact 13-column
+representation. Sixty-six focused checks pass, and real manual-cache selection
+plus eight-case Apex/Zhang--Paxton/Fang sampling passes. Next generate the JSON
+against the automatic training cache on Dynamit, then rerun the existing
+50,000-draw sampler command.
 
 ## Multi-sample latent training is available as an opt-in (2026-11-06)
 

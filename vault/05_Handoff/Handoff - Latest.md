@@ -1,8 +1,8 @@
 # Handoff - Latest
 
 Last updated: 2026-11-07
-Last reviewed: 2026-11-07 (named-conditioning WIC CVAE implementation)
-Repository snapshot: `vae/wic-si12` at `9be4f5d` with user annotation and generated-output changes preserved; `main` remains at `7c71591`
+Last reviewed: 2026-11-07 (observed conditioning-case selection)
+Repository snapshot: `vae/wic-si12` at `a336b0a` with user annotation and generated-output changes preserved; `main` remains at `7c71591`
 
 ## SuperMAG conditioning-data and importance stages implemented (2026-11-06)
 
@@ -88,10 +88,21 @@ cache regeneration is needed.
 Sixty-five focused checks pass. A real one-epoch CPU smoke used the manual WIC
 cache and prepared SuperMAG table, retaining 5,761/1,291/997 train/validation/
 test frames. Artifact reload, named-condition sampling, real Apex/Zhang--
-Paxton/Fang propagation and saved plot regeneration all pass. Next run a
-five-epoch automatic-cache CUDA smoke on Dynamit and, if healthy, start the
-500-epoch run in a fresh output directory. The unresolved 2003 mask/viewing/
-instrument shift remains a separate validation risk; PCA remains deferred.
+Paxton/Fang propagation and saved plot regeneration all pass.
+
+The documented `sample_conditions.json` was initially a placeholder and caused
+the user's first server sampling command to stop with `FileNotFoundError`; the
+model artifact itself loaded successfully. Commit `a336b0a` adds
+`select_conditioning_cases.py`. It selects eight complete, actually observed
+training rows: typical, quiet, active-substorm, storm, By negative/positive
+and Bz south/north. Each explicit quantile regime uses the row nearest its
+multivariate median; no correlated input combination is synthesized. Output
+records source orbit/frame/time and both manifest identities and is accepted
+directly by the existing sampler. Sixty-six focused checks pass; a real manual-
+cache selection and all-eight-case Apex/Zhang--Paxton/Fang sampling smoke pass.
+Next generate the JSON from the automatic server cache and rerun the 50,000-
+draw sampler. The unresolved 2003 mask/viewing/instrument shift remains a
+separate validation risk; PCA remains deferred.
 Portfolio impact: Central update needed: No.
 
 ## Multi-sample latent training implemented as an opt-in (2026-11-06)
