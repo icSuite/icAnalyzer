@@ -58,6 +58,7 @@ def sample_decoded_ensemble(
     return_latent=False,
     support_mask=None,
     kp=None,
+    conditioning=None,
 ):
     """Decode exactly ``n_samples`` conditional field samples."""
 
@@ -74,17 +75,36 @@ def sample_decoded_ensemble(
     field_names = getattr(model, "field_names", None)
     if field_names is not None and len(field_names) != transform.channel_count:
         raise ValueError("model output fields and channel transform do not align")
-    conditioned = getattr(model, "kp_conditioning", None) is not None
-    if conditioned and kp is None:
+    kp_conditioned = getattr(model, "kp_conditioning", None) is not None
+    named_conditioned = getattr(model, "conditioning", None) is not None
+    if kp_conditioned and kp is None:
         raise ValueError("Kp-conditioned sampling requires an explicit requested Kp")
-    if not conditioned and kp is not None:
+    if not kp_conditioned and kp is not None:
         raise ValueError("cannot request Kp from an unconditional model")
-    if conditioned:
+    if named_conditioned and conditioning is None:
+        raise ValueError("named-conditioned sampling requires explicit conditions")
+    if not named_conditioned and conditioning is not None:
+        raise ValueError("model does not accept named conditions")
+    if kp_conditioned:
         kp = np.asarray(kp, dtype=np.float32)
         if kp.ndim == 0:
             kp = np.full(n_samples, kp, dtype=np.float32)
         if kp.shape != (n_samples,) or not np.isfinite(kp).all() or np.any((kp < 0) | (kp > 9)):
             raise ValueError("sample Kp must be a finite 0–9 scalar or one value per member")
+    if named_conditioned:
+        conditioning = np.asarray(conditioning, dtype=np.float32)
+        feature_count = len(model.conditioning["feature_names"])
+        if conditioning.shape == (feature_count,):
+            conditioning = np.broadcast_to(
+                conditioning, (n_samples, feature_count)
+            ).copy()
+        if (
+            conditioning.shape != (n_samples, feature_count)
+            or not np.isfinite(conditioning).all()
+        ):
+            raise ValueError(
+                "sample conditions must be one finite vector or one row per member"
+            )
     if support_mask is not None:
         support_mask = np.asarray(support_mask, dtype=bool)
         if support_mask.shape != tuple(model.image_shape) or not support_mask.any():
@@ -112,7 +132,15 @@ def sample_decoded_ensemble(
             )
             if return_latent:
                 latent_samples[start:stop] = latent.cpu().numpy()
-            condition_arguments = {"kp": torch.as_tensor(kp[start:stop], device=device)} if conditioned else {}
+            condition_arguments = {}
+            if kp_conditioned:
+                condition_arguments["kp"] = torch.as_tensor(
+                    kp[start:stop], device=device
+                )
+            if named_conditioned:
+                condition_arguments["conditioning"] = torch.as_tensor(
+                    conditioning[start:stop], device=device
+                )
             transformed = model.decode(latent, **condition_arguments)
             if support_mask is not None:
                 # Numeric placeholders only: never fabricate zero-valued training targets.

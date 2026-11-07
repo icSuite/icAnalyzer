@@ -1,4 +1,4 @@
-"""Create polar WIC/Fang summary plots from completed fixed-Kp NPZ files."""
+"""Create polar WIC/Fang plots from completed conditional ensembles."""
 
 #%% Imports
 
@@ -27,7 +27,7 @@ def run(arguments):
     summary = json.loads(summary_path.read_text())
     selections = summary.get("selections")
     if not isinstance(selections, list) or not selections:
-        raise ValueError("sampling summary has no Kp selections")
+        raise ValueError("sampling summary has no condition selections")
 
     plotted = []
     for selection in selections:
@@ -48,12 +48,13 @@ def run(arguments):
             plot_wic(
                 saved["wic_mean"], wic_quantiles,
                 saved["wic_supported"].astype(bool), mlat, mlt,
-                selection["Kp"], destination, arguments.wic_vmax
+                selection.get("label", f"Kp {selection['Kp']:g}"),
+                destination, arguments.wic_vmax
             )
             plot_conductance(
                 saved["conductance_mean"], conductance_quantiles,
                 saved["conductance_supported"].astype(bool), mlat, mlt,
-                selection["Kp"], destination,
+                selection.get("label", f"Kp {selection['Kp']:g}"), destination,
                 (arguments.hall_vmax, arguments.pedersen_vmax)
             )
         plotted.append(destination.name)

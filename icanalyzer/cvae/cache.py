@@ -91,6 +91,7 @@ class AutomaticFieldDataset(Dataset):
         self.source_frames = np.concatenate(source_frames)
         self.frame_time = np.concatenate(times)
         self.frame_orbit = np.concatenate(orbits)
+        self.conditioning = None
 
     def __len__(self):
         return len(self.frame_ids)
@@ -101,6 +102,26 @@ class AutomaticFieldDataset(Dataset):
             valid._mmap.close()
         self.open_shards.clear()
         self.mapped_bytes = 0
+
+    def attach_conditioning(self, values):
+        """Attach finite named conditions and remove unavailable frames."""
+
+        if self.conditioning is not None:
+            raise ValueError("conditioning is already attached")
+        values = np.asarray(values, dtype=np.float32)
+        if values.ndim != 2 or values.shape[0] != len(self):
+            raise ValueError("conditioning must have one row per cached frame")
+        finite = np.all(np.isfinite(values), axis=1)
+        if not finite.any():
+            raise ValueError("no cached frames have complete conditioning")
+        dropped = int((~finite).sum())
+        for name in (
+            "shard_ids", "frame_ids", "kp", "selected_indices",
+            "source_frames", "frame_time", "frame_orbit"
+        ):
+            setattr(self, name, getattr(self, name)[finite])
+        self.conditioning = values[finite]
+        return dropped
 
     def _shard(self, number):
         if number in self.open_shards:
@@ -178,6 +199,10 @@ class AutomaticFieldDataset(Dataset):
             "kp": torch.tensor(self.kp[index], dtype=torch.float32),
             "index": int(self.selected_indices[index])
         }
+        if self.conditioning is not None:
+            batch["conditioning"] = torch.from_numpy(
+                self.conditioning[index].copy()
+            )
         if self.include_uncertainty:
             errors = physical[
                 frame, self.field_count:2 * self.field_count

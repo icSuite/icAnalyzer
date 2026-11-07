@@ -57,6 +57,29 @@ for _name in SUPERMAG_SOURCE_COLUMNS.values():
 
 CORE_CONDITIONING_FIELDS = ("by_gsm", "bz_gsm", "sml", "smr", "newell")
 TIME_SOURCE_COLUMNS = ("year", "month", "day", "hour", "min", "sec")
+CONDITIONING_FORMAT = "image_supermag_conditioning_v1"
+CONDITIONING_SOURCE_FIELDS = (
+    "sml", "smr", "by_gsm", "bz_gsm", "vx_gse",
+    "clock_angle_gsm", "dynamic_pressure", "newell",
+)
+CONDITIONING_FEATURE_NAMES = (
+    "sml", "smr", "by_gsm", "bz_gsm", "vx_gse", "dynamic_pressure",
+    "newell", "kp", "day_of_year_sin", "day_of_year_cos", "dipole_tilt",
+    "clock_angle_sin", "clock_angle_cos",
+)
+CONCEPTUAL_CONDITIONING_FEATURES = {
+    "sml": ("sml",),
+    "smr": ("smr",),
+    "imf_by": ("by_gsm",),
+    "imf_bz": ("bz_gsm",),
+    "vx": ("vx_gse",),
+    "clock_angle": ("clock_angle_sin", "clock_angle_cos"),
+    "dynamic_pressure": ("dynamic_pressure",),
+    "newell": ("newell",),
+    "kp": ("kp",),
+    "day_of_year": ("day_of_year_sin", "day_of_year_cos"),
+    "dipole_tilt": ("dipole_tilt",),
+}
 
 
 #%% File parsing
@@ -215,3 +238,209 @@ def conditioning_coverage(aligned):
         "core_joint_finite_fraction": float(joint.sum() / denominator) if denominator else 0.0,
         "fields": fields,
     }
+
+
+#%% Exact CVAE feature contract
+
+def conditioning_time_features(time):
+    """Return cyclic day-of-year and centered-dipole tilt at epoch 2001.5."""
+
+    time = np.asarray(time, dtype="datetime64[us]")
+    year_start = time.astype("datetime64[Y]")
+    next_year = year_start + np.timedelta64(1, "Y")
+    day_start = time.astype("datetime64[D]")
+    year = year_start.astype(int) + 1970
+    day_of_year = (
+        day_start - year_start.astype("datetime64[D]")
+    ).astype(int) + 1
+    seconds = (time - day_start) / np.timedelta64(1, "s")
+    year_fraction = (
+        (time - year_start.astype("datetime64[us]"))
+        / (next_year.astype("datetime64[us]") - year_start.astype("datetime64[us]"))
+    )
+    day_phase = 2 * np.pi * year_fraction
+
+    if np.min(year) <= 1600 or np.max(year) >= 2100:
+        raise ValueError("dipole tilt is implemented only for years 1601--2099")
+    year_from_2000 = year - 2000
+    leap_years = np.floor((year - 1601) / 4) - 99
+    centuries = 3 - np.floor((year - 1601) / 100)
+    leap_years = np.where(year <= 1900, leap_years + centuries, leap_years)
+    longitude_0 = (
+        -79.549 - .238699 * (year_from_2000 - 4 * leap_years)
+        + .0308514 * leap_years
+    )
+    anomaly_0 = (
+        -2.472 - .2558905 * (year_from_2000 - 4 * leap_years)
+        - .0379617 * leap_years
+    )
+    days = seconds / 86400 - 1.5 + day_of_year
+    mean_longitude = longitude_0 + .9856474 * days
+    mean_anomaly = np.deg2rad(anomaly_0 + .9856003 * days)
+    ecliptic_longitude = np.deg2rad(
+        mean_longitude + 1.915 * np.sin(mean_anomaly)
+        + .020 * np.sin(2 * mean_anomaly)
+    )
+    days_from_2000 = days + 365 * year_from_2000 + leap_years
+    obliquity = np.deg2rad(23.439 - 4e-7 * days_from_2000)
+    right_ascension = np.arctan2(
+        np.cos(obliquity) * np.sin(ecliptic_longitude),
+        np.cos(ecliptic_longitude)
+    )
+    declination = np.arcsin(
+        np.sin(obliquity) * np.sin(ecliptic_longitude)
+    )
+    equation_of_time = mean_longitude - np.rad2deg(right_ascension)
+    equation_of_time -= 360 * np.round(equation_of_time / 360)
+    subsolar_longitude = np.deg2rad(
+        180 - (seconds / 240 + equation_of_time)
+    )
+    sun = np.column_stack((
+        np.cos(declination) * np.cos(subsolar_longitude),
+        np.cos(declination) * np.sin(subsolar_longitude),
+        np.sin(declination),
+    ))
+    dipole_axis_2001_5 = np.asarray([.05683683, -.17125208, .98358645])
+    return {
+        "day_of_year_sin": np.sin(day_phase),
+        "day_of_year_cos": np.cos(day_phase),
+        "dipole_tilt": np.rad2deg(np.arcsin(sun @ dipole_axis_2001_5)),
+    }
+
+
+def conditioning_feature_matrix(condition, positions, time, kp):
+    """Build the exact 13-column representation of 11 conceptual features."""
+
+    features = {
+        name: condition[name][positions] for name in CONDITIONING_SOURCE_FIELDS
+    }
+    features.update(conditioning_time_features(time))
+    features.update({
+        "kp": np.asarray(kp),
+        "clock_angle_sin": np.sin(np.deg2rad(features["clock_angle_gsm"])),
+        "clock_angle_cos": np.cos(np.deg2rad(features["clock_angle_gsm"])),
+    })
+    return np.column_stack([
+        features[name] for name in CONDITIONING_FEATURE_NAMES
+    ]).astype(np.float32)
+
+
+def load_prepared_conditioning(directory):
+    """Load a completed conditioning table without weakening its contract."""
+
+    import json
+
+    directory = Path(directory).expanduser().resolve()
+    manifest_path = directory / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    if manifest.get("format") != CONDITIONING_FORMAT:
+        raise ValueError(f"expected completed {CONDITIONING_FORMAT} data")
+    with np.load(directory / manifest["array_file"], allow_pickle=False) as saved:
+        condition = {name: saved[name].copy() for name in saved.files}
+    required = {
+        "orbit", "source_frame", "time", *CONDITIONING_SOURCE_FIELDS
+    }
+    missing = sorted(required - set(condition))
+    if missing:
+        raise ValueError("conditioning table lacks fields: " + ", ".join(missing))
+    return condition, manifest, _sha256(manifest_path)
+
+
+def align_conditioning_features(
+    conditioning_directory, orbit, source_frame, time, kp
+):
+    """Exact orbit/frame/time join from one cache split to named conditions."""
+
+    condition, manifest, manifest_sha256 = load_prepared_conditioning(
+        conditioning_directory
+    )
+    condition_key = (
+        condition["orbit"].astype(np.int64) * 1_000_000
+        + condition["source_frame"].astype(np.int64)
+    )
+    order = np.argsort(condition_key)
+    sorted_key = condition_key[order]
+    if np.any(np.diff(sorted_key) == 0):
+        raise ValueError("conditioning table contains duplicate orbit/frame keys")
+
+    orbit = np.asarray(orbit, dtype=np.int64)
+    source_frame = np.asarray(source_frame, dtype=np.int64)
+    time = np.asarray(time, dtype="datetime64[us]")
+    kp = np.asarray(kp, dtype=np.float32)
+    key = orbit * 1_000_000 + source_frame
+    positions = np.searchsorted(sorted_key, key)
+    bounded = np.minimum(positions, len(sorted_key) - 1)
+    if np.any(positions == len(sorted_key)) or np.any(sorted_key[bounded] != key):
+        raise ValueError("some cache frames are absent from conditioning data")
+    positions = order[positions]
+    if not np.array_equal(
+        condition["time"][positions].astype("datetime64[us]"), time
+    ):
+        raise ValueError("conditioning and cache timestamps differ")
+    matrix = conditioning_feature_matrix(condition, positions, time, kp)
+    return matrix, manifest, manifest_sha256
+
+
+def fit_conditioning_normalization(values, embedding_dim=32):
+    """Fit named feature standardization on finite training frames only."""
+
+    values = np.asarray(values, dtype=np.float64)
+    embedding_dim = int(embedding_dim)
+    if values.ndim != 2 or values.shape[1] != len(CONDITIONING_FEATURE_NAMES):
+        raise ValueError("conditioning matrix does not match the named feature contract")
+    if len(values) < 2 or not np.isfinite(values).all():
+        raise ValueError("conditioning normalization requires finite training rows")
+    center = values.mean(axis=0)
+    scale = values.std(axis=0)
+    if np.any(~np.isfinite(scale)) or np.any(scale <= 0) or embedding_dim < 1:
+        raise ValueError("conditioning features need positive spread and embedding size")
+    return {
+        "kind": "named_standardization_v1",
+        "feature_names": list(CONDITIONING_FEATURE_NAMES),
+        "conceptual_features": {
+            name: list(columns)
+            for name, columns in CONCEPTUAL_CONDITIONING_FEATURES.items()
+        },
+        "center": center.tolist(), "scale": scale.tolist(),
+        "training_min": values.min(axis=0).tolist(),
+        "training_max": values.max(axis=0).tolist(),
+        "embedding_dim": embedding_dim,
+    }
+
+
+def conditioning_vector_from_record(record):
+    """Convert 11 named physical conditions to the trained 13-column layout."""
+
+    required = (
+        "sml", "smr", "imf_by", "imf_bz", "vx", "clock_angle",
+        "dynamic_pressure", "newell", "kp", "day_of_year", "dipole_tilt",
+    )
+    missing = [name for name in required if name not in record]
+    if missing:
+        raise ValueError("condition record lacks: " + ", ".join(missing))
+    numbers = {name: float(record[name]) for name in required}
+    values = np.asarray([numbers[name] for name in required], dtype=np.float64)
+    if not np.isfinite(values).all():
+        raise ValueError("all requested conditions must be finite")
+    if not 0 <= numbers["kp"] <= 9:
+        raise ValueError("requested Kp must lie within 0--9")
+    if not 1 <= numbers["day_of_year"] <= 366:
+        raise ValueError("requested day of year must lie within 1--366")
+    day_phase = 2 * np.pi * (numbers["day_of_year"] - 1) / 365.25
+    clock_phase = np.deg2rad(numbers["clock_angle"])
+    columns = {
+        "sml": numbers["sml"], "smr": numbers["smr"],
+        "by_gsm": numbers["imf_by"], "bz_gsm": numbers["imf_bz"],
+        "vx_gse": numbers["vx"],
+        "dynamic_pressure": numbers["dynamic_pressure"],
+        "newell": numbers["newell"], "kp": numbers["kp"],
+        "day_of_year_sin": np.sin(day_phase),
+        "day_of_year_cos": np.cos(day_phase),
+        "dipole_tilt": numbers["dipole_tilt"],
+        "clock_angle_sin": np.sin(clock_phase),
+        "clock_angle_cos": np.cos(clock_phase),
+    }
+    return np.asarray(
+        [columns[name] for name in CONDITIONING_FEATURE_NAMES],
+        dtype=np.float32
+    )

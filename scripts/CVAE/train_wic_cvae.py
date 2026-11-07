@@ -17,6 +17,11 @@ from torch.utils.data import DataLoader
 
 from icanalyzer.cvae.artifacts import WIC_CVAE_ARTIFACT_TYPE, save_run_artifact
 from icanalyzer.cvae.cache import AutomaticFieldDataset
+from icanalyzer.cvae.conditioning import (
+    CONDITIONING_FEATURE_NAMES,
+    align_conditioning_features,
+    fit_conditioning_normalization,
+)
 from icanalyzer.cvae.data import fit_kp_conditioning
 from icanalyzer.cvae.loss import LEGACY_LOSS_CONFIGURATION
 from icanalyzer.cvae.model import SplineConditionalVAE
@@ -73,14 +78,50 @@ def run(arguments):
         loaders[name] = DataLoader(dataset, batch_size=arguments.batch_size, shuffle=name == "train", **options)
 
     transform = datasets["train"].transform
-    kp_conditioning = fit_kp_conditioning(datasets["train"].kp)
+    kp_conditioning = None
+    named_conditioning = None
+    conditioning_evidence = None
+    condition_dropped = {name: 0 for name in datasets}
+    if arguments.conditioning is None:
+        kp_conditioning = fit_kp_conditioning(datasets["train"].kp)
+    else:
+        conditioning_directory = arguments.conditioning.expanduser().resolve()
+        manifest = None
+        manifest_sha256 = None
+        for name, dataset in datasets.items():
+            if dataset is None:
+                continue
+            values, current_manifest, current_sha256 = align_conditioning_features(
+                conditioning_directory,
+                dataset.frame_orbit,
+                dataset.source_frames,
+                dataset.frame_time,
+                dataset.kp,
+            )
+            if manifest_sha256 is not None and current_sha256 != manifest_sha256:
+                raise RuntimeError("conditioning manifest changed during cache alignment")
+            manifest = current_manifest
+            manifest_sha256 = current_sha256
+            condition_dropped[name] = dataset.attach_conditioning(values)
+        named_conditioning = fit_conditioning_normalization(
+            datasets["train"].conditioning,
+            embedding_dim=arguments.conditioning_embedding_dim,
+        )
+        conditioning_evidence = {
+            "directory": str(conditioning_directory),
+            "manifest_sha256": manifest_sha256,
+            "format": manifest["format"],
+            "feature_names": list(CONDITIONING_FEATURE_NAMES),
+            "missing_condition_frames_dropped": condition_dropped,
+            "alignment": "exact orbit, Product-2 source-frame index and timestamp",
+        }
     loss_configuration = dict(LEGACY_LOSS_CONFIGURATION)
     mask_source = metadata.get("mask_source")
     if mask_source is None:
         mask_source = {"kind": "automatic", **metadata["automatic_masks"]}
     configuration = {name: getattr(arguments, name) for name in (
         "epochs", "batch_size", "latent_dim", "learning_rate", "beta",
-        "latent_samples",
+        "latent_samples", "conditioning_embedding_dim",
         "spline_control_points", "spline_degree", "scheduler_factor",
         "scheduler_patience", "scheduler_minimum_learning_rate"
     )}
@@ -89,7 +130,9 @@ def run(arguments):
         "field_names": ["wic_corrected"], "field_units": ["counts"],
         "dataset_backend": metadata["cache_format"],
         "maximum_missing_fraction": metadata["maximum_missing_fraction"],
-        "kp_conditioning": kp_conditioning, "loss_configuration": loss_configuration,
+        "kp_conditioning": kp_conditioning,
+        "conditioning": named_conditioning,
+        "loss_configuration": loss_configuration,
         "optimizer": "Adam", "beta_schedule": "constant",
         "learning_rate_scheduler": "ReduceLROnPlateau", "scheduler_monitor": "train_total",
         "cache_mib_per_split": arguments.cache_mib,
@@ -102,7 +145,14 @@ def run(arguments):
             "seed": seed + 3, "device": hole_device,
             "target_policy": "original observed cells retained"
         } if arguments.training_holes else None,
-        "frame_selection": {name: {"used": metadata["used_frames"][name]} for name in datasets},
+        "frame_selection": {
+            name: {
+                "cache_eligible": metadata["used_frames"][name],
+                "missing_condition_dropped": condition_dropped[name],
+                "used": 0 if dataset is None else len(dataset),
+            }
+            for name, dataset in datasets.items()
+        },
         "support_policy": f"{mask_source['kind']} mask AND native finite WIC/quality/coverage support"
     })
     support = np.load(cache / "training_support.npy", allow_pickle=False)
@@ -118,19 +168,33 @@ def run(arguments):
         "unsupported_training_cells": int((~support).sum()),
         "products": {name: [row["product"] for row in metadata["orbits"] if row["split"] == name] for name in datasets},
         "retained_frame_kp": {name: dataset.kp.copy() for name, dataset in datasets.items() if dataset is not None},
+        "conditioning": conditioning_evidence,
         "conductance_conversion": "not applied; this artifact represents corrected WIC counts"
     }
-    print(f"WIC-CVAE cached frames: {metadata['used_frames']}. Device: {device}. No conductance conversion or ensembles will be generated.", flush=True)
+    used_frames = {
+        name: 0 if dataset is None else len(dataset)
+        for name, dataset in datasets.items()
+    }
+    condition_label = "Kp" if named_conditioning is None else "11-feature named"
+    print(
+        f"WIC-CVAE frames: {used_frames}. Conditioning: {condition_label}. "
+        f"Device: {device}. No ensembles will be generated.", flush=True
+    )
 
     set_random_seed(seed)
     model = SplineConditionalVAE(
         image_shape=(46, 46), latent_dim=arguments.latent_dim,
         spline_control_points=arguments.spline_control_points,
         spline_degree=arguments.spline_degree, kp_conditioning=kp_conditioning,
+        conditioning=named_conditioning,
         field_names=("wic_corrected",)
     )
     output.mkdir(parents=True)
     (output / "cache_manifest.json").write_bytes((cache / "manifest.json").read_bytes())
+    if arguments.conditioning is not None:
+        (output / "conditioning_manifest.json").write_bytes(
+            (arguments.conditioning.expanduser().resolve() / "manifest.json").read_bytes()
+        )
     try:
         model, history = train_vae(
             model, loaders["train"], validation_loader=loaders["validation"],
@@ -171,13 +235,16 @@ def run(arguments):
             "artifact": artifact.name, "artifact_type": WIC_CVAE_ARTIFACT_TYPE,
             "dataset_backend": metadata["cache_format"], "cache_directory": str(cache),
             "cache_manifest_sha256": metadata["manifest_sha256"],
-            "used_frames": metadata["used_frames"],
+            "used_frames": used_frames,
             "training_configuration": configuration,
             "held_out_evaluation": evaluation, "ensemble_generated": False,
-            "interpretation": "Kp-conditional corrected-WIC prior; no conductance conversion or uncertainty calibration"
+            "interpretation": (
+                f"{condition_label}-conditional corrected-WIC prior; "
+                "no conductance conversion or uncertainty calibration"
+            )
         }
         (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
-        print(f"Saved {artifact}. WIC-CVAE training complete; fixed-Kp sampling is separate.", flush=True)
+        print(f"Saved {artifact}. WIC-CVAE training complete; sampling is separate.", flush=True)
         return summary
     finally:
         for dataset in datasets.values():
@@ -191,10 +258,18 @@ def parse_arguments(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("cache", type=Path)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--conditioning", type=Path,
+        help=(
+            "prepared IMAGE/SuperMAG conditioning directory; when omitted, "
+            "retain the historical scalar-Kp model"
+        )
+    )
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--seed", type=int)
     for name, default in (("epochs", 500), ("batch-size", 264), ("latent-dim", 36),
                           ("latent-samples", 1),
+                          ("conditioning-embedding-dim", 32),
                           ("spline-control-points", 30), ("spline-degree", 3),
                           ("scheduler-patience", 10), ("max-open-orbits", 64),
                           ("num-workers", 2), ("prefetch-factor", 2)):
@@ -209,8 +284,11 @@ def parse_arguments(argv=None):
     parser.add_argument("--hole-device", choices=("auto", "cpu", "cuda"), default="auto")
     arguments = parser.parse_args(argv)
     if (arguments.epochs < 1 or arguments.batch_size < 1 or
-            arguments.latent_dim < 1 or arguments.latent_samples < 1):
-        parser.error("epochs, batch size, latent dimension and latent samples must be positive")
+            arguments.latent_dim < 1 or arguments.latent_samples < 1 or
+            arguments.conditioning_embedding_dim < 1):
+        parser.error(
+            "epochs, batch size, latent dimensions and latent samples must be positive"
+        )
     if not np.isfinite(arguments.beta) or arguments.beta < 0:
         parser.error("beta must be finite and nonnegative")
     if arguments.num_workers < 0 or arguments.prefetch_factor < 1:

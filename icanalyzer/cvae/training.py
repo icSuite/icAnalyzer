@@ -213,7 +213,15 @@ def _run_epoch(
             optimizer.zero_grad()
         with torch.set_grad_enabled(training):
             condition_arguments = {}
-            if getattr(model, "kp_conditioning", None) is not None:
+            if getattr(model, "conditioning", None) is not None:
+                if "conditioning" not in batch:
+                    raise ValueError(
+                        "named-conditioned training requires per-image conditions"
+                    )
+                condition_arguments["conditioning"] = batch["conditioning"].to(
+                    device, non_blocking=non_blocking
+                )
+            elif getattr(model, "kp_conditioning", None) is not None:
                 if "kp" not in batch:
                     raise ValueError("Kp-conditioned training/evaluation requires per-image Kp labels")
                 condition_arguments["kp"] = batch["kp"].to(device, non_blocking=non_blocking)

@@ -16,9 +16,14 @@ from icanalyzer.cvae.ensemble import sample_decoded_ensemble
 from icanalyzer.cvae.model import SplineConditionalVAE
 from icanalyzer.cvae.cache import AutomaticFieldDataset
 from icanalyzer.cvae.conditioning import (
+    CONDITIONING_FEATURE_NAMES,
+    CONDITIONING_FORMAT,
     SUPERMAG_SOURCE_COLUMNS,
     align_conditioning,
+    align_conditioning_features,
+    conditioning_vector_from_record,
     conditioning_coverage,
+    fit_conditioning_normalization,
     read_supermag_file,
 )
 from scripts.CVAE.prepare_wic_cvae_cache import WIC_CACHE_FORMAT, load_annotated_wic, load_masked_wic
@@ -99,6 +104,98 @@ def test_conditioning_benchmark_morphology_targets_are_explicit():
         "newell", "kp", "day_of_year_sin", "day_of_year_cos", "dipole_tilt",
         "clock_angle_sin", "clock_angle_cos",
     }
+
+
+def test_named_conditioning_exact_join_dataset_and_model(tmp_path):
+    conditioning_directory = tmp_path / "conditioning"
+    conditioning_directory.mkdir()
+    orbit = np.asarray([1, 1, 2], dtype=np.int32)
+    source_frame = np.asarray([0, 1, 0], dtype=np.int32)
+    time = np.asarray([
+        "2000-01-01T00:00:00", "2000-04-01T06:00:00",
+        "2001-07-01T12:00:00"
+    ], dtype="datetime64[us]")
+    arrays = {
+        "orbit": orbit, "source_frame": source_frame, "time": time,
+        "sml": [-100., -200., -300.], "smr": [-10., -20., -30.],
+        "by_gsm": [1., 2., 3.], "bz_gsm": [-1., -2., -3.],
+        "vx_gse": [-400., -450., -500.],
+        "clock_angle_gsm": [45., 90., 135.],
+        "dynamic_pressure": [1., 2., 3.],
+        "newell": [1000., 2000., 3000.],
+    }
+    np.savez(conditioning_directory / "conditioning.npz", **arrays)
+    (conditioning_directory / "manifest.json").write_text(json.dumps({
+        "format": CONDITIONING_FORMAT, "array_file": "conditioning.npz"
+    }))
+    matrix, _, _ = align_conditioning_features(
+        conditioning_directory, orbit, source_frame, time, [1., 3., 5.]
+    )
+    assert matrix.shape == (3, len(CONDITIONING_FEATURE_NAMES))
+    assert np.isfinite(matrix).all()
+
+    cache = make_wic_cache(tmp_path / "cache")
+    dataset = AutomaticFieldDataset(
+        cache, "train", include_uncertainty=False,
+        expected_cache_format=WIC_CACHE_FORMAT
+    )
+    try:
+        attached = np.vstack((matrix[0], matrix[1])).astype(np.float32)
+        attached[1, 0] = np.nan
+        assert dataset.attach_conditioning(attached) == 1
+        assert len(dataset) == 1
+        torch.testing.assert_close(
+            dataset[0]["conditioning"], torch.from_numpy(matrix[0])
+        )
+    finally:
+        dataset.close()
+
+    normalization = fit_conditioning_normalization(matrix, embedding_dim=6)
+    model = SplineConditionalVAE(
+        image_shape=(8, 8), latent_dim=4, spline_control_points=4,
+        spline_degree=2, conditioning=normalization,
+        field_names=("wic_corrected",)
+    ).eval()
+    values = torch.ones(2, 2, 8, 8)
+    valid = torch.ones(2, 1, 8, 8, dtype=torch.bool)
+    conditions = torch.from_numpy(matrix[:2])
+    reconstructed, mu, logvar = model.forward_samples(
+        values, valid, conditioning=conditions, latent_samples=3
+    )
+    assert reconstructed.shape == (2, 3, 1, 8, 8)
+    assert mu.shape == logvar.shape == (2, 4)
+    restored = SplineConditionalVAE.from_configuration(model.configuration())
+    assert restored.conditioning["feature_names"] == list(
+        CONDITIONING_FEATURE_NAMES
+    )
+    transform = ChannelTransform(
+        [1.], [0.], [1.], kind=ChannelTransform.LOG10_KIND
+    )
+    samples = sample_decoded_ensemble(
+        model, transform, 4, batch_size=2, conditioning=matrix[0]
+    )
+    assert samples.shape == (4, 1, 8, 8)
+    from icanalyzer.cvae.training import _run_epoch
+    from icanalyzer.cvae.loss import LEGACY_LOSS_CONFIGURATION
+    metrics = _run_epoch(
+        model,
+        [{
+            "encoder_input": values, "target": values[:, :1],
+            "mask": valid, "weight": torch.ones(2, 1, 8, 8),
+            "kp": torch.tensor([1., 3.]), "conditioning": conditions,
+        }],
+        optimizer=None, device="cpu", beta=.1, training=False,
+        loss_configuration=LEGACY_LOSS_CONFIGURATION
+    )
+    assert set(metrics) == {"total", "reconstruction", "kl"}
+    requested = conditioning_vector_from_record({
+        "sml": -200, "smr": -20, "imf_by": 2, "imf_bz": -3,
+        "vx": -450, "clock_angle": 90, "dynamic_pressure": 2,
+        "newell": 4000, "kp": 3, "day_of_year": 100,
+        "dipole_tilt": 10,
+    })
+    assert requested.shape == (len(CONDITIONING_FEATURE_NAMES),)
+    assert requested[-2] == 1
 
 
 def test_multi_sample_forward_encodes_once_and_decodes_parallel_draws():
@@ -248,11 +345,13 @@ def make_wic_cache(directory):
         physical[:, 2] = 0.5
         np.save(shard / "physical.npy", physical)
         np.save(shard / "valid.npy", np.ones((2, 46, 46), dtype=bool))
+        frame_time = np.asarray([
+            f"200{orbit}-01-01T00:00:00", f"200{orbit}-04-01T06:00:00"
+        ], dtype="datetime64[us]")
         np.savez(
             shard / "frames.npz", eligible=[True, True], kp=[1.0, 3.0],
             source_frame=[0, 1], wic_source_index=[10, 11],
-            time=np.arange(2).astype("datetime64[us]"),
-            kp_interval_start=np.arange(2).astype("datetime64[us]")
+            time=frame_time, kp_interval_start=frame_time
         )
         rows.append({
             "orbit": orbit, "split": split, "source": f"or_{orbit:04d}.nc",
@@ -273,6 +372,72 @@ def make_wic_cache(directory):
     (directory / "manifest.json").write_text(json.dumps(metadata))
     np.save(directory / "training_support.npy", np.ones((46, 46), dtype=bool))
     return directory
+
+
+def make_named_conditioning(directory, cache):
+    directory.mkdir()
+    orbit_values, frame_values, time_values = [], [], []
+    for orbit in (1, 2, 3):
+        with np.load(cache / f"or_{orbit:04d}/frames.npz") as frames:
+            count = len(frames["time"])
+            orbit_values.extend([orbit] * count)
+            frame_values.extend(frames["source_frame"])
+            time_values.extend(frames["time"])
+    count = len(time_values)
+    sequence = np.arange(1, count + 1, dtype=np.float32)
+    np.savez(
+        directory / "conditioning.npz",
+        orbit=np.asarray(orbit_values, dtype=np.int32),
+        source_frame=np.asarray(frame_values, dtype=np.int32),
+        time=np.asarray(time_values, dtype="datetime64[us]"),
+        sml=-100 * sequence, smr=-10 * sequence,
+        by_gsm=sequence, bz_gsm=-sequence, vx_gse=-400 - 10 * sequence,
+        clock_angle_gsm=30 * sequence,
+        dynamic_pressure=sequence, newell=1000 * sequence,
+    )
+    (directory / "manifest.json").write_text(json.dumps({
+        "format": CONDITIONING_FORMAT, "array_file": "conditioning.npz"
+    }))
+    return directory
+
+
+def test_named_conditioning_wic_trainer_artifact(tmp_path, monkeypatch):
+    import scripts.CVAE.train_wic_cvae as trainer
+
+    cache = make_wic_cache(tmp_path / "cache")
+    conditioning = make_named_conditioning(tmp_path / "conditioning", cache)
+
+    def skip_training(model, *args, **kwargs):
+        model.best_validation_epoch = 1
+        model.best_validation_total = 0.5
+        return model, [{"epoch": 1}]
+
+    monkeypatch.setattr(trainer, "train_vae", skip_training)
+    monkeypatch.setattr(
+        trainer, "_run_epoch",
+        lambda *args, **kwargs: {"total": 1., "reconstruction": .8, "kl": .2}
+    )
+    output = tmp_path / "run"
+    arguments = trainer.parse_arguments([
+        str(cache), "--conditioning", str(conditioning),
+        "--conditioning-embedding-dim", "6", "--output", str(output),
+        "--device", "cpu", "--num-workers", "0", "--epochs", "1",
+        "--latent-dim", "2", "--spline-control-points", "5"
+    ])
+    summary = trainer.run(arguments)
+    loaded, _, artifact = load_run_artifact(output / "wic_cvae.pt")
+    assert loaded.kp_conditioning is None
+    assert loaded.conditioning["embedding_dim"] == 6
+    assert loaded.conditioning["feature_names"] == list(
+        CONDITIONING_FEATURE_NAMES
+    )
+    assert summary["used_frames"] == {
+        "train": 2, "validation": 2, "test": 2
+    }
+    assert artifact["data_provenance"]["conditioning"]["format"] == (
+        CONDITIONING_FORMAT
+    )
+    assert (output / "conditioning_manifest.json").is_file()
 
 
 def test_one_field_disk_cache_and_training_artifact(tmp_path, monkeypatch):

@@ -11,31 +11,15 @@ from sklearn.ensemble import ExtraTreesRegressor
 from sklearn.metrics import r2_score
 
 from icanalyzer.cvae.cache import file_sha256
-from scripts.CVAE.prepare_conditioning_data import CONDITIONING_FORMAT
-
-
-CONDITIONING_FIELDS = (
-    "sml", "smr", "by_gsm", "bz_gsm", "vx_gse",
-    "clock_angle_gsm", "dynamic_pressure", "newell",
+from icanalyzer.cvae.conditioning import (
+    CONDITIONING_FEATURE_NAMES,
+    CONDITIONING_FORMAT,
+    CONCEPTUAL_CONDITIONING_FEATURES,
+    conditioning_feature_matrix,
+    conditioning_time_features,
 )
-FEATURE_NAMES = (
-    "sml", "smr", "by_gsm", "bz_gsm", "vx_gse", "dynamic_pressure",
-    "newell", "kp", "day_of_year_sin", "day_of_year_cos", "dipole_tilt",
-    "clock_angle_sin", "clock_angle_cos",
-)
-FEATURE_GROUPS = {
-    "sml": ("sml",),
-    "smr": ("smr",),
-    "imf_by": ("by_gsm",),
-    "imf_bz": ("bz_gsm",),
-    "vx": ("vx_gse",),
-    "clock_angle": ("clock_angle_sin", "clock_angle_cos"),
-    "dynamic_pressure": ("dynamic_pressure",),
-    "newell": ("newell",),
-    "kp": ("kp",),
-    "day_of_year": ("day_of_year_sin", "day_of_year_cos"),
-    "dipole_tilt": ("dipole_tilt",),
-}
+FEATURE_NAMES = CONDITIONING_FEATURE_NAMES
+FEATURE_GROUPS = CONCEPTUAL_CONDITIONING_FEATURES
 REFERENCE_MODELS = {
     "kp_only": ("kp",),
 }
@@ -46,60 +30,7 @@ TARGET_NAMES = (
 )
 
 
-def time_features(time):
-    """Cyclic time coordinates and centered-dipole tilt at epoch 2001.5."""
-
-    time = np.asarray(time, dtype="datetime64[us]")
-    year_start = time.astype("datetime64[Y]")
-    next_year = year_start + np.timedelta64(1, "Y")
-    day_start = time.astype("datetime64[D]")
-    year = year_start.astype(int) + 1970
-    day_of_year = (day_start - year_start.astype("datetime64[D]")).astype(int) + 1
-    seconds = (time - day_start) / np.timedelta64(1, "s")
-    year_fraction = (
-        (time - year_start.astype("datetime64[us]"))
-        / (next_year.astype("datetime64[us]") - year_start.astype("datetime64[us]"))
-    )
-    day_phase = 2 * np.pi * year_fraction
-
-    # Richmond's Astronomical Almanac subsolar approximation, valid 1601--2100.
-    if np.min(year) <= 1600 or np.max(year) >= 2100:
-        raise ValueError("dipole tilt is implemented only for years 1601--2099")
-    year_from_2000 = year - 2000
-    leap_years = np.floor((year - 1601) / 4) - 99
-    centuries = 3 - np.floor((year - 1601) / 100)
-    leap_years = np.where(year <= 1900, leap_years + centuries, leap_years)
-    mean_longitude_0 = -79.549 - .238699 * (year_from_2000 - 4 * leap_years) + .0308514 * leap_years
-    mean_anomaly_0 = -2.472 - .2558905 * (year_from_2000 - 4 * leap_years) - .0379617 * leap_years
-    days = seconds / 86400 - 1.5 + day_of_year
-    mean_longitude = mean_longitude_0 + .9856474 * days
-    mean_anomaly = np.deg2rad(mean_anomaly_0 + .9856003 * days)
-    ecliptic_longitude = mean_longitude + 1.915 * np.sin(mean_anomaly) + .020 * np.sin(2 * mean_anomaly)
-    ecliptic_longitude = np.deg2rad(ecliptic_longitude)
-    days_from_2000 = days + 365 * year_from_2000 + leap_years
-    obliquity = np.deg2rad(23.439 - 4e-7 * days_from_2000)
-    right_ascension = np.arctan2(
-        np.cos(obliquity) * np.sin(ecliptic_longitude),
-        np.cos(ecliptic_longitude)
-    )
-    declination = np.arcsin(np.sin(obliquity) * np.sin(ecliptic_longitude))
-    equation_of_time = mean_longitude - np.rad2deg(right_ascension)
-    equation_of_time -= 360 * np.round(equation_of_time / 360)
-    subsolar_longitude = np.deg2rad(
-        180 - (seconds / 240 + equation_of_time)
-    )
-    sun = np.column_stack((
-        np.cos(declination) * np.cos(subsolar_longitude),
-        np.cos(declination) * np.sin(subsolar_longitude),
-        np.sin(declination),
-    ))
-    dipole_axis_2001_5 = np.asarray([.05683683, -.17125208, .98358645])
-    dipole_tilt = np.rad2deg(np.arcsin(sun @ dipole_axis_2001_5))
-    return {
-        "day_of_year_sin": np.sin(day_phase),
-        "day_of_year_cos": np.cos(day_phase),
-        "dipole_tilt": dipole_tilt,
-    }
+time_features = conditioning_time_features
 
 
 #%% Exact conditioning join and interpretable WIC targets
@@ -181,18 +112,9 @@ def load_benchmark_data(cache_directory, conditioning_directory):
         physical = np.load(shard / "physical.npy", mmap_mode="r")
         valid = np.load(shard / "valid.npy", mmap_mode="r")
         targets, valid_fraction = morphology_targets(physical[selected, 0], valid[selected], mlat, mlt)
-        features = {
-            name: condition[name][positions] for name in CONDITIONING_FIELDS
-        }
-        features.update(time_features(time))
-        features.update({
-            "kp": kp,
-            "clock_angle_sin": np.sin(np.deg2rad(features["clock_angle_gsm"])),
-            "clock_angle_cos": np.cos(np.deg2rad(features["clock_angle_gsm"])),
-        })
-        collected["features"].append(np.column_stack([
-            features[name] for name in FEATURE_NAMES
-        ]).astype(np.float32))
+        collected["features"].append(
+            conditioning_feature_matrix(condition, positions, time, kp)
+        )
         collected["targets"].append(targets)
         collected["valid_fraction"].append(valid_fraction)
         collected["orbit"].append(np.full(len(frame), row["orbit"], dtype=np.int32))

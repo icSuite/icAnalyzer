@@ -15,6 +15,7 @@ from tqdm.auto import tqdm
 from icreader import load
 
 from icanalyzer.cvae.conditioning import (
+    CONDITIONING_FORMAT,
     SUPERMAG_SOURCE_COLUMNS,
     SUPERMAG_UNITS,
     align_conditioning,
@@ -23,7 +24,6 @@ from icanalyzer.cvae.conditioning import (
 )
 
 
-CONDITIONING_FORMAT = "image_supermag_conditioning_v1"
 GRID_ID = "image_apex_130km_46x46_v1"
 DEFAULT_SOURCE = Path.home() / "Dropbox/work/data/IMAGE_FUV_new/precipitation_cs/image_apex_130km_46x46_v1/IR_hardy_smoothed_wic1_si121_si131"
 

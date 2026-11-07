@@ -1,4 +1,4 @@
-"""Generate WIC CVAE and collapsed-Zhang--Paxton/Fang ensembles at fixed Kp."""
+"""Generate conditional WIC-CVAE and Zhang--Paxton/Fang ensembles."""
 
 #%% Imports
 
@@ -8,6 +8,7 @@ import hashlib
 from importlib.metadata import version
 import json
 from pathlib import Path
+import re
 import warnings
 
 import matplotlib
@@ -23,6 +24,10 @@ from icphysics import (
     precipitation_from_collapsed_zhang_paxton
 )
 from icanalyzer.cvae.artifacts import WIC_CVAE_ARTIFACT_TYPE, load_run_artifact
+from icanalyzer.cvae.conditioning import (
+    CONDITIONING_FEATURE_NAMES,
+    conditioning_vector_from_record,
+)
 from icanalyzer.cvae.ensemble import ensemble_statistics, sample_decoded_ensemble
 
 
@@ -68,7 +73,7 @@ def polar_contour(axis, mlat, mlt, values, maximum, title):
     return contour
 
 
-def plot_wic(mean, quantiles, support, mlat, mlt, kp, output, maximum):
+def plot_wic(mean, quantiles, support, mlat, mlt, title, output, maximum):
     figure, axes = plt.subplots(1, 4, figsize=(13, 3.4), layout="constrained")
     fields = [mean, *quantiles]
     labels = ("mean", "10th percentile", "median", "90th percentile")
@@ -76,13 +81,13 @@ def plot_wic(mean, quantiles, support, mlat, mlt, kp, output, maximum):
         values = np.where(support, values, np.nan)
         contour = polar_contour(axis, mlat, mlt, values, maximum, label)
     figure.colorbar(contour, ax=axes, shrink=0.72, label="corrected WIC [counts]")
-    figure.suptitle(f"Corrected-WIC model prior at Kp = {kp:g}; common latent seed")
+    figure.suptitle(f"Corrected-WIC model prior: {title}; common latent seed")
     figure.savefig(output / "wic_at_kp.png", dpi=160)
     figure.savefig(output / "wic_at_kp.pdf")
     plt.close(figure)
 
 
-def plot_conductance(mean, quantiles, support, mlat, mlt, kp, output, limits):
+def plot_conductance(mean, quantiles, support, mlat, mlt, title, output, limits):
     figure, axes = plt.subplots(2, 4, figsize=(13, 6.2), layout="constrained")
     fields = [mean, *quantiles]
     labels = ("mean", "10th percentile", "median", "90th percentile")
@@ -94,7 +99,7 @@ def plot_conductance(mean, quantiles, support, mlat, mlt, kp, output, limits):
             )
         axes[channel, 0].set_ylabel(name)
         figure.colorbar(contour, ax=axes[channel], shrink=0.72, label=f"{name} [S]")
-    figure.suptitle(f"WIC → collapsed Zhang–Paxton → Fang at Kp = {kp:g}")
+    figure.suptitle(f"WIC → collapsed Zhang–Paxton → Fang: {title}")
     figure.savefig(output / "conductance_at_kp.png", dpi=160)
     figure.savefig(output / "conductance_at_kp.pdf")
     plt.close(figure)
@@ -247,12 +252,46 @@ def fang_conductance_from_wic(
     return conductance, diagnostics
 
 
+def _named_selections(filename, model):
+    contents = json.loads(Path(filename).expanduser().read_text())
+    records = contents.get("conditions") if isinstance(contents, dict) else contents
+    if not isinstance(records, list) or not records:
+        raise ValueError("conditions JSON must contain a nonempty list")
+    selections = []
+    labels = set()
+    for number, record in enumerate(records):
+        if not isinstance(record, dict):
+            raise ValueError("every condition selection must be an object")
+        label = str(record.get("label", f"condition_{number:02d}"))
+        safe_label = re.sub(r"[^A-Za-z0-9_.-]+", "_", label).strip("_.-")
+        if not safe_label or safe_label in labels:
+            raise ValueError("condition labels must be distinct safe directory names")
+        labels.add(safe_label)
+        vector = conditioning_vector_from_record(record)
+        if model.conditioning["feature_names"] != list(CONDITIONING_FEATURE_NAMES):
+            raise ValueError("model and current named-conditioning feature contracts differ")
+        lower = np.asarray(model.conditioning["training_min"])
+        upper = np.asarray(model.conditioning["training_max"])
+        outside = [
+            name for name, value, minimum, maximum in zip(
+                CONDITIONING_FEATURE_NAMES, vector, lower, upper
+            ) if value < minimum or value > maximum
+        ]
+        selections.append({
+            "label": label, "directory": safe_label,
+            "conditions": {
+                name: float(record[name]) for name in (
+                    "sml", "smr", "imf_by", "imf_bz", "vx",
+                    "clock_angle", "dynamic_pressure", "newell", "kp",
+                    "day_of_year", "dipole_tilt"
+                )
+            },
+            "vector": vector, "outside_training_columns": outside,
+        })
+    return selections
+
+
 def run(arguments):
-    kp_values = np.asarray(arguments.kp, dtype=float)
-    if kp_values.ndim != 1 or not len(kp_values) or not np.isfinite(kp_values).all() or np.any((kp_values < 0) | (kp_values > 9)):
-        raise ValueError("requested Kp values must be finite and lie in 0--9")
-    if len(np.unique(kp_values)) != len(kp_values):
-        raise ValueError("requested Kp values must be distinct")
     limits = np.asarray((arguments.hall_vmax, arguments.pedersen_vmax), dtype=float)
     if arguments.draws < 2 or arguments.threads < 1 or not np.isfinite(arguments.wic_vmax) or arguments.wic_vmax <= 0:
         raise ValueError("need at least two draws, positive threads and a positive WIC display limit")
@@ -269,8 +308,34 @@ def run(arguments):
     model, transform, artifact = load_run_artifact(artifact_path, device=device)
     if artifact.get("artifact_type") != WIC_CVAE_ARTIFACT_TYPE or tuple(model.field_names) != ("wic_corrected",):
         raise ValueError("requires a one-field WIC-CVAE artifact")
-    if model.kp_conditioning is None or transform.channel_count != 1:
-        raise ValueError("requires a Kp-conditioned one-channel transform")
+    if transform.channel_count != 1:
+        raise ValueError("requires a one-channel WIC transform")
+    if model.conditioning is not None:
+        if arguments.conditions is None or arguments.kp is not None:
+            raise ValueError("named-conditioned models require --conditions JSON")
+        requested = _named_selections(arguments.conditions, model)
+    elif model.kp_conditioning is not None:
+        if arguments.kp is None or arguments.conditions is not None:
+            raise ValueError("Kp-conditioned models require --kp")
+        kp_values = np.asarray(arguments.kp, dtype=float)
+        if (
+            kp_values.ndim != 1 or not len(kp_values)
+            or not np.isfinite(kp_values).all()
+            or np.any((kp_values < 0) | (kp_values > 9))
+        ):
+            raise ValueError("requested Kp values must be finite and lie in 0--9")
+        if len(np.unique(kp_values)) != len(kp_values):
+            raise ValueError("requested Kp values must be distinct")
+        requested = [{
+            "label": f"Kp {kp:g}", "directory": f"kp_{index:02d}_{kp:g}",
+            "conditions": {"kp": float(kp)}, "vector": None,
+            "outside_training_columns": (
+                [] if model.kp_conditioning["training_min"] <= kp
+                <= model.kp_conditioning["training_max"] else ["kp"]
+            ),
+        } for index, kp in enumerate(kp_values)]
+    else:
+        raise ValueError("requires a conditional WIC-CVAE artifact")
 
     provenance = artifact["data_provenance"]
     support = np.asarray(provenance["training_support"], dtype=bool)
@@ -285,18 +350,29 @@ def run(arguments):
     output.mkdir(parents=True, exist_ok=True)
 
     selections = []
-    for index, kp in enumerate(kp_values):
-        kp = float(kp)
-        within_range = model.kp_conditioning["training_min"] <= kp <= model.kp_conditioning["training_max"]
+    for selection in requested:
+        kp = selection["conditions"]["kp"]
+        within_range = not selection["outside_training_columns"]
         if not within_range:
-            warnings.warn(f"Kp {kp:g} is outside the WIC-CVAE training range", RuntimeWarning, stacklevel=2)
-        destination = output / f"kp_{index:02d}_{kp:g}"
+            warnings.warn(
+                "requested conditions extend outside the WIC-CVAE training range: "
+                + ", ".join(selection["outside_training_columns"]),
+                RuntimeWarning, stacklevel=2
+            )
+        destination = output / selection["directory"]
         destination.mkdir()
-        print(f"Kp {kp:g}: generating {arguments.draws} corrected-WIC fields", flush=True)
+        print(
+            f"{selection['label']}: generating {arguments.draws} corrected-WIC fields",
+            flush=True
+        )
+        condition_arguments = (
+            {"conditioning": selection["vector"]}
+            if model.conditioning is not None else {"kp": kp}
+        )
         samples, latent = sample_decoded_ensemble(
             model, transform, arguments.draws, batch_size=arguments.batch_size,
             device=device, seed=arguments.seed, return_latent=True,
-            support_mask=support, kp=kp
+            support_mask=support, **condition_arguments
         )
         wic = samples[:, 0]
         if not np.isfinite(wic[:, support]).all() or np.any(wic[:, support] < 0):
@@ -335,12 +411,29 @@ def run(arguments):
             fang_geographic_longitude_at_130km=fang_geometry["geographic_longitude"],
             fang_apex2geo_error_degrees=fang_geometry["apex2geo_error_degrees"],
             fang_magnetic_field_150km_microtesla=fang_geometry["magnetic_field_microtesla"],
+            conditioning_feature_names=np.asarray(
+                CONDITIONING_FEATURE_NAMES if selection["vector"] is not None else (),
+                dtype="U32"
+            ),
+            conditioning_values=np.asarray(
+                selection["vector"] if selection["vector"] is not None else (),
+                dtype=np.float32
+            ),
             mlat=mlat, mlt=mlt
         )
         metadata = {
             "Kp": kp, "within_training_range": bool(within_range), "draws": arguments.draws,
             "seed": arguments.seed, "device": device, "model_sha256": model_sha,
-            "model_file": str(artifact_path), "kp_conditioning": dict(model.kp_conditioning),
+            "model_file": str(artifact_path),
+            "kp_conditioning": (
+                None if model.kp_conditioning is None
+                else dict(model.kp_conditioning)
+            ),
+            "conditioning": (
+                None if model.conditioning is None else dict(model.conditioning)
+            ),
+            "requested_conditions": selection["conditions"],
+            "outside_training_columns": selection["outside_training_columns"],
             "grid_id": provenance["grid_id"], "supported_cells": int(support.sum()),
             "conductance_supported_cells": int(physics["conductance_supported"].sum()),
             "field_names": ["wic_corrected", "Hall", "Pedersen"],
@@ -364,18 +457,18 @@ def run(arguments):
             "fang_magnetic_field_uncertainty_method": "not modelled; magnetic_field_std=0",
             "conductance_field_order": ["Hall", "Pedersen"],
             "directory": destination.name,
-            "interpretation": "Fixed-Kp WIC prior propagated member-by-member to Fang electron conductance. Its fixed reference epoch approximates frame-specific Product-3 IGRF because this climatological artifact has no observation time. No proton/solar-EUV contribution, WIC measurement-noise propagation, sampled Zhang--Paxton structural spread or calibrated uncertainty claim."
+            "interpretation": "Conditional WIC prior propagated member-by-member to Fang electron conductance. Its fixed reference epoch approximates frame-specific Product-3 IGRF because this climatological artifact has no observation time. No proton/solar-EUV contribution, WIC measurement-noise propagation, sampled Zhang--Paxton structural spread or calibrated uncertainty claim."
         }
         (destination / "sampling.json").write_text(json.dumps(metadata, indent=2) + "\n")
         if not arguments.no_plots:
             plot_wic(
                 wic_statistics["mean"][0], wic_quantiles, support, mlat, mlt,
-                kp, destination, arguments.wic_vmax
+                selection["label"], destination, arguments.wic_vmax
             )
             plot_conductance(
                 conductance_statistics["mean"], conductance_quantiles,
                 physics["conductance_supported"], mlat, mlt,
-                kp, destination, limits
+                selection["label"], destination, limits
             )
         selections.append(metadata)
         del samples, latent, wic, wic_quantiles, wic_statistics
@@ -385,7 +478,7 @@ def run(arguments):
         raise RuntimeError("source WIC model changed during sampling")
     summary = {
         "selections": selections,
-        "comparison_policy": "identical latent seed at every Kp; each WIC draw is propagated through collapsed Zhang--Paxton and Fang before conductance statistics"
+        "comparison_policy": "identical latent seed for every requested condition; each WIC draw is propagated through collapsed Zhang--Paxton and Fang before conductance statistics"
     }
     (output / "sampling_summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     return selections
@@ -394,7 +487,12 @@ def run(arguments):
 def parse_arguments(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_directory", type=Path)
-    parser.add_argument("--kp", type=float, nargs="+", required=True)
+    selection = parser.add_mutually_exclusive_group(required=True)
+    selection.add_argument("--kp", type=float, nargs="+")
+    selection.add_argument(
+        "--conditions", type=Path,
+        help="JSON list of named 11-feature condition selections"
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--draws", type=int, default=50000)
     parser.add_argument("--batch-size", type=int, default=256)

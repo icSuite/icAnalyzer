@@ -1,6 +1,6 @@
 # Conditional VAE workflows
 
-This directory contains the two supported Kp-conditional CVAE workflows. Both
+This directory contains the supported Hall/Pedersen and WIC CVAE workflows. Both
 use the generic spline model, cache loaders, losses, training loop, artifact
 format and ensemble machinery under `icanalyzer/cvae/`.
 
@@ -38,11 +38,13 @@ Hall/Pedersen artifacts cannot silently inherit the old WIC/SI12 labels.
 - `prepare_wic_cvae_cache.py`: combine corrected WIC Product 2 with either
   manual annotations or an aligned automatic-mask corpus and write the
   disk-backed cache.
-- `train_wic_cvae.py`: train the one-channel WIC Kp-conditional CVAE.
-- `sample_wic_at_kp.py`: draw WIC at selected Kp and propagate each member
-  through collapsed Zhang--Paxton and Fang electron conductance.
+- `train_wic_cvae.py`: train the one-channel WIC CVAE with historical scalar
+  Kp conditioning or the selected 11-feature condition vector.
+- `sample_wic_at_kp.py`: draw WIC at selected Kp or named 11-feature conditions
+  and propagate each member through collapsed Zhang--Paxton and Fang electron
+  conductance.
 - `plot_wic_at_kp.py`: regenerate polar WIC and conductance summaries from
-  saved fixed-Kp ensembles without resampling.
+  saved Kp or named-condition ensembles without resampling.
 
 The current command interfaces are available through:
 
@@ -93,6 +95,53 @@ importance can be suppressed by correlated inputs, so the results do not by
 themselves establish causality. `--split-mode cache` exists only for a quick
 mechanical smoke on a small manual cache; its scores are not the scientific
 comparison.
+
+Train the 11-feature WIC CVAE by joining the existing WIC cache and conditioning
+table at startup. No new image cache is created. Frames lacking any requested
+condition are excluded, and the 13 numerical columns are standardized using
+the retained training split only:
+
+```bash
+PYTHONPATH=. python scripts/CVAE/train_wic_cvae.py \
+  ~/IMAGE_CVAE/training_data/automatic_wic_cvae_model1_model2_fuvpy_bs2d_valid5_20261106 \
+  --conditioning ~/IMAGE_CVAE/conditioning/supermag_all \
+  --conditioning-embedding-dim 32 \
+  --output ~/IMAGE_CVAE/cvae_runs/wic_conditions11_model1_model2_20261107 \
+  --epochs 500 --batch-size 264 --beta 0.048 \
+  --latent-dim 36 --spline-control-points 30 --spline-degree 3 \
+  --learning-rate 0.0001 --seed 1 --training-holes \
+  --num-workers 2 --device cuda
+```
+
+Sampling accepts a JSON list whose records contain exactly the 11 conceptual
+conditions. DOY and clock angle are converted to cyclic pairs internally:
+
+```json
+[
+  {
+    "label": "example",
+    "sml": -200,
+    "smr": -20,
+    "imf_by": 2,
+    "imf_bz": -3,
+    "vx": -450,
+    "clock_angle": 150,
+    "dynamic_pressure": 2,
+    "newell": 5000,
+    "kp": 3,
+    "day_of_year": 100,
+    "dipole_tilt": 10
+  }
+]
+```
+
+```bash
+PYTHONPATH=. python scripts/CVAE/sample_wic_at_kp.py \
+  ~/IMAGE_CVAE/cvae_runs/wic_conditions11_model1_model2_20261107 \
+  --conditions ~/IMAGE_CVAE/conditioning/sample_conditions.json \
+  --output ~/IMAGE_CVAE/cvae_runs/wic_conditions11_model1_model2_20261107/condition_samples \
+  --draws 50000 --batch-size 500 --device cuda
+```
 
 For a manual-mask WIC cache, use a fresh output directory:
 

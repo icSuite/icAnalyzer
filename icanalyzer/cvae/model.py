@@ -80,6 +80,7 @@ class SplineConditionalVAE(nn.Module):
         quality_weight_in_encoder=True,
         decoder_feature_size=18,
         kp_conditioning=None,
+        conditioning=None,
         field_names=None
     ):
         super().__init__()
@@ -90,6 +91,9 @@ class SplineConditionalVAE(nn.Module):
         self.quality_weight_in_encoder = bool(quality_weight_in_encoder)
         self.decoder_feature_size = int(decoder_feature_size)
         self.kp_conditioning = None if kp_conditioning is None else dict(kp_conditioning)
+        self.conditioning = None if conditioning is None else dict(conditioning)
+        if self.kp_conditioning is not None and self.conditioning is not None:
+            raise ValueError("Kp and named conditioning configurations are mutually exclusive")
         if field_names is None:
             raise ValueError("field_names must explicitly identify the modeled fields")
         self.field_names = tuple(str(name) for name in field_names)
@@ -104,6 +108,29 @@ class SplineConditionalVAE(nn.Module):
             if not 0 <= self.kp_conditioning["training_min"] <= self.kp_conditioning["training_max"] <= 9:
                 raise ValueError("training Kp range must lie within 0–9")
             self.kp_conditioning["embedding_dim"] = condition_size
+        elif self.conditioning is not None:
+            if self.conditioning.get("kind") != "named_standardization_v1":
+                raise ValueError("unsupported named conditioning configuration")
+            names = tuple(self.conditioning.get("feature_names", ()))
+            if not names or any(not name for name in names) or len(set(names)) != len(names):
+                raise ValueError("named conditioning requires distinct feature names")
+            arrays = {
+                name: np.asarray(self.conditioning.get(name), dtype=float)
+                for name in ("center", "scale", "training_min", "training_max")
+            }
+            if any(values.shape != (len(names),) for values in arrays.values()):
+                raise ValueError("named conditioning statistics must match feature names")
+            if any(not np.isfinite(values).all() for values in arrays.values()):
+                raise ValueError("named conditioning statistics must be finite")
+            if np.any(arrays["scale"] <= 0) or np.any(
+                arrays["training_min"] > arrays["training_max"]
+            ):
+                raise ValueError("named conditioning scale and training ranges are invalid")
+            condition_size = int(self.conditioning.get("embedding_dim", 32))
+            if condition_size < 1:
+                raise ValueError("named conditioning embedding size must be positive")
+            self.conditioning["feature_names"] = list(names)
+            self.conditioning["embedding_dim"] = condition_size
         if self.decoder_feature_size not in (18, 30):
             raise ValueError("decoder feature size must be 18 or 30")
         if self.spline_control_points <= self.spline_degree:
@@ -138,7 +165,18 @@ class SplineConditionalVAE(nn.Module):
         self.flatten_dim = int(encoded.numel())
 
         if condition_size:
-            self.kp_embedding = nn.Sequential(nn.Linear(1, condition_size), nn.SiLU(), nn.Linear(condition_size, condition_size), nn.SiLU())
+            input_size = (
+                1 if self.kp_conditioning is not None
+                else len(self.conditioning["feature_names"])
+            )
+            embedding = nn.Sequential(
+                nn.Linear(input_size, condition_size), nn.SiLU(),
+                nn.Linear(condition_size, condition_size), nn.SiLU()
+            )
+            if self.kp_conditioning is not None:
+                self.kp_embedding = embedding
+            else:
+                self.condition_embedding = embedding
         self.fc_mu = nn.Linear(self.flatten_dim + condition_size, self.latent_dim)
         self.fc_logvar = nn.Linear(self.flatten_dim + condition_size, self.latent_dim)
         self.fc_decode = nn.Linear(self.latent_dim + condition_size, self.flatten_dim)
@@ -199,7 +237,47 @@ class SplineConditionalVAE(nn.Module):
         normalized = (kp - self.kp_conditioning["center"]) / self.kp_conditioning["scale"]
         return self.kp_embedding(normalized)
 
-    def encode(self, values, valid, kp=None):
+    def _named_features(self, conditioning, reference):
+        """Normalize and embed the complete named condition vector."""
+
+        if self.conditioning is None:
+            if conditioning is not None:
+                raise ValueError("cannot supply named conditions to this model")
+            return None
+        if conditioning is None:
+            raise ValueError("named-conditioned model requires explicit conditions")
+        conditioning = torch.as_tensor(
+            conditioning, device=reference.device, dtype=reference.dtype
+        )
+        feature_count = len(self.conditioning["feature_names"])
+        if conditioning.shape == (feature_count,):
+            conditioning = conditioning[None].expand(reference.shape[0], -1)
+        if conditioning.shape != (reference.shape[0], feature_count):
+            raise ValueError(
+                "named conditions must contain one complete feature row per image"
+            )
+        if not torch.isfinite(conditioning).all():
+            raise ValueError("named conditions must be finite")
+        center = torch.as_tensor(
+            self.conditioning["center"],
+            dtype=reference.dtype, device=reference.device
+        )
+        scale = torch.as_tensor(
+            self.conditioning["scale"],
+            dtype=reference.dtype, device=reference.device
+        )
+        return self.condition_embedding((conditioning - center) / scale)
+
+    def _condition_features(self, kp, conditioning, reference):
+        if self.conditioning is not None:
+            if kp is not None:
+                raise ValueError("named-conditioned model does not accept scalar Kp")
+            return self._named_features(conditioning, reference)
+        if conditioning is not None:
+            raise ValueError("model does not accept named conditions")
+        return self._kp_features(kp, reference)
+
+    def encode(self, values, valid, kp=None, conditioning=None):
         if valid is None:
             raise ValueError("partial-convolution encoder requires a validity mask")
         common_mask = torch.all(valid.to(dtype=torch.bool), dim=1, keepdim=True)
@@ -207,7 +285,7 @@ class SplineConditionalVAE(nn.Module):
             values, common_mask.to(dtype=values.dtype)
         )
         hidden = hidden.reshape(hidden.shape[0], -1)
-        condition = self._kp_features(kp, hidden)
+        condition = self._condition_features(kp, conditioning, hidden)
         if condition is not None:
             hidden = torch.cat((hidden, condition), dim=1)
         return self.fc_mu(hidden), self.fc_logvar(hidden)
@@ -217,8 +295,8 @@ class SplineConditionalVAE(nn.Module):
         standard_deviation = torch.exp(0.5 * logvar)
         return mu + torch.randn_like(standard_deviation) * standard_deviation
 
-    def decode_coefficients(self, latent, kp=None):
-        condition = self._kp_features(kp, latent)
+    def decode_coefficients(self, latent, kp=None, conditioning=None):
+        condition = self._condition_features(kp, conditioning, latent)
         if condition is not None:
             latent = torch.cat((latent, condition), dim=1)
         hidden = self.fc_decode(latent)
@@ -230,8 +308,12 @@ class SplineConditionalVAE(nn.Module):
         hidden = self.spline_resize(hidden)
         return self.spline_conv(hidden)
 
-    def decode(self, latent, kp=None):
-        condition_arguments = {} if kp is None else {"kp": kp}
+    def decode(self, latent, kp=None, conditioning=None):
+        condition_arguments = {}
+        if kp is not None:
+            condition_arguments["kp"] = kp
+        if conditioning is not None:
+            condition_arguments["conditioning"] = conditioning
         coefficients = self.decode_coefficients(latent, **condition_arguments)
         return torch.einsum(
             "xi,bcij,yj->bcyx",
@@ -240,22 +322,35 @@ class SplineConditionalVAE(nn.Module):
             self.row_basis,
         )
 
-    def forward(self, encoder_input, valid=None, kp=None):
-        condition_arguments = {} if kp is None else {"kp": kp}
+    def forward(self, encoder_input, valid=None, kp=None, conditioning=None):
+        condition_arguments = {}
+        if kp is not None:
+            condition_arguments["kp"] = kp
+        if conditioning is not None:
+            condition_arguments["conditioning"] = conditioning
         mu, logvar = self.encode(encoder_input, valid, **condition_arguments)
         latent = self.reparameterize(mu, logvar)
         return self.decode(latent, **condition_arguments), mu, logvar
 
-    def forward_samples(self, encoder_input, valid=None, kp=None, latent_samples=1):
+    def forward_samples(
+        self, encoder_input, valid=None, kp=None, conditioning=None,
+        latent_samples=1
+    ):
         """Encode once and decode several reparameterized latent draws in parallel."""
 
         latent_samples = int(latent_samples)
         if latent_samples < 1:
             raise ValueError("latent_samples must be positive")
         if latent_samples == 1:
-            return self.forward(encoder_input, valid, kp=kp)
+            return self.forward(
+                encoder_input, valid, kp=kp, conditioning=conditioning
+            )
 
-        condition_arguments = {} if kp is None else {"kp": kp}
+        condition_arguments = {}
+        if kp is not None:
+            condition_arguments["kp"] = kp
+        if conditioning is not None:
+            condition_arguments["conditioning"] = conditioning
         mu, logvar = self.encode(encoder_input, valid, **condition_arguments)
         standard_deviation = torch.exp(0.5 * logvar)
         noise = torch.randn(
@@ -275,6 +370,17 @@ class SplineConditionalVAE(nn.Module):
                 )
             else:
                 raise ValueError("Kp must have one value per encoded image")
+        if conditioning is not None:
+            conditioning = torch.as_tensor(
+                conditioning, dtype=mu.dtype, device=mu.device
+            )
+            if conditioning.ndim == 1:
+                conditioning = conditioning[None].expand(mu.shape[0], -1)
+            if conditioning.shape[0] != mu.shape[0]:
+                raise ValueError("conditions must have one row per encoded image")
+            repeated_condition["conditioning"] = conditioning.repeat_interleave(
+                latent_samples, dim=0
+            )
         reconstructed = self.decode(
             latent.reshape(mu.shape[0] * latent_samples, mu.shape[1]),
             **repeated_condition
@@ -308,6 +414,8 @@ class SplineConditionalVAE(nn.Module):
             configuration["decoder_feature_size"] = self.decoder_feature_size
         if self.kp_conditioning is not None:
             configuration["kp_conditioning"] = dict(self.kp_conditioning)
+        if self.conditioning is not None:
+            configuration["conditioning"] = dict(self.conditioning)
         return configuration
 
     @classmethod
@@ -327,6 +435,7 @@ class SplineConditionalVAE(nn.Module):
             ),
             decoder_feature_size=configuration.get("decoder_feature_size", 18),
             kp_conditioning=configuration.get("kp_conditioning"),
+            conditioning=configuration.get("conditioning"),
             field_names=field_names
         )
 
