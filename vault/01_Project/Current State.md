@@ -1,7 +1,7 @@
 # Current State
 
-Last reviewed: 2026-11-07 (observed conditioning-case selection)
-Repository snapshot: `vae/wic-si12` at `a336b0a`; `main` remains at `7c71591`
+Last reviewed: 2026-11-08 (empirical IMF-regime sampling correction)
+Repository snapshot: `vae/wic-si12` at `e91e835`; `main` remains at `7c71591`
 Worktree: user annotation and generated-output changes preserved
 
 ## SuperMAG conditioning preparation and importance benchmark ready (2026-11-06)
@@ -88,19 +88,33 @@ Sixty-five focused regression checks pass. A real one-epoch CPU smoke on the
 manual WIC cache retained 5,761/1,291/997 train/validation/test frames, saved
 and reloaded the artifact, sampled a named condition and propagated it through
 the real Apex/Zhang--Paxton/Fang path; saved plot regeneration also passes.
-The first server sampling attempt exposed that the documented
-`sample_conditions.json` path was only a placeholder. This is now repaired by
-`select_conditioning_cases.py`. It joins the selected WIC-cache split to the
-prepared conditions and writes eight reproducible cases drawn from actual,
-complete rows: typical, quiet, active-substorm, storm, By negative/positive
-and Bz south/north. Regimes use explicit quantiles, then select the observed
-row nearest that regime's multivariate median, so correlated parameters are
-not independently invented. Source orbit/frame/time and manifest hashes are
-recorded. The generated JSON round-trips through the sampler's exact 13-column
-representation. Sixty-six focused checks pass, and real manual-cache selection
-plus eight-case Apex/Zhang--Paxton/Fang sampling passes. Next generate the JSON
-against the automatic training cache on Dynamit, then rerun the existing
-50,000-draw sampler command.
+
+The user's 500-epoch automatic-cache named-condition run is complete and local
+at `~/Dropbox/work/data/IMAGE_CVAE/cvae_runs/wic_conditions11_model1_model2_20261107`.
+It retained 165,885/34,820/36,185 train/validation/test frames, restored epoch
+130 and reports validation/test total loss 2.1117/2.1335. These are execution
+and held-out-loss facts, not a scientific skill/calibration conclusion.
+
+The first postprocessing design was scientifically wrong: it chose one complete
+event row per label and used that same 11-value vector for all 50,000 members.
+Those eight fixed-condition products are diagnostics only and must not be
+interpreted as IMF-regime comparisons. The SuperMAG clock column also follows
+a different angular convention from the requested standard 0-degree north /
+180-degree south clock angle.
+
+Commit `e91e835` replaces that selector with empirical regime sampling while
+reusing the completed model. For each member it uniformly resamples one actual
+finite training row satisfying the physical filter, passes that row's original
+13-column vector to the trained model and uses that member's Kp in collapsed
+Zhang--Paxton/Fang. Standard clock is derived from By/Bz only for selection.
+Defaults are Bz south/north and By positive/negative, selected-component
+magnitude 2--10 nT, standard-clock half-width 30 degrees and absolute dipole
+tilt no greater than 5 degrees; SML, SMR, Vx, pressure, Newell, Kp and DOY are
+unrestricted empirical nuisance variables. Output records every condition row,
+source frame/time, per-member Kp and condition summaries. Sixty-six focused
+checks pass, including variable-Kp real-physics propagation and an end-to-end
+regime artifact/plot smoke. Next run four fresh 50,000-member regime ensembles
+on Dynamit; do not overwrite or reinterpret the old fixed-condition output.
 
 ## Multi-sample latent training is available as an opt-in (2026-11-06)
 

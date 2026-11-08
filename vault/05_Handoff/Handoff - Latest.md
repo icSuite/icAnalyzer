@@ -1,8 +1,8 @@
 # Handoff - Latest
 
-Last updated: 2026-11-07
-Last reviewed: 2026-11-07 (observed conditioning-case selection)
-Repository snapshot: `vae/wic-si12` at `a336b0a` with user annotation and generated-output changes preserved; `main` remains at `7c71591`
+Last updated: 2026-11-08
+Last reviewed: 2026-11-08 (empirical IMF-regime sampling correction)
+Repository snapshot: `vae/wic-si12` at `e91e835` with user annotation and generated-output changes preserved; `main` remains at `7c71591`
 
 ## SuperMAG conditioning-data and importance stages implemented (2026-11-06)
 
@@ -90,19 +90,34 @@ cache and prepared SuperMAG table, retaining 5,761/1,291/997 train/validation/
 test frames. Artifact reload, named-condition sampling, real Apex/Zhang--
 Paxton/Fang propagation and saved plot regeneration all pass.
 
-The documented `sample_conditions.json` was initially a placeholder and caused
-the user's first server sampling command to stop with `FileNotFoundError`; the
-model artifact itself loaded successfully. Commit `a336b0a` adds
-`select_conditioning_cases.py`. It selects eight complete, actually observed
-training rows: typical, quiet, active-substorm, storm, By negative/positive
-and Bz south/north. Each explicit quantile regime uses the row nearest its
-multivariate median; no correlated input combination is synthesized. Output
-records source orbit/frame/time and both manifest identities and is accepted
-directly by the existing sampler. Sixty-six focused checks pass; a real manual-
-cache selection and all-eight-case Apex/Zhang--Paxton/Fang sampling smoke pass.
-Next generate the JSON from the automatic server cache and rerun the 50,000-
-draw sampler. The unresolved 2003 mask/viewing/instrument shift remains a
-separate validation risk; PCA remains deferred.
+The user's 500-epoch automatic-cache named-condition run is complete and local
+at `~/Dropbox/work/data/IMAGE_CVAE/cvae_runs/wic_conditions11_model1_model2_20261107`.
+It used 165,885/34,820/36,185 train/validation/test frames, restored epoch 130
+and reports validation/test total loss 2.1117/2.1335. No scientific skill or
+calibration conclusion follows from those values alone.
+
+The first fixed-case postprocessing was rejected by the user and is superseded.
+It used one selected event's exact 11 conditions for every member; the resulting
+eight 50,000-member products are diagnostics only, not IMF-regime comparisons.
+The downloaded SuperMAG clock-angle column also behaves under a different
+convention than the intended standard 0-degree north/180-degree south angle.
+
+Commit `e91e835` removes `select_conditioning_cases.py` and adds empirical
+regime sampling directly to `sample_wic_at_kp.py --regimes CACHE CONDITIONING`.
+The standard clock angle is derived from By/Bz for filtering, while the model
+receives each selected row's original trained condition vector. Defaults are
+Bz south/north and By positive/negative; selected component 2--10 nT; standard
+clock within 30 degrees of 180/0/90/270 respectively; and absolute dipole tilt
+at most 5 degrees. All other conditions are unrestricted and marginalized by
+uniform resampling with replacement from actual complete training rows. Each
+decoded member's own Kp is now used in Zhang--Paxton/Fang. Saved products retain
+the per-member condition vector, standard clock, source orbit/frame/time, Kp
+and physical lookup evidence. Sixty-six focused checks pass, plus real
+variable-Kp Zhang--Paxton/Fang propagation and an end-to-end regime/plot smoke.
+Next run the four 50,000-member regimes on Dynamit into a new
+`imf_regime_samples` directory. Do not overwrite or scientifically compare the
+old fixed-case products. The unresolved 2003 mask/viewing/instrument shift
+remains a separate validation risk; PCA remains deferred.
 Portfolio impact: Central update needed: No.
 
 ## Multi-sample latent training implemented as an opt-in (2026-11-06)
