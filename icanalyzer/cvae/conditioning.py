@@ -67,6 +67,10 @@ CONDITIONING_FEATURE_NAMES = (
     "newell", "kp", "day_of_year_sin", "day_of_year_cos", "dipole_tilt",
     "clock_angle_sin", "clock_angle_cos",
 )
+CONDITIONING_PROFILES = {
+    "all11": CONDITIONING_FEATURE_NAMES,
+    "hybrid4": ("sml", "by_gsm", "bz_gsm", "dipole_tilt"),
+}
 CONCEPTUAL_CONDITIONING_FEATURES = {
     "sml": ("sml",),
     "smr": ("smr",),
@@ -308,8 +312,25 @@ def conditioning_time_features(time):
     }
 
 
-def conditioning_feature_matrix(condition, positions, time, kp):
-    """Build the exact 13-column representation of 11 conceptual features."""
+def resolve_conditioning_features(profile_or_names="all11"):
+    """Resolve and validate one supported named-conditioning feature set."""
+
+    if isinstance(profile_or_names, str):
+        if profile_or_names not in CONDITIONING_PROFILES:
+            raise ValueError(f"unknown conditioning profile: {profile_or_names}")
+        names = CONDITIONING_PROFILES[profile_or_names]
+    else:
+        names = tuple(profile_or_names)
+    if (
+        not names or len(set(names)) != len(names)
+        or any(name not in CONDITIONING_FEATURE_NAMES for name in names)
+    ):
+        raise ValueError("conditioning feature names must be a nonempty supported subset")
+    return tuple(names)
+
+
+def conditioning_feature_matrix(condition, positions, time, kp, feature_names="all11"):
+    """Build one selected named-conditioning feature matrix."""
 
     features = {
         name: condition[name][positions] for name in CONDITIONING_SOURCE_FIELDS
@@ -320,9 +341,8 @@ def conditioning_feature_matrix(condition, positions, time, kp):
         "clock_angle_sin": np.sin(np.deg2rad(features["clock_angle_gsm"])),
         "clock_angle_cos": np.cos(np.deg2rad(features["clock_angle_gsm"])),
     })
-    return np.column_stack([
-        features[name] for name in CONDITIONING_FEATURE_NAMES
-    ]).astype(np.float32)
+    names = resolve_conditioning_features(feature_names)
+    return np.column_stack([features[name] for name in names]).astype(np.float32)
 
 
 def load_prepared_conditioning(directory):
@@ -347,7 +367,8 @@ def load_prepared_conditioning(directory):
 
 
 def align_conditioning_features(
-    conditioning_directory, orbit, source_frame, time, kp
+    conditioning_directory, orbit, source_frame, time, kp,
+    feature_names="all11"
 ):
     """Exact orbit/frame/time join from one cache split to named conditions."""
 
@@ -377,16 +398,21 @@ def align_conditioning_features(
         condition["time"][positions].astype("datetime64[us]"), time
     ):
         raise ValueError("conditioning and cache timestamps differ")
-    matrix = conditioning_feature_matrix(condition, positions, time, kp)
+    matrix = conditioning_feature_matrix(
+        condition, positions, time, kp, feature_names=feature_names
+    )
     return matrix, manifest, manifest_sha256
 
 
-def fit_conditioning_normalization(values, embedding_dim=32):
+def fit_conditioning_normalization(
+    values, embedding_dim=32, feature_names="all11"
+):
     """Fit named feature standardization on finite training frames only."""
 
     values = np.asarray(values, dtype=np.float64)
     embedding_dim = int(embedding_dim)
-    if values.ndim != 2 or values.shape[1] != len(CONDITIONING_FEATURE_NAMES):
+    names = resolve_conditioning_features(feature_names)
+    if values.ndim != 2 or values.shape[1] != len(names):
         raise ValueError("conditioning matrix does not match the named feature contract")
     if len(values) < 2 or not np.isfinite(values).all():
         raise ValueError("conditioning normalization requires finite training rows")
@@ -396,10 +422,11 @@ def fit_conditioning_normalization(values, embedding_dim=32):
         raise ValueError("conditioning features need positive spread and embedding size")
     return {
         "kind": "named_standardization_v1",
-        "feature_names": list(CONDITIONING_FEATURE_NAMES),
+        "feature_names": list(names),
         "conceptual_features": {
-            name: list(columns)
+            name: [column for column in columns if column in names]
             for name, columns in CONCEPTUAL_CONDITIONING_FEATURES.items()
+            if any(column in names for column in columns)
         },
         "center": center.tolist(), "scale": scale.tolist(),
         "training_min": values.min(axis=0).tolist(),
@@ -408,13 +435,19 @@ def fit_conditioning_normalization(values, embedding_dim=32):
     }
 
 
-def conditioning_vector_from_record(record):
-    """Convert 11 named physical conditions to the trained 13-column layout."""
+def conditioning_vector_from_record(record, feature_names="all11"):
+    """Convert named physical conditions to the selected trained layout."""
 
-    required = (
-        "sml", "smr", "imf_by", "imf_bz", "vx", "clock_angle",
-        "dynamic_pressure", "newell", "kp", "day_of_year", "dipole_tilt",
-    )
+    names = resolve_conditioning_features(feature_names)
+    record_names = {
+        "sml": "sml", "smr": "smr", "by_gsm": "imf_by",
+        "bz_gsm": "imf_bz", "vx_gse": "vx",
+        "dynamic_pressure": "dynamic_pressure", "newell": "newell",
+        "kp": "kp", "dipole_tilt": "dipole_tilt",
+        "day_of_year_sin": "day_of_year", "day_of_year_cos": "day_of_year",
+        "clock_angle_sin": "clock_angle", "clock_angle_cos": "clock_angle",
+    }
+    required = tuple(dict.fromkeys(record_names[name] for name in names))
     missing = [name for name in required if name not in record]
     if missing:
         raise ValueError("condition record lacks: " + ", ".join(missing))
@@ -422,25 +455,27 @@ def conditioning_vector_from_record(record):
     values = np.asarray([numbers[name] for name in required], dtype=np.float64)
     if not np.isfinite(values).all():
         raise ValueError("all requested conditions must be finite")
-    if not 0 <= numbers["kp"] <= 9:
+    if "kp" in numbers and not 0 <= numbers["kp"] <= 9:
         raise ValueError("requested Kp must lie within 0--9")
-    if not 1 <= numbers["day_of_year"] <= 366:
+    if "day_of_year" in numbers and not 1 <= numbers["day_of_year"] <= 366:
         raise ValueError("requested day of year must lie within 1--366")
-    day_phase = 2 * np.pi * (numbers["day_of_year"] - 1) / 365.25
-    clock_phase = np.deg2rad(numbers["clock_angle"])
+    day_phase = 2 * np.pi * (numbers.get("day_of_year", 1) - 1) / 365.25
+    clock_phase = np.deg2rad(numbers.get("clock_angle", 0))
     columns = {
-        "sml": numbers["sml"], "smr": numbers["smr"],
-        "by_gsm": numbers["imf_by"], "bz_gsm": numbers["imf_bz"],
-        "vx_gse": numbers["vx"],
-        "dynamic_pressure": numbers["dynamic_pressure"],
-        "newell": numbers["newell"], "kp": numbers["kp"],
+        name: numbers[record_name]
+        for name, record_name in record_names.items()
+        if name in names and name not in (
+            "day_of_year_sin", "day_of_year_cos",
+            "clock_angle_sin", "clock_angle_cos"
+        )
+    }
+    columns.update({
         "day_of_year_sin": np.sin(day_phase),
         "day_of_year_cos": np.cos(day_phase),
-        "dipole_tilt": numbers["dipole_tilt"],
         "clock_angle_sin": np.sin(clock_phase),
         "clock_angle_cos": np.cos(clock_phase),
-    }
+    })
     return np.asarray(
-        [columns[name] for name in CONDITIONING_FEATURE_NAMES],
+        [columns[name] for name in names],
         dtype=np.float32
     )

@@ -27,12 +27,13 @@ from icanalyzer.cvae.artifacts import WIC_CVAE_ARTIFACT_TYPE, load_run_artifact
 from icanalyzer.cvae.conditioning import (
     CONDITIONING_FEATURE_NAMES,
     conditioning_vector_from_record,
+    resolve_conditioning_features,
 )
 from icanalyzer.cvae.ensemble import ensemble_statistics, sample_decoded_ensemble
 from icanalyzer.cvae.regimes import (
     REGIME_NAMES,
     empirical_regime_masks,
-    load_complete_training_conditions,
+    load_training_conditions,
 )
 
 
@@ -298,25 +299,24 @@ def _named_selections(filename, model):
         if not safe_label or safe_label in labels:
             raise ValueError("condition labels must be distinct safe directory names")
         labels.add(safe_label)
-        vector = conditioning_vector_from_record(record)
-        if model.conditioning["feature_names"] != list(CONDITIONING_FEATURE_NAMES):
-            raise ValueError("model and current named-conditioning feature contracts differ")
+        names = resolve_conditioning_features(model.conditioning["feature_names"])
+        vector = conditioning_vector_from_record(record, feature_names=names)
+        if "kp" not in record:
+            raise ValueError("condition record needs Kp for conductance propagation")
+        conceptual_names = tuple(model.conditioning["conceptual_features"])
         lower = np.asarray(model.conditioning["training_min"])
         upper = np.asarray(model.conditioning["training_max"])
         outside = [
             name for name, value, minimum, maximum in zip(
-                CONDITIONING_FEATURE_NAMES, vector, lower, upper
+                names, vector, lower, upper
             ) if value < minimum or value > maximum
         ]
         selections.append({
             "mode": "fixed_conditions",
             "label": label, "directory": safe_label,
             "conditions": {
-                name: float(record[name]) for name in (
-                    "sml", "smr", "imf_by", "imf_bz", "vx",
-                    "clock_angle", "dynamic_pressure", "newell", "kp",
-                    "day_of_year", "dipole_tilt"
-                )
+                name: float(record[name])
+                for name in dict.fromkeys((*conceptual_names, "kp"))
             },
             "vector": vector, "outside_training_columns": outside,
         })
@@ -326,9 +326,11 @@ def _named_selections(filename, model):
 def _regime_selections(paths, names, model, artifact, arguments):
     """Load actual finite training rows and form physical IMF regime pools."""
 
-    if model.conditioning["feature_names"] != list(CONDITIONING_FEATURE_NAMES):
-        raise ValueError("model and current named-conditioning feature contracts differ")
-    rows = load_complete_training_conditions(paths[0], paths[1])
+    model_names = resolve_conditioning_features(
+        model.conditioning["feature_names"]
+    )
+    model_columns = [CONDITIONING_FEATURE_NAMES.index(name) for name in model_names]
+    rows = load_training_conditions(paths[0], paths[1])
     evidence = rows["provenance"]
     expected_cache = artifact["data_provenance"].get("cache_manifest_sha256")
     expected_conditioning = (
@@ -345,16 +347,21 @@ def _regime_selections(paths, names, model, artifact, arguments):
         clock_half_width=arguments.regime_clock_half_width,
         maximum_absolute_tilt=arguments.regime_tilt_limit
     )
+    model_finite = np.all(np.isfinite(rows["matrix"][:, model_columns]), axis=1)
+    kp_column = CONDITIONING_FEATURE_NAMES.index("kp")
+    kp_finite = np.isfinite(rows["matrix"][:, kp_column])
     selections = []
     for name in names:
-        selected = masks[name]
+        selected = masks[name] & model_finite & kp_finite
         count = int(selected.sum())
         if count < 2:
             raise ValueError(f"{name} has fewer than two matching training rows")
         selections.append({
             "mode": "empirical_regime", "label": name.replace("_", " ").title(),
             "directory": name, "conditions": None,
-            "vector": rows["matrix"][selected],
+            "vector": rows["matrix"][selected][:, model_columns],
+            "pool_full_vector": rows["matrix"][selected],
+            "pool_kp": rows["matrix"][selected, kp_column],
             "pool_standard_clock": standard_clock[selected].astype(np.float32),
             "pool_orbit": rows["orbit"][selected],
             "pool_source_frame": rows["source_frame"][selected],
@@ -466,18 +473,18 @@ def run(arguments):
                 0, selection["pool_size"], size=arguments.draws
             )
             condition_values = selection["vector"][pool_indices]
+            full_condition_values = selection["pool_full_vector"][pool_indices]
             standard_clock = selection["pool_standard_clock"][pool_indices]
             sample_orbit = selection["pool_orbit"][pool_indices]
             sample_source_frame = selection["pool_source_frame"][pool_indices]
             sample_time = selection["pool_time"][pool_indices]
-            sample_kp = condition_values[
-                :, CONDITIONING_FEATURE_NAMES.index("kp")
-            ]
+            sample_kp = selection["pool_kp"][pool_indices]
             kp = sample_kp
         else:
             condition_seed = None
             pool_indices = np.asarray([], dtype=np.int64)
             condition_values = selection["vector"]
+            full_condition_values = np.asarray([], dtype=np.float32)
             standard_clock = np.asarray([], dtype=np.float32)
             sample_orbit = np.asarray([], dtype=np.int32)
             sample_source_frame = np.asarray([], dtype=np.int32)
@@ -546,13 +553,21 @@ def run(arguments):
             fang_apex2geo_error_degrees=fang_geometry["apex2geo_error_degrees"],
             fang_magnetic_field_150km_microtesla=fang_geometry["magnetic_field_microtesla"],
             conditioning_feature_names=np.asarray(
-                CONDITIONING_FEATURE_NAMES if condition_values is not None else (),
+                model.conditioning["feature_names"]
+                if condition_values is not None and model.conditioning is not None
+                else (),
                 dtype="U32"
             ),
             conditioning_values=np.asarray(
                 condition_values if condition_values is not None else (),
                 dtype=np.float32
             ),
+            conditioning_full_feature_names=np.asarray(
+                CONDITIONING_FEATURE_NAMES
+                if selection["mode"] == "empirical_regime" else (),
+                dtype="U32"
+            ),
+            conditioning_full_values=full_condition_values,
             conditioning_standard_clock_angle=standard_clock,
             conditioning_pool_index=pool_indices,
             conditioning_source_orbit=sample_orbit,
@@ -606,7 +621,7 @@ def run(arguments):
                     "seed": condition_seed,
                     "sample_specific_kp_used_for_conductance": True,
                     "condition_summary": _condition_summary(
-                        condition_values, standard_clock
+                        full_condition_values, standard_clock
                     ),
                 }
             ),

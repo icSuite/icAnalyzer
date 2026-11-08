@@ -39,7 +39,8 @@ Hall/Pedersen artifacts cannot silently inherit the old WIC/SI12 labels.
   manual annotations or an aligned automatic-mask corpus and write the
   disk-backed cache.
 - `train_wic_cvae.py`: train the one-channel WIC CVAE with historical scalar
-  Kp conditioning or the selected 11-feature condition vector.
+  Kp conditioning, the full 11-feature condition vector or the reduced
+  `hybrid4` profile (SML, IMF By, IMF Bz and dipole tilt).
 - `sample_wic_at_kp.py`: draw WIC at selected Kp, exact named conditions or
   empirical IMF regimes and propagate each member through collapsed
   Zhang--Paxton and Fang electron conductance.
@@ -111,6 +112,24 @@ PYTHONPATH=. python scripts/CVAE/train_wic_cvae.py \
   --latent-dim 36 --spline-control-points 30 --spline-degree 3 \
   --learning-rate 0.0001 --seed 1 --training-holes \
   --num-workers 2 --device cuda
+```
+
+The reduced four-variable experiment reuses the same cache and conditioning
+table. Only rows missing SML, IMF By, IMF Bz or dipole tilt are excluded; a
+missing unused field does not exclude a frame. Use a new run directory because
+model runs are never overwritten:
+
+```bash
+PYTHONPATH=. python scripts/CVAE/train_wic_cvae.py \
+  ~/IMAGE_CVAE/training_data/automatic_wic_cvae_model1_model2_fuvpy_bs2d_valid5_20261106 \
+  --conditioning ~/IMAGE_CVAE/conditioning/supermag_all \
+  --conditioning-profile hybrid4 \
+  --conditioning-embedding-dim 32 \
+  --output ~/IMAGE_CVAE/cvae_runs/wic_hybrid4_model1_model2_b264_beta0048_20261108 \
+  --epochs 500 --batch-size 264 --beta 0.048 \
+  --latent-dim 36 --spline-control-points 30 --spline-degree 3 \
+  --learning-rate 0.0001 --seed 1 --training-holes \
+  --num-workers 4 --prefetch-factor 4 --device cuda
 ```
 
 Exact-condition sampling remains available for diagnostics through a JSON list

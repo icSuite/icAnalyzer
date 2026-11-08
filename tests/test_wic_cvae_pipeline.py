@@ -134,6 +134,17 @@ def test_named_conditioning_exact_join_dataset_and_model(tmp_path):
     )
     assert matrix.shape == (3, len(CONDITIONING_FEATURE_NAMES))
     assert np.isfinite(matrix).all()
+    hybrid = align_conditioning_features(
+        conditioning_directory, orbit, source_frame, time, [1., 3., 5.],
+        feature_names="hybrid4"
+    )[0]
+    assert hybrid.shape == (3, 4)
+    hybrid_normalization = fit_conditioning_normalization(
+        hybrid, embedding_dim=6, feature_names="hybrid4"
+    )
+    assert hybrid_normalization["feature_names"] == [
+        "sml", "by_gsm", "bz_gsm", "dipole_tilt"
+    ]
 
     cache = make_wic_cache(tmp_path / "cache")
     dataset = AutomaticFieldDataset(
@@ -197,6 +208,10 @@ def test_named_conditioning_exact_join_dataset_and_model(tmp_path):
     })
     assert requested.shape == (len(CONDITIONING_FEATURE_NAMES),)
     assert requested[-2] == 1
+    hybrid_requested = conditioning_vector_from_record({
+        "sml": -200, "imf_by": 2, "imf_bz": -3, "dipole_tilt": 10
+    }, feature_names="hybrid4")
+    np.testing.assert_array_equal(hybrid_requested, [-200, 2, -3, 10])
 
 
 def test_empirical_imf_regimes_use_standard_clock_and_leave_nuisance_free():
@@ -206,6 +221,7 @@ def test_empirical_imf_regimes_use_standard_clock_and_leave_nuisance_free():
     matrix[:, CONDITIONING_FEATURE_NAMES.index("by_gsm")] = by
     matrix[:, CONDITIONING_FEATURE_NAMES.index("bz_gsm")] = bz
     matrix[:, CONDITIONING_FEATURE_NAMES.index("vx_gse")] = np.arange(len(by)) - 500
+    matrix[0, CONDITIONING_FEATURE_NAMES.index("smr")] = np.nan
     matrix[:, CONDITIONING_FEATURE_NAMES.index("dipole_tilt")] = [0, 0, 0, 0, 0, 0, 8, 0]
     matrix[:, CONDITIONING_FEATURE_NAMES.index("day_of_year_cos")] = 1
     matrix[:, CONDITIONING_FEATURE_NAMES.index("clock_angle_cos")] = 1
@@ -461,6 +477,22 @@ def test_named_conditioning_wic_trainer_artifact(tmp_path, monkeypatch):
     )
     assert (output / "conditioning_manifest.json").is_file()
 
+    hybrid_output = tmp_path / "hybrid_run"
+    hybrid_arguments = trainer.parse_arguments([
+        str(cache), "--conditioning", str(conditioning),
+        "--conditioning-profile", "hybrid4",
+        "--conditioning-embedding-dim", "6", "--output", str(hybrid_output),
+        "--device", "cpu", "--num-workers", "0", "--epochs", "1",
+        "--latent-dim", "2", "--spline-control-points", "5"
+    ])
+    hybrid_summary = trainer.run(hybrid_arguments)
+    loaded, _, artifact = load_run_artifact(hybrid_output / "wic_cvae.pt")
+    assert loaded.conditioning["feature_names"] == [
+        "sml", "by_gsm", "bz_gsm", "dipole_tilt"
+    ]
+    assert hybrid_summary["training_configuration"]["conditioning_profile"] == "hybrid4"
+    assert artifact["data_provenance"]["conditioning"]["profile"] == "hybrid4"
+
     import scripts.CVAE.sample_wic_at_kp as sampler
     regime_arguments = SimpleNamespace(
         regime_field_minimum=.5, regime_field_maximum=3.0,
@@ -473,7 +505,7 @@ def test_named_conditioning_wic_trainer_artifact(tmp_path, monkeypatch):
     assert len(regimes) == 1
     assert regimes[0]["mode"] == "empirical_regime"
     assert regimes[0]["pool_size"] == 2
-    assert regimes[0]["vector"].shape == (2, len(CONDITIONING_FEATURE_NAMES))
+    assert regimes[0]["vector"].shape == (2, 4)
 
     def regime_precipitation(wic, dwic, kp, mlt):
         wic, kp, mlt = np.broadcast_arrays(wic, kp, mlt)
@@ -511,7 +543,7 @@ def test_named_conditioning_wic_trainer_artifact(tmp_path, monkeypatch):
     })
     regime_output = tmp_path / "regime_samples"
     regime_cli = sampler.parse_arguments([
-        str(output), "--regimes", str(cache), str(conditioning),
+        str(hybrid_output), "--regimes", str(cache), str(conditioning),
         "--regime", "bz_south", "--regime-field-minimum", ".5",
         "--regime-field-maximum", "3", "--regime-clock-half-width", "60",
         "--regime-tilt-limit", "40", "--output", str(regime_output),
@@ -522,7 +554,10 @@ def test_named_conditioning_wic_trainer_artifact(tmp_path, monkeypatch):
     assert sampled[0]["conditioning_pool_frames"] == 2
     assert sampled[0]["conditioning_sampling"]["sample_specific_kp_used_for_conductance"]
     with np.load(regime_output / "bz_south/ensemble_products.npz") as saved:
-        assert saved["conditioning_values"].shape == (4, len(CONDITIONING_FEATURE_NAMES))
+        assert saved["conditioning_values"].shape == (4, 4)
+        assert saved["conditioning_full_values"].shape == (
+            4, len(CONDITIONING_FEATURE_NAMES)
+        )
         assert saved["conductance_sample_kp"].shape == (4,)
         assert saved["physics_unique_kp"].ndim == 1
 

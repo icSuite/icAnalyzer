@@ -18,9 +18,10 @@ from torch.utils.data import DataLoader
 from icanalyzer.cvae.artifacts import WIC_CVAE_ARTIFACT_TYPE, save_run_artifact
 from icanalyzer.cvae.cache import AutomaticFieldDataset
 from icanalyzer.cvae.conditioning import (
-    CONDITIONING_FEATURE_NAMES,
+    CONDITIONING_PROFILES,
     align_conditioning_features,
     fit_conditioning_normalization,
+    resolve_conditioning_features,
 )
 from icanalyzer.cvae.data import fit_kp_conditioning
 from icanalyzer.cvae.loss import LEGACY_LOSS_CONFIGURATION
@@ -85,6 +86,9 @@ def run(arguments):
     if arguments.conditioning is None:
         kp_conditioning = fit_kp_conditioning(datasets["train"].kp)
     else:
+        feature_names = resolve_conditioning_features(
+            arguments.conditioning_profile
+        )
         conditioning_directory = arguments.conditioning.expanduser().resolve()
         manifest = None
         manifest_sha256 = None
@@ -97,6 +101,7 @@ def run(arguments):
                 dataset.source_frames,
                 dataset.frame_time,
                 dataset.kp,
+                feature_names=feature_names,
             )
             if manifest_sha256 is not None and current_sha256 != manifest_sha256:
                 raise RuntimeError("conditioning manifest changed during cache alignment")
@@ -106,12 +111,14 @@ def run(arguments):
         named_conditioning = fit_conditioning_normalization(
             datasets["train"].conditioning,
             embedding_dim=arguments.conditioning_embedding_dim,
+            feature_names=feature_names,
         )
         conditioning_evidence = {
             "directory": str(conditioning_directory),
             "manifest_sha256": manifest_sha256,
             "format": manifest["format"],
-            "feature_names": list(CONDITIONING_FEATURE_NAMES),
+            "profile": arguments.conditioning_profile,
+            "feature_names": list(feature_names),
             "missing_condition_frames_dropped": condition_dropped,
             "alignment": "exact orbit, Product-2 source-frame index and timestamp",
         }
@@ -121,7 +128,7 @@ def run(arguments):
         mask_source = {"kind": "automatic", **metadata["automatic_masks"]}
     configuration = {name: getattr(arguments, name) for name in (
         "epochs", "batch_size", "latent_dim", "learning_rate", "beta",
-        "latent_samples", "conditioning_embedding_dim",
+        "latent_samples", "conditioning_embedding_dim", "conditioning_profile",
         "spline_control_points", "spline_degree", "scheduler_factor",
         "scheduler_patience", "scheduler_minimum_learning_rate"
     )}
@@ -175,7 +182,10 @@ def run(arguments):
         name: 0 if dataset is None else len(dataset)
         for name, dataset in datasets.items()
     }
-    condition_label = "Kp" if named_conditioning is None else "11-feature named"
+    condition_label = (
+        "Kp" if named_conditioning is None
+        else f"{arguments.conditioning_profile} named"
+    )
     print(
         f"WIC-CVAE frames: {used_frames}. Conditioning: {condition_label}. "
         f"Device: {device}. No ensembles will be generated.", flush=True
@@ -265,6 +275,11 @@ def parse_arguments(argv=None):
             "retain the historical scalar-Kp model"
         )
     )
+    parser.add_argument(
+        "--conditioning-profile", choices=tuple(CONDITIONING_PROFILES),
+        default="all11",
+        help="named feature profile used with --conditioning (default: all11)"
+    )
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--seed", type=int)
     for name, default in (("epochs", 500), ("batch-size", 264), ("latent-dim", 36),
@@ -293,6 +308,8 @@ def parse_arguments(argv=None):
         parser.error("beta must be finite and nonnegative")
     if arguments.num_workers < 0 or arguments.prefetch_factor < 1:
         parser.error("worker count must be nonnegative and prefetch factor positive")
+    if arguments.conditioning is None and arguments.conditioning_profile != "all11":
+        parser.error("--conditioning-profile requires --conditioning")
     return arguments
 
 

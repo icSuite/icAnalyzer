@@ -53,7 +53,10 @@ def empirical_regime_masks(
     bz_gsm = matrix[:, CONDITIONING_FEATURE_NAMES.index("bz_gsm")]
     tilt = matrix[:, CONDITIONING_FEATURE_NAMES.index("dipole_tilt")]
     clock = standard_imf_clock_angle(by_gsm, bz_gsm)
-    common = np.isfinite(matrix).all(axis=1) & (np.abs(tilt) <= maximum_absolute_tilt)
+    common = (
+        np.isfinite(by_gsm) & np.isfinite(bz_gsm) & np.isfinite(tilt)
+        & (np.abs(tilt) <= maximum_absolute_tilt)
+    )
 
     masks = {
         "bz_south": (
@@ -108,8 +111,8 @@ def empirical_regime_masks(
 
 #%% Exact training-row recovery
 
-def load_complete_training_conditions(cache_directory, conditioning_directory):
-    """Recover the finite condition rows used by the named CVAE train split."""
+def load_training_conditions(cache_directory, conditioning_directory):
+    """Recover all aligned condition rows for the named CVAE train split."""
 
     cache_directory = Path(cache_directory).expanduser().resolve()
     conditioning_directory = Path(conditioning_directory).expanduser().resolve()
@@ -126,12 +129,11 @@ def load_complete_training_conditions(cache_directory, conditioning_directory):
             conditioning_directory, dataset.frame_orbit, dataset.source_frames,
             dataset.frame_time, dataset.kp
         )
-        finite = np.all(np.isfinite(matrix), axis=1)
         result = {
-            "matrix": matrix[finite],
-            "orbit": dataset.frame_orbit[finite],
-            "source_frame": dataset.source_frames[finite],
-            "time": dataset.frame_time[finite],
+            "matrix": matrix,
+            "orbit": dataset.frame_orbit,
+            "source_frame": dataset.source_frames,
+            "time": dataset.frame_time,
         }
     finally:
         dataset.close()
@@ -144,6 +146,9 @@ def load_complete_training_conditions(cache_directory, conditioning_directory):
         "conditioning_manifest_sha256": condition_sha256,
         "conditioning_format": condition_manifest["format"],
         "split": "train",
-        "complete_frames": int(len(result["matrix"])),
+        "aligned_frames": int(len(result["matrix"])),
+        "complete_all11_frames": int(
+            np.all(np.isfinite(result["matrix"]), axis=1).sum()
+        ),
     }
     return result
