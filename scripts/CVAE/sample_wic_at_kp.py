@@ -29,6 +29,11 @@ from icanalyzer.cvae.conditioning import (
     conditioning_vector_from_record,
 )
 from icanalyzer.cvae.ensemble import ensemble_statistics, sample_decoded_ensemble
+from icanalyzer.cvae.regimes import (
+    REGIME_NAMES,
+    empirical_regime_masks,
+    load_complete_training_conditions,
+)
 
 
 #%% Fang configuration
@@ -209,27 +214,43 @@ def fang_conductance_from_wic(
     if batch_size < 1:
         raise ValueError("physics batch size must be positive")
 
+    kp = np.asarray(kp, dtype=np.float32)
+    scalar_kp = kp.ndim == 0
+    if scalar_kp:
+        sample_kp = np.full(len(wic_samples), kp, dtype=np.float32)
+    elif kp.shape == (len(wic_samples),):
+        sample_kp = kp
+    else:
+        raise ValueError("Kp must be a scalar or one value per WIC sample")
+    if not np.isfinite(sample_kp).all() or np.any((sample_kp < 0) | (sample_kp > 9)):
+        raise ValueError("sample Kp must be finite and lie within 0--9")
+    unique_kp, sample_kp_index = np.unique(sample_kp, return_inverse=True)
+    unique_shape = (len(unique_kp), *mlt.shape)
     unit_precipitation = precipitation_from_collapsed_zhang_paxton(
-        np.ones(mlt.shape), np.zeros(mlt.shape), kp, mlt
+        np.ones(unique_shape), np.zeros(unique_shape),
+        unique_kp[:, None, None], mlt[None]
     )
     energy = np.asarray(unit_precipitation["E0"], dtype=np.float64)
     energy_spread = np.asarray(unit_precipitation["dE0"], dtype=np.float64)
     flux_per_count = np.asarray(unit_precipitation["Fe"], dtype=np.float64)
     response_flag = np.asarray(unit_precipitation["E0_response_range_flag"], dtype=np.int8)
     reference = fang_2025_conductance(
-        energy, np.zeros(energy.shape), magnetic_field_microtesla,
+        energy, np.zeros(energy.shape), magnetic_field_microtesla[None],
         low_energy_policy=low_energy_policy
     )
-    conductance_support = model_support & np.asarray(reference["valid"], dtype=bool)
+    valid_by_kp = model_support[None] & np.asarray(reference["valid"], dtype=bool)
+    conductance_support = np.all(valid_by_kp, axis=0)
     if not conductance_support.any():
         raise ValueError("collapsed Zhang--Paxton/Fang has no valid cells on WIC support")
 
     conductance = np.zeros((len(wic_samples), 2, *mlt.shape), dtype=np.float32)
     for start in range(0, len(wic_samples), batch_size):
         stop = min(start + batch_size, len(wic_samples))
-        energy_flux = wic_samples[start:stop] * flux_per_count[None]
+        lookup = sample_kp_index[start:stop]
+        batch_energy = energy[lookup]
+        energy_flux = wic_samples[start:stop] * flux_per_count[lookup]
         propagated = fang_2025_conductance(
-            energy[None], energy_flux, magnetic_field_microtesla,
+            batch_energy, energy_flux, magnetic_field_microtesla,
             low_energy_policy=low_energy_policy
         )
         hall = np.asarray(propagated["H"], dtype=np.float32)
@@ -247,8 +268,18 @@ def fang_conductance_from_wic(
         "fang_within_model_domain": np.asarray(reference["within_model_domain"], dtype=bool),
         "fang_energy_clipped_low": np.asarray(reference["energy_clipped_low"], dtype=bool),
         "fang_evaluated_energy": np.asarray(reference["evaluated_energy"], dtype=np.float64),
-        "conductance_supported": conductance_support
+        "conductance_supported": conductance_support,
+        "unique_kp": unique_kp,
+        "sample_kp_index": sample_kp_index.astype(np.int16),
     }
+    if scalar_kp:
+        for name in (
+            "electron_mean_energy", "electron_energy_structural_spread",
+            "electron_energy_flux_per_wic_count", "electron_response_range_flag",
+            "fang_within_model_domain", "fang_energy_clipped_low",
+            "fang_evaluated_energy"
+        ):
+            diagnostics[name] = diagnostics[name][0]
     return conductance, diagnostics
 
 
@@ -278,6 +309,7 @@ def _named_selections(filename, model):
             ) if value < minimum or value > maximum
         ]
         selections.append({
+            "mode": "fixed_conditions",
             "label": label, "directory": safe_label,
             "conditions": {
                 name: float(record[name]) for name in (
@@ -289,6 +321,75 @@ def _named_selections(filename, model):
             "vector": vector, "outside_training_columns": outside,
         })
     return selections
+
+
+def _regime_selections(paths, names, model, artifact, arguments):
+    """Load actual finite training rows and form physical IMF regime pools."""
+
+    if model.conditioning["feature_names"] != list(CONDITIONING_FEATURE_NAMES):
+        raise ValueError("model and current named-conditioning feature contracts differ")
+    rows = load_complete_training_conditions(paths[0], paths[1])
+    evidence = rows["provenance"]
+    expected_cache = artifact["data_provenance"].get("cache_manifest_sha256")
+    expected_conditioning = (
+        artifact["data_provenance"].get("conditioning") or {}
+    ).get("manifest_sha256")
+    if evidence["cache_manifest_sha256"] != expected_cache:
+        raise ValueError("regime cache differs from the cache used to train this model")
+    if evidence["conditioning_manifest_sha256"] != expected_conditioning:
+        raise ValueError("regime conditioning table differs from model training")
+
+    masks, definitions, standard_clock = empirical_regime_masks(
+        rows["matrix"], field_minimum=arguments.regime_field_minimum,
+        field_maximum=arguments.regime_field_maximum,
+        clock_half_width=arguments.regime_clock_half_width,
+        maximum_absolute_tilt=arguments.regime_tilt_limit
+    )
+    selections = []
+    for name in names:
+        selected = masks[name]
+        count = int(selected.sum())
+        if count < 2:
+            raise ValueError(f"{name} has fewer than two matching training rows")
+        selections.append({
+            "mode": "empirical_regime", "label": name.replace("_", " ").title(),
+            "directory": name, "conditions": None,
+            "vector": rows["matrix"][selected],
+            "pool_standard_clock": standard_clock[selected].astype(np.float32),
+            "pool_orbit": rows["orbit"][selected],
+            "pool_source_frame": rows["source_frame"][selected],
+            "pool_time": rows["time"][selected],
+            "pool_size": count, "definition": definitions[name],
+            "pool_provenance": evidence, "outside_training_columns": [],
+        })
+    return selections
+
+
+def _condition_summary(matrix, standard_clock):
+    """Summarize the empirical condition rows used for one ensemble."""
+
+    matrix = np.asarray(matrix, dtype=float)
+    values = {
+        name: matrix[:, CONDITIONING_FEATURE_NAMES.index(name)]
+        for name in (
+            "sml", "smr", "by_gsm", "bz_gsm", "vx_gse",
+            "dynamic_pressure", "newell", "kp", "dipole_tilt"
+        )
+    }
+    values["standard_clock_angle"] = np.asarray(standard_clock, dtype=float)
+    day_phase = np.mod(np.arctan2(
+        matrix[:, CONDITIONING_FEATURE_NAMES.index("day_of_year_sin")],
+        matrix[:, CONDITIONING_FEATURE_NAMES.index("day_of_year_cos")]
+    ), 2 * np.pi)
+    values["day_of_year"] = 1 + day_phase * 365.25 / (2 * np.pi)
+    quantiles = (0.0, 0.1, 0.5, 0.9, 1.0)
+    return {
+        name: dict(zip(
+            ("minimum", "q10", "median", "q90", "maximum"),
+            np.quantile(column, quantiles).tolist()
+        ))
+        for name, column in values.items()
+    }
 
 
 def run(arguments):
@@ -311,9 +412,15 @@ def run(arguments):
     if transform.channel_count != 1:
         raise ValueError("requires a one-channel WIC transform")
     if model.conditioning is not None:
-        if arguments.conditions is None or arguments.kp is not None:
-            raise ValueError("named-conditioned models require --conditions JSON")
-        requested = _named_selections(arguments.conditions, model)
+        if arguments.regimes is not None:
+            names = REGIME_NAMES if arguments.regime is None else arguments.regime
+            requested = _regime_selections(
+                arguments.regimes, names, model, artifact, arguments
+            )
+        elif arguments.conditions is not None:
+            requested = _named_selections(arguments.conditions, model)
+        else:
+            raise ValueError("named-conditioned models require --regimes or --conditions")
     elif model.kp_conditioning is not None:
         if arguments.kp is None or arguments.conditions is not None:
             raise ValueError("Kp-conditioned models require --kp")
@@ -327,6 +434,7 @@ def run(arguments):
         if len(np.unique(kp_values)) != len(kp_values):
             raise ValueError("requested Kp values must be distinct")
         requested = [{
+            "mode": "fixed_kp",
             "label": f"Kp {kp:g}", "directory": f"kp_{index:02d}_{kp:g}",
             "conditions": {"kp": float(kp)}, "vector": None,
             "outside_training_columns": (
@@ -351,7 +459,31 @@ def run(arguments):
 
     selections = []
     for selection in requested:
-        kp = selection["conditions"]["kp"]
+        if selection["mode"] == "empirical_regime":
+            condition_seed = arguments.seed + 97
+            condition_rng = np.random.default_rng(condition_seed)
+            pool_indices = condition_rng.integers(
+                0, selection["pool_size"], size=arguments.draws
+            )
+            condition_values = selection["vector"][pool_indices]
+            standard_clock = selection["pool_standard_clock"][pool_indices]
+            sample_orbit = selection["pool_orbit"][pool_indices]
+            sample_source_frame = selection["pool_source_frame"][pool_indices]
+            sample_time = selection["pool_time"][pool_indices]
+            sample_kp = condition_values[
+                :, CONDITIONING_FEATURE_NAMES.index("kp")
+            ]
+            kp = sample_kp
+        else:
+            condition_seed = None
+            pool_indices = np.asarray([], dtype=np.int64)
+            condition_values = selection["vector"]
+            standard_clock = np.asarray([], dtype=np.float32)
+            sample_orbit = np.asarray([], dtype=np.int32)
+            sample_source_frame = np.asarray([], dtype=np.int32)
+            sample_time = np.asarray([], dtype="datetime64[us]")
+            kp = selection["conditions"]["kp"]
+            sample_kp = np.full(arguments.draws, kp, dtype=np.float32)
         within_range = not selection["outside_training_columns"]
         if not within_range:
             warnings.warn(
@@ -366,7 +498,7 @@ def run(arguments):
             flush=True
         )
         condition_arguments = (
-            {"conditioning": selection["vector"]}
+            {"conditioning": condition_values}
             if model.conditioning is not None else {"kp": kp}
         )
         samples, latent = sample_decoded_ensemble(
@@ -390,12 +522,12 @@ def run(arguments):
         np.savez_compressed(
             destination / "ensemble_products.npz", latent_samples=latent,
             wic_mean=wic_statistics["mean"][0], wic_anomaly_factor=wic_statistics["anomaly_factor"],
-            wic_supported=support, wic_sample_kp=np.full(arguments.draws, kp),
+            wic_supported=support, wic_sample_kp=sample_kp,
             wic_q10=wic_quantiles[0], wic_q50=wic_quantiles[1], wic_q90=wic_quantiles[2],
             conductance_mean=conductance_statistics["mean"],
             conductance_anomaly_factor=conductance_statistics["anomaly_factor"],
             conductance_supported=physics["conductance_supported"],
-            conductance_sample_kp=np.full(arguments.draws, kp),
+            conductance_sample_kp=sample_kp,
             conductance_q10=conductance_quantiles[0],
             conductance_q50=conductance_quantiles[1],
             conductance_q90=conductance_quantiles[2],
@@ -406,23 +538,55 @@ def run(arguments):
             fang_within_model_domain=physics["fang_within_model_domain"],
             fang_energy_clipped_low=physics["fang_energy_clipped_low"],
             fang_evaluated_energy=physics["fang_evaluated_energy"],
+            physics_unique_kp=physics["unique_kp"],
+            physics_sample_kp_index=physics["sample_kp_index"],
             fang_modified_apex_longitude=fang_geometry["modified_apex_longitude"],
             fang_geographic_latitude_at_130km=fang_geometry["geographic_latitude"],
             fang_geographic_longitude_at_130km=fang_geometry["geographic_longitude"],
             fang_apex2geo_error_degrees=fang_geometry["apex2geo_error_degrees"],
             fang_magnetic_field_150km_microtesla=fang_geometry["magnetic_field_microtesla"],
             conditioning_feature_names=np.asarray(
-                CONDITIONING_FEATURE_NAMES if selection["vector"] is not None else (),
+                CONDITIONING_FEATURE_NAMES if condition_values is not None else (),
                 dtype="U32"
             ),
             conditioning_values=np.asarray(
-                selection["vector"] if selection["vector"] is not None else (),
+                condition_values if condition_values is not None else (),
                 dtype=np.float32
             ),
+            conditioning_standard_clock_angle=standard_clock,
+            conditioning_pool_index=pool_indices,
+            conditioning_source_orbit=sample_orbit,
+            conditioning_source_frame=sample_source_frame,
+            conditioning_source_time=sample_time,
             mlat=mlat, mlt=mlt
         )
+        if selection["mode"] == "empirical_regime":
+            interpretation = (
+                "Empirical-regime WIC prior propagated member-by-member to Fang "
+                "electron conductance. Unrestricted nuisance conditions are "
+                "marginalized over actual finite training rows and each member's "
+                "Kp is used in the physical conversion."
+            )
+        else:
+            interpretation = (
+                "Exact-condition WIC prior propagated member-by-member to Fang "
+                "electron conductance."
+            )
+        interpretation += (
+            " The fixed reference epoch approximates frame-specific Product-3 "
+            "IGRF because this climatological artifact has no observation time. "
+            "No proton/solar-EUV contribution, WIC measurement-noise propagation, "
+            "sampled Zhang--Paxton structural spread or calibrated uncertainty claim."
+        )
         metadata = {
-            "Kp": kp, "within_training_range": bool(within_range), "draws": arguments.draws,
+            "label": selection["label"],
+            "Kp": None if selection["mode"] == "empirical_regime" else kp,
+            "sample_kp_summary": {
+                "minimum": float(np.min(sample_kp)),
+                "median": float(np.median(sample_kp)),
+                "maximum": float(np.max(sample_kp)),
+            },
+            "within_training_range": bool(within_range), "draws": arguments.draws,
             "seed": arguments.seed, "device": device, "model_sha256": model_sha,
             "model_file": str(artifact_path),
             "kp_conditioning": (
@@ -433,6 +597,19 @@ def run(arguments):
                 None if model.conditioning is None else dict(model.conditioning)
             ),
             "requested_conditions": selection["conditions"],
+            "conditioning_regime": selection.get("definition"),
+            "conditioning_pool_frames": selection.get("pool_size"),
+            "conditioning_pool_provenance": selection.get("pool_provenance"),
+            "conditioning_sampling": (
+                None if selection["mode"] != "empirical_regime" else {
+                    "method": "uniform empirical training-row resampling with replacement",
+                    "seed": condition_seed,
+                    "sample_specific_kp_used_for_conductance": True,
+                    "condition_summary": _condition_summary(
+                        condition_values, standard_clock
+                    ),
+                }
+            ),
             "outside_training_columns": selection["outside_training_columns"],
             "grid_id": provenance["grid_id"], "supported_cells": int(support.sum()),
             "conductance_supported_cells": int(physics["conductance_supported"].sum()),
@@ -457,7 +634,7 @@ def run(arguments):
             "fang_magnetic_field_uncertainty_method": "not modelled; magnetic_field_std=0",
             "conductance_field_order": ["Hall", "Pedersen"],
             "directory": destination.name,
-            "interpretation": "Conditional WIC prior propagated member-by-member to Fang electron conductance. Its fixed reference epoch approximates frame-specific Product-3 IGRF because this climatological artifact has no observation time. No proton/solar-EUV contribution, WIC measurement-noise propagation, sampled Zhang--Paxton structural spread or calibrated uncertainty claim."
+            "interpretation": interpretation
         }
         (destination / "sampling.json").write_text(json.dumps(metadata, indent=2) + "\n")
         if not arguments.no_plots:
@@ -478,7 +655,7 @@ def run(arguments):
         raise RuntimeError("source WIC model changed during sampling")
     summary = {
         "selections": selections,
-        "comparison_policy": "identical latent seed for every requested condition; each WIC draw is propagated through collapsed Zhang--Paxton and Fang before conductance statistics"
+        "comparison_policy": "identical latent seed for every requested condition or regime; empirical regimes resample actual training condition rows and each WIC draw is propagated with its own Kp through collapsed Zhang--Paxton and Fang before conductance statistics"
     }
     (output / "sampling_summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     return selections
@@ -491,8 +668,17 @@ def parse_arguments(argv=None):
     selection.add_argument("--kp", type=float, nargs="+")
     selection.add_argument(
         "--conditions", type=Path,
-        help="JSON list of named 11-feature condition selections"
+        help="legacy JSON list of exact named 11-feature condition selections"
     )
+    selection.add_argument(
+        "--regimes", type=Path, nargs=2, metavar=("CACHE", "CONDITIONING"),
+        help="sample empirical IMF regimes from the model's cache and conditioning table"
+    )
+    parser.add_argument("--regime", choices=REGIME_NAMES, nargs="+")
+    parser.add_argument("--regime-field-minimum", type=float, default=2.0)
+    parser.add_argument("--regime-field-maximum", type=float, default=10.0)
+    parser.add_argument("--regime-clock-half-width", type=float, default=30.0)
+    parser.add_argument("--regime-tilt-limit", type=float, default=5.0)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--draws", type=int, default=50000)
     parser.add_argument("--batch-size", type=int, default=256)
@@ -514,7 +700,10 @@ def parse_arguments(argv=None):
         "--fang-low-energy-policy", choices=("reject", "clip"), default="clip",
         help="apply Product-3's operational 1-keV floor (default) or strictly reject sub-1-keV energy"
     )
-    return parser.parse_args(argv)
+    arguments = parser.parse_args(argv)
+    if arguments.regime is not None and arguments.regimes is None:
+        parser.error("--regime requires --regimes CACHE CONDITIONING")
+    return arguments
 
 
 if __name__ == "__main__":

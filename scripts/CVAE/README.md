@@ -40,11 +40,9 @@ Hall/Pedersen artifacts cannot silently inherit the old WIC/SI12 labels.
   disk-backed cache.
 - `train_wic_cvae.py`: train the one-channel WIC CVAE with historical scalar
   Kp conditioning or the selected 11-feature condition vector.
-- `select_conditioning_cases.py`: select representative complete condition
-  vectors from actual cache-aligned training frames for ensemble sampling.
-- `sample_wic_at_kp.py`: draw WIC at selected Kp or named 11-feature conditions
-  and propagate each member through collapsed Zhang--Paxton and Fang electron
-  conductance.
+- `sample_wic_at_kp.py`: draw WIC at selected Kp, exact named conditions or
+  empirical IMF regimes and propagate each member through collapsed
+  Zhang--Paxton and Fang electron conductance.
 - `plot_wic_at_kp.py`: regenerate polar WIC and conductance summaries from
   saved Kp or named-condition ensembles without resampling.
 
@@ -57,7 +55,6 @@ PYTHONPATH=. python scripts/CVAE/sample_conductance_at_kp.py --help
 
 PYTHONPATH=. python scripts/CVAE/prepare_wic_cvae_cache.py --help
 PYTHONPATH=. python scripts/CVAE/train_wic_cvae.py --help
-PYTHONPATH=. python scripts/CVAE/select_conditioning_cases.py --help
 PYTHONPATH=. python scripts/CVAE/sample_wic_at_kp.py --help
 PYTHONPATH=. python scripts/CVAE/plot_wic_at_kp.py --help
 ```
@@ -116,8 +113,11 @@ PYTHONPATH=. python scripts/CVAE/train_wic_cvae.py \
   --num-workers 2 --device cuda
 ```
 
-Sampling accepts a JSON list whose records contain exactly the 11 conceptual
-conditions. DOY and clock angle are converted to cyclic pairs internally:
+Exact-condition sampling remains available for diagnostics through a JSON list
+containing all 11 conceptual conditions. It should not be used to represent a
+broad IMF regime because every decoded member receives that same vector. Its
+legacy `clock_angle` field uses the SuperMAG column's trained convention, not
+the standard 0-degree-north/180-degree-south convention used below.
 
 ```json
 [
@@ -138,24 +138,23 @@ conditions. DOY and clock angle are converted to cyclic pairs internally:
 ]
 ```
 
-Rather than inventing combinations of correlated parameters, generate the
-JSON from complete, actually observed training rows. The default cases are
-typical, quiet, active-substorm, storm, By negative/positive and Bz
-south/north. Within each explicitly thresholded regime, the chosen row is
-nearest the regime's multivariate median:
-
-```bash
-PYTHONPATH=. python scripts/CVAE/select_conditioning_cases.py \
-  ~/IMAGE_CVAE/training_data/automatic_wic_cvae_model1_model2_fuvpy_bs2d_valid5_20261106 \
-  ~/IMAGE_CVAE/conditioning/supermag_all \
-  --output ~/IMAGE_CVAE/conditioning/sample_conditions.json
-```
+The scientific IMF comparison instead samples actual complete training rows
+with replacement. Each decoded member receives its own condition vector and
+its own Kp is used by Zhang--Paxton/Fang. The standard clock angle is derived
+from By/Bz with 0 degrees north and 180 degrees south; the differently defined
+SuperMAG clock-angle column remains only in the vector expected by the already
+trained model. Defaults are 2--10 nT in the selected IMF component, plus/minus
+30 degrees around the corresponding standard clock direction and absolute
+dipole tilt no larger than 5 degrees. SML, SMR, Vx, pressure, Newell, Kp and
+DOY are otherwise unrestricted and are therefore empirically marginalized.
 
 ```bash
 PYTHONPATH=. python scripts/CVAE/sample_wic_at_kp.py \
   ~/IMAGE_CVAE/cvae_runs/wic_conditions11_model1_model2_20261107 \
-  --conditions ~/IMAGE_CVAE/conditioning/sample_conditions.json \
-  --output ~/IMAGE_CVAE/cvae_runs/wic_conditions11_model1_model2_20261107/condition_samples \
+  --regimes \
+    ~/IMAGE_CVAE/training_data/automatic_wic_cvae_model1_model2_fuvpy_bs2d_valid5_20261106 \
+    ~/IMAGE_CVAE/conditioning/supermag_all \
+  --output ~/IMAGE_CVAE/cvae_runs/wic_conditions11_model1_model2_20261107/imf_regime_samples \
   --draws 50000 --batch-size 500 --device cuda
 ```
 

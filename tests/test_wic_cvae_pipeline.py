@@ -14,6 +14,7 @@ from icanalyzer.cvae.artifacts import (
 from icanalyzer.cvae.data import ChannelTransform, split_orbit_files
 from icanalyzer.cvae.ensemble import sample_decoded_ensemble
 from icanalyzer.cvae.model import SplineConditionalVAE
+from icanalyzer.cvae.regimes import empirical_regime_masks, standard_imf_clock_angle
 from icanalyzer.cvae.cache import AutomaticFieldDataset
 from icanalyzer.cvae.conditioning import (
     CONDITIONING_FEATURE_NAMES,
@@ -27,10 +28,6 @@ from icanalyzer.cvae.conditioning import (
     read_supermag_file,
 )
 from scripts.CVAE.prepare_wic_cvae_cache import WIC_CACHE_FORMAT, load_annotated_wic, load_masked_wic
-from scripts.CVAE.select_conditioning_cases import (
-    condition_record,
-    representative_indices,
-)
 
 
 def test_supermag_reader_alignment_and_core_coverage(tmp_path):
@@ -202,40 +199,25 @@ def test_named_conditioning_exact_join_dataset_and_model(tmp_path):
     assert requested[-2] == 1
 
 
-def test_condition_case_selection_uses_distinct_observed_rows():
-    random = np.random.default_rng(42)
-    count = 2000
-    day_phase = random.uniform(0, 2 * np.pi, count)
-    clock_phase = random.uniform(0, 2 * np.pi, count)
-    matrix = np.column_stack((
-        -random.lognormal(5.2, .7, count),
-        random.normal(-15, 25, count),
-        random.normal(0, 5, count),
-        random.normal(0, 5, count),
-        random.normal(-450, 70, count),
-        random.lognormal(.5, .5, count),
-        random.lognormal(8, .7, count),
-        random.choice(np.arange(0, 7.33, .33), count),
-        np.sin(day_phase), np.cos(day_phase),
-        random.uniform(-30, 30, count),
-        np.sin(clock_phase), np.cos(clock_phase),
-    )).astype(np.float32)
+def test_empirical_imf_regimes_use_standard_clock_and_leave_nuisance_free():
+    by = np.asarray([0, 0, 5, -5, 0, 0, 5, -5], dtype=np.float32)
+    bz = np.asarray([-5, 5, 0, 0, -1, 1, 0, 0], dtype=np.float32)
+    matrix = np.zeros((len(by), len(CONDITIONING_FEATURE_NAMES)), dtype=np.float32)
+    matrix[:, CONDITIONING_FEATURE_NAMES.index("by_gsm")] = by
+    matrix[:, CONDITIONING_FEATURE_NAMES.index("bz_gsm")] = bz
+    matrix[:, CONDITIONING_FEATURE_NAMES.index("vx_gse")] = np.arange(len(by)) - 500
+    matrix[:, CONDITIONING_FEATURE_NAMES.index("dipole_tilt")] = [0, 0, 0, 0, 0, 0, 8, 0]
+    matrix[:, CONDITIONING_FEATURE_NAMES.index("day_of_year_cos")] = 1
+    matrix[:, CONDITIONING_FEATURE_NAMES.index("clock_angle_cos")] = 1
 
-    selected = representative_indices(matrix)
-    assert [label for label, _, _ in selected] == [
-        "typical", "quiet", "active_substorm", "storm",
-        "by_negative", "by_positive", "bz_south", "bz_north",
-    ]
-    assert len({index for _, index, _ in selected}) == len(selected)
-    for label, index, candidate_count in selected:
-        record = condition_record(
-            label, matrix[index], 85, index,
-            np.datetime64("2001-04-01T06:00:00"), candidate_count
-        )
-        round_trip = conditioning_vector_from_record(record)
-        np.testing.assert_allclose(round_trip, matrix[index], atol=2e-6)
-        assert record["source_orbit"] == 85
-        assert record["regime_candidate_frames"] == candidate_count
+    masks, definitions, clock = empirical_regime_masks(matrix)
+    np.testing.assert_allclose(clock[:4], [180, 0, 90, 270])
+    np.testing.assert_array_equal(masks["bz_south"], [1, 0, 0, 0, 0, 0, 0, 0])
+    np.testing.assert_array_equal(masks["bz_north"], [0, 1, 0, 0, 0, 0, 0, 0])
+    np.testing.assert_array_equal(masks["by_positive"], [0, 0, 1, 0, 0, 0, 0, 0])
+    np.testing.assert_array_equal(masks["by_negative"], [0, 0, 0, 1, 0, 0, 0, 1])
+    assert definitions["bz_south"]["other_features"].startswith("unrestricted")
+    np.testing.assert_allclose(standard_imf_clock_angle(0, -5), 180)
 
 
 def test_multi_sample_forward_encodes_once_and_decodes_parallel_draws():
@@ -479,6 +461,78 @@ def test_named_conditioning_wic_trainer_artifact(tmp_path, monkeypatch):
     )
     assert (output / "conditioning_manifest.json").is_file()
 
+    import scripts.CVAE.sample_wic_at_kp as sampler
+    regime_arguments = SimpleNamespace(
+        regime_field_minimum=.5, regime_field_maximum=3.0,
+        regime_clock_half_width=60.0, regime_tilt_limit=40.0
+    )
+    regimes = sampler._regime_selections(
+        (cache, conditioning), ["bz_south"], loaded, artifact,
+        regime_arguments
+    )
+    assert len(regimes) == 1
+    assert regimes[0]["mode"] == "empirical_regime"
+    assert regimes[0]["pool_size"] == 2
+    assert regimes[0]["vector"].shape == (2, len(CONDITIONING_FEATURE_NAMES))
+
+    def regime_precipitation(wic, dwic, kp, mlt):
+        wic, kp, mlt = np.broadcast_arrays(wic, kp, mlt)
+        return {
+            "E0": np.full(wic.shape, 2.0),
+            "dE0": np.full(wic.shape, .25),
+            "Fe": wic / 100, "dFe": np.zeros(wic.shape),
+            "varE0Fe": np.zeros(wic.shape),
+            "E0_response_range_flag": np.zeros(wic.shape, dtype=np.int8),
+        }
+
+    def regime_fang(energy, flux, field, low_energy_policy="clip"):
+        energy, flux, field = np.broadcast_arrays(energy, flux, field)
+        valid = np.isfinite(energy) & np.isfinite(flux)
+        return {
+            "H": np.sqrt(flux), "P": np.sqrt(flux), "valid": valid,
+            "within_model_domain": valid,
+            "energy_clipped_low": np.zeros(valid.shape, dtype=bool),
+            "evaluated_energy": energy,
+        }
+
+    monkeypatch.setattr(sampler, "precipitation_from_collapsed_zhang_paxton", regime_precipitation)
+    monkeypatch.setattr(sampler, "fang_2025_conductance", regime_fang)
+    monkeypatch.setattr(sampler, "fang_magnetic_field_from_apex_grid", lambda mlat, mlt, support, epoch: {
+        "modified_apex_longitude": np.zeros_like(mlat),
+        "geographic_latitude": np.zeros_like(mlat),
+        "geographic_longitude": np.zeros_like(mlat),
+        "apex2geo_error_degrees": np.zeros_like(mlat),
+        "magnetic_field_microtesla": np.full_like(mlat, 48.0),
+        "epoch": "2001-01-01T00:00:00", "reference_height_km": 130.0,
+        "field_height_km": 150.0, "magnetic_field_model": "test",
+        "magnetic_field_package_version": "test",
+        "magnetic_field_coefficients_sha256": "0" * 64,
+        "coordinate_mapping": "test",
+    })
+    regime_output = tmp_path / "regime_samples"
+    regime_cli = sampler.parse_arguments([
+        str(output), "--regimes", str(cache), str(conditioning),
+        "--regime", "bz_south", "--regime-field-minimum", ".5",
+        "--regime-field-maximum", "3", "--regime-clock-half-width", "60",
+        "--regime-tilt-limit", "40", "--output", str(regime_output),
+        "--draws", "4", "--batch-size", "2", "--device", "cpu", "--no-plots"
+    ])
+    sampled = sampler.run(regime_cli)
+    assert sampled[0]["conditioning_regime"]["bz_gsm_nT"] == [-3.0, -0.5]
+    assert sampled[0]["conditioning_pool_frames"] == 2
+    assert sampled[0]["conditioning_sampling"]["sample_specific_kp_used_for_conductance"]
+    with np.load(regime_output / "bz_south/ensemble_products.npz") as saved:
+        assert saved["conditioning_values"].shape == (4, len(CONDITIONING_FEATURE_NAMES))
+        assert saved["conductance_sample_kp"].shape == (4,)
+        assert saved["physics_unique_kp"].ndim == 1
+
+    import scripts.CVAE.plot_wic_at_kp as plotter
+    plotted = []
+    monkeypatch.setattr(plotter, "plot_wic", lambda *args: plotted.append(args[5]))
+    monkeypatch.setattr(plotter, "plot_conductance", lambda *args: plotted.append(args[5]))
+    assert plotter.run(plotter.parse_arguments([str(regime_output)])) == ["bz_south"]
+    assert plotted == ["Bz South", "Bz South"]
+
 
 def test_one_field_disk_cache_and_training_artifact(tmp_path, monkeypatch):
     cache = make_wic_cache(tmp_path / "cache")
@@ -584,6 +638,16 @@ def test_one_field_disk_cache_and_training_artifact(tmp_path, monkeypatch):
     assert sampling["fang_low_energy_policy"] == "clip"
     assert sampling["fang_magnetic_field_reference_epoch"] == "2001-01-01T00:00:00"
     assert sampling["fang_magnetic_field_coordinate_mapping"] == "test mapping"
+
+    variable_kp_conductance, variable_kp_physics = sampler.fang_conductance_from_wic(
+        np.ones((3, 46, 46), dtype=np.float32), np.asarray([1.0, 2.0, 3.0]),
+        np.zeros((46, 46)), np.ones((46, 46), dtype=bool),
+        np.full((46, 46), 48.0), "clip", 2
+    )
+    assert variable_kp_conductance.shape == (3, 2, 46, 46)
+    np.testing.assert_array_equal(variable_kp_physics["unique_kp"], [1, 2, 3])
+    np.testing.assert_array_equal(variable_kp_physics["sample_kp_index"], [0, 1, 2])
+    assert variable_kp_physics["electron_mean_energy"].shape == (3, 46, 46)
 
     import scripts.CVAE.plot_wic_at_kp as plotter
 

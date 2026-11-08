@@ -32,6 +32,9 @@ def run(arguments):
     plotted = []
     for selection in selections:
         destination = root / selection["directory"]
+        title = selection.get("label")
+        if title is None:
+            title = f"Kp {selection['Kp']:g}"
         product_path = destination / "ensemble_products.npz"
         if not product_path.is_file():
             raise FileNotFoundError(f"missing saved ensemble product: {product_path}")
@@ -48,13 +51,12 @@ def run(arguments):
             plot_wic(
                 saved["wic_mean"], wic_quantiles,
                 saved["wic_supported"].astype(bool), mlat, mlt,
-                selection.get("label", f"Kp {selection['Kp']:g}"),
-                destination, arguments.wic_vmax
+                title, destination, arguments.wic_vmax
             )
             plot_conductance(
                 saved["conductance_mean"], conductance_quantiles,
                 saved["conductance_supported"].astype(bool), mlat, mlt,
-                selection.get("label", f"Kp {selection['Kp']:g}"), destination,
+                title, destination,
                 (arguments.hall_vmax, arguments.pedersen_vmax)
             )
         plotted.append(destination.name)
