@@ -49,12 +49,13 @@ uncertainties at `https://doi.org/10.5281/zenodo.15579301`.
   persistence, geometry, native loading and downstream-data adapters.
 - `scripts/automatic_masking/`: the adopted Model1 CNN and Model2 U-Net data
   preparation, training and application workflows (nine implementation modules).
-- `scripts/CVAE/`: the supported Hall/Pedersen and WIC Kp-conditional CVAE
+- `scripts/CVAE/`: the supported Hall/Pedersen and WIC conditional CVAE
   cache preparation, training, sampling and WIC-result plotting, plus
   SuperMAG-to-IMAGE conditioning preparation and time-blocked predictive-
-  importance analysis. The WIC model also supports the selected 11-feature
-  condition vector and empirical IMF-regime sampling over actual training
-  rows. WIC preparation accepts manual annotations or automatic masks;
+  importance analysis. The WIC model supports scalar Kp, the full 11-feature
+  candidate vector and the selected four-variable SML/IMF By/IMF Bz/dipole-
+  tilt profile, plus empirical IMF-regime sampling over actual training rows.
+  WIC preparation accepts manual annotations or automatic masks;
   Hall/Pedersen preparation is `prepare_cvae_hp_cache.py`.
 - `icanalyzer/cvae/`: shared field-agnostic cache, model, loss, training,
   artifact and ensemble implementation for those supported CVAEs.

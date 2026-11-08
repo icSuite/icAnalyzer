@@ -1,8 +1,31 @@
 # Current State
 
-Last reviewed: 2026-11-08 (empirical IMF-regime sampling correction)
-Repository snapshot: `vae/wic-si12` at `e91e835`; `main` remains at `7c71591`
+Last reviewed: 2026-11-08 (four-variable WIC conditioning profile)
+Repository snapshot: `vae/wic-si12` at `c3a927e`; `main` remains at `7c71591`
 Worktree: user annotation and generated-output changes preserved
+
+## Four-variable WIC conditioning profile ready (2026-11-08)
+
+The selected reduced experiment conditions the WIC CVAE on SML, IMF By, IMF
+Bz and centered-dipole tilt. `train_wic_cvae.py --conditioning-profile
+hybrid4` reuses the existing WIC image cache and prepared SuperMAG table; it
+does not require cache regeneration. Only completeness of those four inputs is
+required during training, so missing unused solar-wind quantities no longer
+discard frames. Existing scalar-Kp and full-11 profiles remain compatible.
+
+Artifacts record the profile and exact four-column contract. Exact-condition
+sampling accepts the four model inputs plus Kp for Zhang--Paxton/Fang.
+Empirical IMF-regime sampling gives the decoder only the four trained inputs,
+while retaining the full aligned row for provenance and using each sampled
+row's Kp in the physical conversion. Rows are filtered for the model inputs
+and Kp rather than for all 11 candidate variables.
+
+Sixty-six focused regression checks pass. A real one-epoch CPU smoke on the
+manual cache retained 7,737/1,633/1,348 train/validation/test frames, compared
+with 5,761/1,291/997 in the earlier full-11 smoke. A four-member empirical
+Bz-south smoke loaded the saved artifact and completed the real collapsed
+Zhang--Paxton/Fang path. Next run a short CUDA smoke and then the 500-epoch
+automatic-cache `hybrid4` model on Dynamit in a fresh run directory.
 
 ## SuperMAG conditioning preparation and importance benchmark ready (2026-11-06)
 

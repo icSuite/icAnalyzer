@@ -1,8 +1,30 @@
 # Handoff - Latest
 
 Last updated: 2026-11-08
-Last reviewed: 2026-11-08 (empirical IMF-regime sampling correction)
-Repository snapshot: `vae/wic-si12` at `e91e835` with user annotation and generated-output changes preserved; `main` remains at `7c71591`
+Last reviewed: 2026-11-08 (four-variable WIC conditioning profile)
+Repository snapshot: `vae/wic-si12` at `c3a927e` with user annotation and generated-output changes preserved; `main` remains at `7c71591`
+
+## Four-variable WIC CVAE ready to run (2026-11-08)
+
+The reduced model selected by the user is SML + IMF By + IMF Bz + centered-
+dipole tilt. Commit `c3a927e` adds this as `train_wic_cvae.py
+--conditioning-profile hybrid4` without duplicating the pipeline or changing
+the existing cache format. Reuse the completed automatic WIC cache and
+`supermag_all`; choose a new output directory. Only those four model inputs
+must be finite, which recovers frames dropped from the all-11 model because an
+unused field was missing.
+
+The saved artifact records the four inputs and profile. Both fixed-condition
+and empirical-regime sampling support it. The latter retains full condition
+rows for provenance and per-member Kp propagation, but the decoder receives
+only its trained four-column vector. Sixty-six focused tests pass. A real
+manual-cache one-epoch smoke retained 7,737/1,633/1,348 frames and a real
+four-member regime smoke completed Zhang--Paxton/Fang. Next run a fresh short
+CUDA smoke on Dynamit, followed by the 500-epoch automatic-cache model if the
+throughput and frame counts are sensible. The full-11 and scalar-Kp paths are
+unchanged.
+
+Portfolio impact: Central update needed: No.
 
 ## SuperMAG conditioning-data and importance stages implemented (2026-11-06)
 
