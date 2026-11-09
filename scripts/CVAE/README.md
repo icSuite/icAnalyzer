@@ -157,25 +157,33 @@ the standard 0-degree-north/180-degree-south convention used below.
 ]
 ```
 
-The scientific IMF comparison instead samples actual complete training rows
-with replacement. Each decoded member receives its own condition vector and
-its own Kp is used by Zhang--Paxton/Fang. The standard clock angle is derived
-from By/Bz with 0 degrees north and 180 degrees south; the differently defined
-SuperMAG clock-angle column remains only in the vector expected by the already
-trained model. Defaults are 2--10 nT in the selected IMF component, plus/minus
-30 degrees around the corresponding standard clock direction and absolute
-dipole tilt no larger than 5 degrees. SML, SMR, Vx, pressure, Newell, Kp and
-DOY are otherwise unrestricted and are therefore empirically marginalized.
+The controlled hybrid4 comparison does not resample empirical condition rows.
+It creates 12 designed groups from four IMF orientations and three SML bands:
+low/quiet-like `[-100, 0)` nT, moderate/normal `[-300, -100)` nT and
+strong/disturbed `[-1000, -300)` nT. SML and the selected IMF component are
+sampled independently and uniformly. The selected IMF component spans 2--10
+nT, standard clock angle is uniform within 30 degrees of the requested
+direction, dipole tilt is fixed at zero and Kp is fixed at 3 only for the
+collapsed Zhang--Paxton/Fang conversion. Identical latent draws and uniform
+ranks are used across all groups to reduce Monte Carlo noise in comparisons.
 
 ```bash
+CVAE_RUN=~/IMAGE_CVAE/cvae_runs/wic_hybrid4_model1_model2_b264_beta0048_20261108
+SAMPLES="$CVAE_RUN/controlled_imf_sml_samples"
+
 PYTHONPATH=. python scripts/CVAE/sample_wic_at_kp.py \
-  ~/IMAGE_CVAE/cvae_runs/wic_conditions11_model1_model2_20261107 \
-  --regimes \
-    ~/IMAGE_CVAE/training_data/automatic_wic_cvae_model1_model2_fuvpy_bs2d_valid5_20261106 \
-    ~/IMAGE_CVAE/conditioning/supermag_all \
-  --output ~/IMAGE_CVAE/cvae_runs/wic_conditions11_model1_model2_20261107/imf_regime_samples \
-  --draws 50000 --batch-size 500 --device cuda
+  "$CVAE_RUN" \
+  --controlled-regimes \
+  --output "$SAMPLES" \
+  --draws 50000 --batch-size 500 --device cuda --no-plots
+
+PYTHONPATH=. python scripts/CVAE/plot_wic_at_kp.py "$SAMPLES"
 ```
+
+The older `--regimes CACHE CONDITIONING` mode remains available as an
+empirical-distribution diagnostic. It is not the controlled climatological
+comparison because its nuisance conditions and Kp inherit their observed joint
+distribution.
 
 For a manual-mask WIC cache, use a fresh output directory:
 

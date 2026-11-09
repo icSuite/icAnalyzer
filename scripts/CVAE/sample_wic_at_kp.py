@@ -31,7 +31,10 @@ from icanalyzer.cvae.conditioning import (
 )
 from icanalyzer.cvae.ensemble import ensemble_statistics, sample_decoded_ensemble
 from icanalyzer.cvae.regimes import (
+    CONTROLLED_SML_BANDS,
+    CONTROLLED_SML_LABELS,
     REGIME_NAMES,
+    controlled_regime_conditions,
     empirical_regime_masks,
     load_training_conditions,
 )
@@ -372,6 +375,65 @@ def _regime_selections(paths, names, model, artifact, arguments):
     return selections
 
 
+def _controlled_regime_selections(regimes, sml_bands, model, arguments):
+    """Construct the prescribed four-condition climatology experiment."""
+
+    model_names = resolve_conditioning_features(
+        model.conditioning["feature_names"]
+    )
+    expected_names = resolve_conditioning_features("hybrid4")
+    if model_names != expected_names:
+        raise ValueError(
+            "controlled IMF/SML sampling requires the hybrid4 WIC-CVAE"
+        )
+    lower = np.asarray(model.conditioning["training_min"])
+    upper = np.asarray(model.conditioning["training_max"])
+    condition_seed = arguments.seed + 97
+    selections = []
+    for sml_band in sml_bands:
+        for regime in regimes:
+            matrix, standard_clock, definition = controlled_regime_conditions(
+                regime, sml_band, arguments.draws, condition_seed,
+                field_minimum=arguments.regime_field_minimum,
+                field_maximum=arguments.regime_field_maximum,
+                clock_half_width=arguments.regime_clock_half_width,
+                dipole_tilt=arguments.controlled_tilt,
+            )
+            outside = [
+                name for column, name in enumerate(model_names)
+                if (
+                    matrix[:, column].min() < lower[column]
+                    or matrix[:, column].max() > upper[column]
+                )
+            ]
+            label = (
+                f"{CONTROLLED_SML_LABELS[sml_band]}; "
+                f"{regime.replace('_', ' ').title()}"
+            )
+            selections.append({
+                "mode": "controlled_regime",
+                "label": label,
+                "directory": f"{sml_band}_{regime}",
+                "conditions": {
+                    "sml_band": sml_band,
+                    "dipole_tilt": float(arguments.controlled_tilt),
+                    "kp": float(arguments.conversion_kp),
+                },
+                "vector": matrix,
+                "standard_clock": standard_clock,
+                "condition_seed": condition_seed,
+                "definition": {
+                    "imf_regime": regime,
+                    **definition,
+                    "conductance_conversion_kp": float(
+                        arguments.conversion_kp
+                    ),
+                },
+                "outside_training_columns": outside,
+            })
+    return selections
+
+
 def _condition_summary(matrix, standard_clock):
     """Summarize the empirical condition rows used for one ensemble."""
 
@@ -389,6 +451,26 @@ def _condition_summary(matrix, standard_clock):
         matrix[:, CONDITIONING_FEATURE_NAMES.index("day_of_year_cos")]
     ), 2 * np.pi)
     values["day_of_year"] = 1 + day_phase * 365.25 / (2 * np.pi)
+    quantiles = (0.0, 0.1, 0.5, 0.9, 1.0)
+    return {
+        name: dict(zip(
+            ("minimum", "q10", "median", "q90", "maximum"),
+            np.quantile(column, quantiles).tolist()
+        ))
+        for name, column in values.items()
+    }
+
+
+def _controlled_condition_summary(matrix, feature_names, standard_clock, kp):
+    """Summarize the explicitly designed condition ensemble."""
+
+    matrix = np.asarray(matrix, dtype=float)
+    values = {
+        name: matrix[:, column]
+        for column, name in enumerate(feature_names)
+    }
+    values["standard_clock_angle"] = np.asarray(standard_clock, dtype=float)
+    values["kp"] = np.full(len(matrix), kp, dtype=float)
     quantiles = (0.0, 0.1, 0.5, 0.9, 1.0)
     return {
         name: dict(zip(
@@ -419,7 +501,16 @@ def run(arguments):
     if transform.channel_count != 1:
         raise ValueError("requires a one-channel WIC transform")
     if model.conditioning is not None:
-        if arguments.regimes is not None:
+        if arguments.controlled_regimes:
+            names = REGIME_NAMES if arguments.regime is None else arguments.regime
+            sml_bands = (
+                tuple(CONTROLLED_SML_BANDS)
+                if arguments.sml_band is None else arguments.sml_band
+            )
+            requested = _controlled_regime_selections(
+                names, sml_bands, model, arguments
+            )
+        elif arguments.regimes is not None:
             names = REGIME_NAMES if arguments.regime is None else arguments.regime
             requested = _regime_selections(
                 arguments.regimes, names, model, artifact, arguments
@@ -480,6 +571,17 @@ def run(arguments):
             sample_time = selection["pool_time"][pool_indices]
             sample_kp = selection["pool_kp"][pool_indices]
             kp = sample_kp
+        elif selection["mode"] == "controlled_regime":
+            condition_seed = selection["condition_seed"]
+            pool_indices = np.asarray([], dtype=np.int64)
+            condition_values = selection["vector"]
+            full_condition_values = np.asarray([], dtype=np.float32)
+            standard_clock = selection["standard_clock"]
+            sample_orbit = np.asarray([], dtype=np.int32)
+            sample_source_frame = np.asarray([], dtype=np.int32)
+            sample_time = np.asarray([], dtype="datetime64[us]")
+            kp = selection["conditions"]["kp"]
+            sample_kp = np.full(arguments.draws, kp, dtype=np.float32)
         else:
             condition_seed = None
             pool_indices = np.asarray([], dtype=np.int64)
@@ -582,6 +684,13 @@ def run(arguments):
                 "marginalized over actual finite training rows and each member's "
                 "Kp is used in the physical conversion."
             )
+        elif selection["mode"] == "controlled_regime":
+            interpretation = (
+                "Designed-condition WIC prior with SML and IMF sampled "
+                "independently and uniformly inside explicit bounds, fixed "
+                "dipole tilt and fixed Kp used only for conductance conversion. "
+                "No empirical condition-row distribution is used."
+            )
         else:
             interpretation = (
                 "Exact-condition WIC prior propagated member-by-member to Fang "
@@ -616,7 +725,7 @@ def run(arguments):
             "conditioning_pool_frames": selection.get("pool_size"),
             "conditioning_pool_provenance": selection.get("pool_provenance"),
             "conditioning_sampling": (
-                None if selection["mode"] != "empirical_regime" else {
+                {
                     "method": "uniform empirical training-row resampling with replacement",
                     "seed": condition_seed,
                     "sample_specific_kp_used_for_conductance": True,
@@ -624,6 +733,19 @@ def run(arguments):
                         full_condition_values, standard_clock
                     ),
                 }
+                if selection["mode"] == "empirical_regime" else
+                {
+                    "method": "independent uniform designed-condition sampling",
+                    "seed": condition_seed,
+                    "sample_specific_kp_used_for_conductance": False,
+                    "fixed_conductance_conversion_kp": float(kp),
+                    "condition_summary": _controlled_condition_summary(
+                        condition_values,
+                        model.conditioning["feature_names"],
+                        standard_clock, kp
+                    ),
+                }
+                if selection["mode"] == "controlled_regime" else None
             ),
             "outside_training_columns": selection["outside_training_columns"],
             "grid_id": provenance["grid_id"], "supported_cells": int(support.sum()),
@@ -668,9 +790,22 @@ def run(arguments):
 
     if hashlib.sha256(artifact_path.read_bytes()).hexdigest() != model_sha:
         raise RuntimeError("source WIC model changed during sampling")
+    first_regime = selections[0].get("conditioning_regime") or {}
+    controlled = first_regime.get("design") == "independent uniform conditions"
+    comparison_policy = (
+        "identical latent seed and identical uniform-rank condition draws for "
+        "every controlled IMF/SML group; SML and IMF are sampled independently, "
+        "dipole tilt and conductance-conversion Kp are fixed, and no empirical "
+        "condition-row distribution is used"
+        if controlled else
+        "identical latent seed for every requested condition or regime; empirical "
+        "regimes resample actual training condition rows and each WIC draw is "
+        "propagated with its own Kp through collapsed Zhang--Paxton and Fang before "
+        "conductance statistics"
+    )
     summary = {
         "selections": selections,
-        "comparison_policy": "identical latent seed for every requested condition or regime; empirical regimes resample actual training condition rows and each WIC draw is propagated with its own Kp through collapsed Zhang--Paxton and Fang before conductance statistics"
+        "comparison_policy": comparison_policy,
     }
     (output / "sampling_summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     return selections
@@ -683,17 +818,27 @@ def parse_arguments(argv=None):
     selection.add_argument("--kp", type=float, nargs="+")
     selection.add_argument(
         "--conditions", type=Path,
-        help="legacy JSON list of exact named 11-feature condition selections"
+        help="JSON list of exact named condition selections"
     )
     selection.add_argument(
         "--regimes", type=Path, nargs=2, metavar=("CACHE", "CONDITIONING"),
         help="sample empirical IMF regimes from the model's cache and conditioning table"
     )
+    selection.add_argument(
+        "--controlled-regimes", action="store_true",
+        help="sample the designed hybrid4 IMF by SML experiment"
+    )
     parser.add_argument("--regime", choices=REGIME_NAMES, nargs="+")
+    parser.add_argument(
+        "--sml-band", choices=tuple(CONTROLLED_SML_BANDS), nargs="+",
+        help="controlled SML bands (default: quiet normal disturbed)"
+    )
     parser.add_argument("--regime-field-minimum", type=float, default=2.0)
     parser.add_argument("--regime-field-maximum", type=float, default=10.0)
     parser.add_argument("--regime-clock-half-width", type=float, default=30.0)
     parser.add_argument("--regime-tilt-limit", type=float, default=5.0)
+    parser.add_argument("--controlled-tilt", type=float, default=0.0)
+    parser.add_argument("--conversion-kp", type=float, default=3.0)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--draws", type=int, default=50000)
     parser.add_argument("--batch-size", type=int, default=256)
@@ -716,8 +861,23 @@ def parse_arguments(argv=None):
         help="apply Product-3's operational 1-keV floor (default) or strictly reject sub-1-keV energy"
     )
     arguments = parser.parse_args(argv)
-    if arguments.regime is not None and arguments.regimes is None:
-        parser.error("--regime requires --regimes CACHE CONDITIONING")
+    if (
+        arguments.regime is not None
+        and arguments.regimes is None and not arguments.controlled_regimes
+    ):
+        parser.error("--regime requires --regimes or --controlled-regimes")
+    if arguments.sml_band is not None and not arguments.controlled_regimes:
+        parser.error("--sml-band requires --controlled-regimes")
+    if (
+        not np.isfinite(arguments.controlled_tilt)
+        or not np.isfinite(arguments.conversion_kp)
+        or not 0 <= arguments.conversion_kp <= 9
+    ):
+        parser.error("controlled tilt must be finite and conversion Kp must be 0--9")
+    if arguments.regime is not None and len(set(arguments.regime)) != len(arguments.regime):
+        parser.error("requested IMF regimes must be distinct")
+    if arguments.sml_band is not None and len(set(arguments.sml_band)) != len(arguments.sml_band):
+        parser.error("requested SML bands must be distinct")
     return arguments
 
 

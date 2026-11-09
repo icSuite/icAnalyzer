@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 from types import SimpleNamespace
+import warnings
 
 import numpy as np
 import torch
@@ -14,7 +15,12 @@ from icanalyzer.cvae.artifacts import (
 from icanalyzer.cvae.data import ChannelTransform, split_orbit_files
 from icanalyzer.cvae.ensemble import sample_decoded_ensemble
 from icanalyzer.cvae.model import SplineConditionalVAE
-from icanalyzer.cvae.regimes import empirical_regime_masks, standard_imf_clock_angle
+from icanalyzer.cvae.regimes import (
+    CONTROLLED_SML_BANDS,
+    controlled_regime_conditions,
+    empirical_regime_masks,
+    standard_imf_clock_angle,
+)
 from icanalyzer.cvae.cache import AutomaticFieldDataset
 from icanalyzer.cvae.conditioning import (
     CONDITIONING_FEATURE_NAMES,
@@ -234,6 +240,35 @@ def test_empirical_imf_regimes_use_standard_clock_and_leave_nuisance_free():
     np.testing.assert_array_equal(masks["by_negative"], [0, 0, 0, 1, 0, 0, 0, 1])
     assert definitions["bz_south"]["other_features"].startswith("unrestricted")
     np.testing.assert_allclose(standard_imf_clock_angle(0, -5), 180)
+
+
+def test_controlled_imf_sml_conditions_are_independent_uniform_designs():
+    centers = {
+        "bz_south": 180.0, "bz_north": 0.0,
+        "by_positive": 90.0, "by_negative": 270.0,
+    }
+    results = {}
+    for regime, center in centers.items():
+        matrix, clock, definition = controlled_regime_conditions(
+            regime, "normal", 1000, 17
+        )
+        results[regime] = matrix
+        assert matrix.shape == (1000, 4)
+        assert np.all((-300 <= matrix[:, 0]) & (matrix[:, 0] < -100))
+        np.testing.assert_array_equal(matrix[:, 3], 0.0)
+        selected = np.abs(matrix[:, 2] if regime.startswith("bz_") else matrix[:, 1])
+        assert np.all((2 <= selected) & (selected <= 10))
+        distance = np.abs((clock - center + 180) % 360 - 180)
+        assert np.all(distance <= 30)
+        assert definition["empirical_training_distribution_used"] is False
+    np.testing.assert_array_equal(
+        results["bz_south"][:, 0], results["by_positive"][:, 0]
+    )
+    assert CONTROLLED_SML_BANDS == {
+        "quiet": (-100.0, 0.0),
+        "normal": (-300.0, -100.0),
+        "disturbed": (-1000.0, -300.0),
+    }
 
 
 def test_multi_sample_forward_encodes_once_and_decodes_parallel_draws():
@@ -561,12 +596,59 @@ def test_named_conditioning_wic_trainer_artifact(tmp_path, monkeypatch):
         assert saved["conductance_sample_kp"].shape == (4,)
         assert saved["physics_unique_kp"].ndim == 1
 
+    controlled_output = tmp_path / "controlled_samples"
+    controlled_cli = sampler.parse_arguments([
+        str(hybrid_output), "--controlled-regimes",
+        "--regime", "bz_south", "--sml-band", "quiet", "normal",
+        "--regime-field-minimum", ".5", "--regime-field-maximum", "3",
+        "--regime-clock-half-width", "60", "--conversion-kp", "3",
+        "--output", str(controlled_output), "--draws", "4",
+        "--batch-size", "2", "--device", "cpu", "--no-plots"
+    ])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        controlled = sampler.run(controlled_cli)
+    assert [row["directory"] for row in controlled] == [
+        "quiet_bz_south", "normal_bz_south"
+    ]
+    assert all(row["Kp"] == 3 for row in controlled)
+    assert all(
+        row["conditioning_regime"]["empirical_training_distribution_used"]
+        is False for row in controlled
+    )
+    with np.load(
+        controlled_output / "quiet_bz_south/ensemble_products.npz"
+    ) as saved:
+        values = saved["conditioning_values"]
+        assert values.shape == (4, 4)
+        assert np.all((-100 <= values[:, 0]) & (values[:, 0] < 0))
+        assert np.all((-3 <= values[:, 2]) & (values[:, 2] <= -.5))
+        np.testing.assert_array_equal(values[:, 3], 0.0)
+        np.testing.assert_array_equal(saved["conductance_sample_kp"], 3.0)
+    controlled_metadata = json.loads((
+        controlled_output / "quiet_bz_south/sampling.json"
+    ).read_text())
+    assert controlled_metadata["conditioning_sampling"]["method"] == (
+        "independent uniform designed-condition sampling"
+    )
+    assert controlled_metadata["conditioning_sampling"][
+        "fixed_conductance_conversion_kp"
+    ] == 3
+
     import scripts.CVAE.plot_wic_at_kp as plotter
     plotted = []
     monkeypatch.setattr(plotter, "plot_wic", lambda *args: plotted.append(args[5]))
     monkeypatch.setattr(plotter, "plot_conductance", lambda *args: plotted.append(args[5]))
     assert plotter.run(plotter.parse_arguments([str(regime_output)])) == ["bz_south"]
     assert plotted == ["Bz South", "Bz South"]
+    plotted.clear()
+    assert plotter.run(plotter.parse_arguments([str(controlled_output)])) == [
+        "quiet_bz_south", "normal_bz_south"
+    ]
+    assert plotted == [
+        "Low/quiet-like; Bz South", "Low/quiet-like; Bz South",
+        "Moderate/normal; Bz South", "Moderate/normal; Bz South",
+    ]
 
 
 def test_one_field_disk_cache_and_training_artifact(tmp_path, monkeypatch):

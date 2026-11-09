@@ -1,4 +1,4 @@
-"""Empirical condition regimes for named WIC-CVAE sampling."""
+"""Empirical and designed condition regimes for WIC-CVAE sampling."""
 
 #%% Imports and physical definitions
 
@@ -9,10 +9,24 @@ from pathlib import Path
 import numpy as np
 
 from .cache import AutomaticFieldDataset
-from .conditioning import CONDITIONING_FEATURE_NAMES, align_conditioning_features
+from .conditioning import (
+    CONDITIONING_FEATURE_NAMES,
+    CONDITIONING_PROFILES,
+    align_conditioning_features,
+)
 
 
 REGIME_NAMES = ("bz_south", "bz_north", "by_positive", "by_negative")
+CONTROLLED_SML_BANDS = {
+    "quiet": (-100.0, 0.0),
+    "normal": (-300.0, -100.0),
+    "disturbed": (-1000.0, -300.0),
+}
+CONTROLLED_SML_LABELS = {
+    "quiet": "Low/quiet-like",
+    "normal": "Moderate/normal",
+    "disturbed": "Strong/disturbed",
+}
 
 
 def standard_imf_clock_angle(by_gsm, bz_gsm):
@@ -26,6 +40,76 @@ def standard_imf_clock_angle(by_gsm, bz_gsm):
 
 def _circular_distance(angle, center):
     return np.abs((angle - center + 180.0) % 360.0 - 180.0)
+
+
+def controlled_regime_conditions(
+    regime, sml_band, draws, seed,
+    field_minimum=2.0, field_maximum=10.0,
+    clock_half_width=30.0, dipole_tilt=0.0
+):
+    """Draw independent uniform hybrid4 conditions for one designed regime."""
+
+    if regime not in REGIME_NAMES:
+        raise ValueError(f"unknown IMF regime: {regime}")
+    if sml_band not in CONTROLLED_SML_BANDS:
+        raise ValueError(f"unknown SML band: {sml_band}")
+    limits = np.asarray([
+        field_minimum, field_maximum, clock_half_width, dipole_tilt
+    ], dtype=float)
+    if (
+        draws < 2 or not np.isfinite(limits).all()
+        or field_minimum <= 0 or field_maximum <= field_minimum
+        or clock_half_width <= 0 or clock_half_width >= 90
+    ):
+        raise ValueError("controlled-regime sampling limits are invalid")
+
+    centers = {
+        "bz_south": 180.0,
+        "bz_north": 0.0,
+        "by_positive": 90.0,
+        "by_negative": 270.0,
+    }
+    rng = np.random.default_rng(seed)
+    sml_minimum, sml_maximum = CONTROLLED_SML_BANDS[sml_band]
+    sml = rng.uniform(sml_minimum, sml_maximum, draws)
+    selected_component = rng.uniform(field_minimum, field_maximum, draws)
+    clock = np.mod(
+        centers[regime]
+        + rng.uniform(-clock_half_width, clock_half_width, draws),
+        360.0
+    )
+    clock_radians = np.deg2rad(clock)
+    if regime.startswith("bz_"):
+        magnitude = selected_component / np.abs(np.cos(clock_radians))
+    else:
+        magnitude = selected_component / np.abs(np.sin(clock_radians))
+    by_gsm = magnitude * np.sin(clock_radians)
+    bz_gsm = magnitude * np.cos(clock_radians)
+
+    columns = {
+        "sml": sml,
+        "by_gsm": by_gsm,
+        "bz_gsm": bz_gsm,
+        "dipole_tilt": np.full(draws, dipole_tilt),
+    }
+    feature_names = CONDITIONING_PROFILES["hybrid4"]
+    matrix = np.column_stack([columns[name] for name in feature_names]).astype(
+        np.float32
+    )
+    definition = {
+        "design": "independent uniform conditions",
+        "sml_band": sml_band,
+        "sml_label": CONTROLLED_SML_LABELS[sml_band],
+        "sml_nT": [sml_minimum, sml_maximum],
+        "selected_imf_component_magnitude_nT": [
+            field_minimum, field_maximum
+        ],
+        "standard_clock_center_degrees": centers[regime],
+        "standard_clock_half_width_degrees": clock_half_width,
+        "dipole_tilt_degrees": dipole_tilt,
+        "empirical_training_distribution_used": False,
+    }
+    return matrix, clock.astype(np.float32), definition
 
 
 def empirical_regime_masks(
