@@ -767,6 +767,11 @@ def test_one_field_disk_cache_and_training_artifact(tmp_path, monkeypatch):
         assert saved["electron_mean_energy"].shape == (46, 46)
         np.testing.assert_array_equal(saved["fang_magnetic_field_150km_microtesla"], 48.0)
         assert saved["fang_geographic_latitude_at_130km"].shape == (46, 46)
+        explicit_mosaic = saved["wic_mosaic_samples"].copy()
+        legacy_product = {
+            "wic_mean": saved["wic_mean"].copy(),
+            "wic_anomaly_factor": saved["wic_anomaly_factor"].copy(),
+        }
     sampling = json.loads((sample_output / "kp_00_1/sampling.json").read_text())
     assert sampling["fang_low_energy_policy"] == "clip"
     assert sampling["fang_magnetic_field_reference_epoch"] == "2001-01-01T00:00:00"
@@ -783,6 +788,12 @@ def test_one_field_disk_cache_and_training_artifact(tmp_path, monkeypatch):
     assert variable_kp_physics["electron_mean_energy"].shape == (3, 46, 46)
 
     import scripts.CVAE.plot_wic_at_kp as plotter
+
+    reconstructed, reconstructed_indices = plotter._wic_mosaic_members(
+        legacy_product
+    )
+    np.testing.assert_allclose(reconstructed, explicit_mosaic, atol=2e-6)
+    np.testing.assert_array_equal(reconstructed_indices, np.arange(4))
 
     plotted = []
     monkeypatch.setattr(plotter, "plot_wic", lambda *args: plotted.append("wic"))

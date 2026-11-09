@@ -183,8 +183,9 @@ PYTHONPATH=. python scripts/CVAE/plot_wic_at_kp.py "$SAMPLES"
 Each group saves the first 36 paired WIC realizations and produces
 `wic_sample_mosaic.png`/`.pdf` as a 6x6 polar-contour mosaic. The plot-only
 command regenerates these mosaics from the saved members without decoding or
-conductance propagation. Older sample directories without saved mosaic members
-continue to produce the mean/quantile and conductance plots only.
+conductance propagation. For older completed sample directories, it exactly
+reconstructs the first 36 members from the saved mean and full anomaly factor,
+so existing 50,000-member ensembles do not need to be sampled again.
 
 The older `--regimes CACHE CONDITIONING` mode remains available as an
 empirical-distribution diagnostic. It is not the controlled climatological

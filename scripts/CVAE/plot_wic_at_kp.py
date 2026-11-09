@@ -17,6 +17,31 @@ from scripts.CVAE.sample_wic_at_kp import (
 
 #%% Plot saved summaries without sampling again
 
+def _wic_mosaic_members(saved):
+    """Load explicit mosaic members or reconstruct them from saved anomalies."""
+
+    if {
+        "wic_mosaic_samples", "wic_mosaic_sample_indices"
+    }.issubset(saved):
+        return saved["wic_mosaic_samples"], saved["wic_mosaic_sample_indices"]
+
+    mean = np.asarray(saved["wic_mean"], dtype=np.float64)
+    anomaly_factor = np.asarray(saved["wic_anomaly_factor"])
+    if (
+        mean.ndim != 2 or anomaly_factor.ndim != 2
+        or anomaly_factor.shape[0] != mean.size
+        or anomaly_factor.shape[1] < 2
+    ):
+        raise ValueError("saved WIC mean and anomaly factor cannot reconstruct samples")
+    count = min(36, anomaly_factor.shape[1])
+    indices = np.arange(count, dtype=np.int32)
+    flattened = (
+        mean.reshape(-1, 1)
+        + anomaly_factor[:, :count] * np.sqrt(anomaly_factor.shape[1] - 1)
+    )
+    return flattened.T.reshape(count, *mean.shape), indices
+
+
 def run(arguments):
     limits = np.asarray(
         [arguments.wic_vmax, arguments.hall_vmax, arguments.pedersen_vmax],
@@ -57,15 +82,12 @@ def run(arguments):
                 saved["wic_supported"].astype(bool), mlat, mlt,
                 title, destination, arguments.wic_vmax
             )
-            if {
-                "wic_mosaic_samples", "wic_mosaic_sample_indices"
-            }.issubset(saved.files):
-                plot_wic_sample_mosaic(
-                    saved["wic_mosaic_samples"],
-                    saved["wic_mosaic_sample_indices"],
-                    saved["wic_supported"].astype(bool), mlat, mlt,
-                    title, destination, arguments.wic_vmax
-                )
+            mosaic_samples, mosaic_indices = _wic_mosaic_members(saved)
+            plot_wic_sample_mosaic(
+                mosaic_samples, mosaic_indices,
+                saved["wic_supported"].astype(bool), mlat, mlt,
+                title, destination, arguments.wic_vmax
+            )
             plot_conductance(
                 saved["conductance_mean"], conductance_quantiles,
                 saved["conductance_supported"].astype(bool), mlat, mlt,
