@@ -2,7 +2,7 @@
 
 Last updated: 2026-11-09
 Last reviewed: 2026-11-09 (controlled IMF/SML sampling)
-Repository snapshot: `vae/wic-si12` at `7a1e9d2` with user annotation and generated-output changes preserved; `main` remains at `7c71591`
+Repository snapshot: `vae/wic-si12` at `e1c5902` with user annotation and generated-output changes preserved; `main` remains at `7c71591`
 
 ## Four-variable WIC CVAE ready to run (2026-11-08)
 
@@ -30,6 +30,12 @@ Fang, reload and plot smoke pass. Next run all 12 groups at 50,000 draws from
 the completed hybrid4 artifact, then regenerate contours with
 `plot_wic_at_kp.py`. Full-11, scalar-Kp and empirical diagnostic compatibility
 remain intact.
+
+Commits `3eb2d6d` and `e1c5902` add a 6x6 polar WIC-realization mosaic for each
+group. New products explicitly save the first 36 paired members. The plot-only
+command can also reconstruct those members exactly from the mean and anomaly
+factor already present in older completed ensembles, so the user's existing
+50,000-member controlled samples need only be replotted, not resampled.
 
 Portfolio impact: Central update needed: No.
 

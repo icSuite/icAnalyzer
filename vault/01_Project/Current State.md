@@ -1,7 +1,7 @@
 # Current State
 
 Last reviewed: 2026-11-09 (controlled IMF/SML sampling)
-Repository snapshot: `vae/wic-si12` at `7a1e9d2`; `main` remains at `7c71591`
+Repository snapshot: `vae/wic-si12` at `e1c5902`; `main` remains at `7c71591`
 Worktree: user annotation and generated-output changes preserved
 
 ## Four-variable WIC conditioning profile ready (2026-11-08)
@@ -27,6 +27,13 @@ provenance states that no empirical condition distribution was used.
 Instantaneous SML magnitude is an activity class, not a substorm classifier;
 the disturbed group mixes event types. The older empirical-row regime mode
 remains available only as a diagnostic and is not the controlled comparison.
+
+Every newly sampled group now saves the first 36 paired WIC realizations and
+plots them as a 6x6 polar-contour mosaic. `plot_wic_at_kp.py` regenerates
+`wic_sample_mosaic.png`/`.pdf` without decoding. Existing completed sample
+directories do not require resampling: their saved mean and full anomaly factor
+exactly reconstruct the first 36 members. Both direct-member and legacy
+reconstruction plot paths passed real artifact/product smoke checks.
 
 Sixty-seven focused regression checks pass. A real one-epoch CPU smoke on the
 manual cache retained 7,737/1,633/1,348 train/validation/test frames, compared
