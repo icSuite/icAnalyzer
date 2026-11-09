@@ -8,7 +8,11 @@ from pathlib import Path
 
 import numpy as np
 
-from scripts.CVAE.sample_wic_at_kp import plot_conductance, plot_wic
+from scripts.CVAE.sample_wic_at_kp import (
+    plot_conductance,
+    plot_wic,
+    plot_wic_sample_mosaic,
+)
 
 
 #%% Plot saved summaries without sampling again
@@ -53,6 +57,15 @@ def run(arguments):
                 saved["wic_supported"].astype(bool), mlat, mlt,
                 title, destination, arguments.wic_vmax
             )
+            if {
+                "wic_mosaic_samples", "wic_mosaic_sample_indices"
+            }.issubset(saved.files):
+                plot_wic_sample_mosaic(
+                    saved["wic_mosaic_samples"],
+                    saved["wic_mosaic_sample_indices"],
+                    saved["wic_supported"].astype(bool), mlat, mlt,
+                    title, destination, arguments.wic_vmax
+                )
             plot_conductance(
                 saved["conductance_mean"], conductance_quantiles,
                 saved["conductance_supported"].astype(bool), mlat, mlt,

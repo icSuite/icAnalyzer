@@ -63,7 +63,10 @@ def parse_epoch(value):
     return epoch
 
 
-def polar_contour(axis, mlat, mlt, values, maximum, title):
+def polar_contour(
+    axis, mlat, mlt, values, maximum, title,
+    coordinate_labels=True, title_fontsize=None
+):
     """Plot one saved 46x46 field using Hardy-comparison polar contours."""
 
     from polplot import Polarplot
@@ -76,9 +79,10 @@ def polar_contour(axis, mlat, mlt, values, maximum, title):
         mlat, mlt, values.copy(), levels=np.linspace(0, maximum, 17),
         vmin=0, vmax=maximum, cmap="viridis", extend="max"
     )
-    polar_axis.writeLTlabels(fontsize=7)
-    polar_axis.writeLATlabels(fontsize=6)
-    axis.set_title(title)
+    if coordinate_labels:
+        polar_axis.writeLTlabels(fontsize=7)
+        polar_axis.writeLATlabels(fontsize=6)
+    axis.set_title(title, fontsize=title_fontsize)
     return contour
 
 
@@ -93,6 +97,41 @@ def plot_wic(mean, quantiles, support, mlat, mlt, title, output, maximum):
     figure.suptitle(f"Corrected-WIC model prior: {title}; common latent seed")
     figure.savefig(output / "wic_at_kp.png", dpi=160)
     figure.savefig(output / "wic_at_kp.pdf")
+    plt.close(figure)
+
+
+def plot_wic_sample_mosaic(
+    samples, sample_indices, support, mlat, mlt, title, output, maximum
+):
+    """Plot up to 36 coherent WIC realizations as a polar 6x6 mosaic."""
+
+    samples = np.asarray(samples, dtype=float)
+    sample_indices = np.asarray(sample_indices, dtype=int)
+    if (
+        samples.ndim != 3 or samples.shape[1:] != np.shape(support)
+        or len(samples) < 1 or len(samples) > 36
+        or sample_indices.shape != (len(samples),)
+    ):
+        raise ValueError("WIC mosaic needs 1--36 indexed fields on the saved grid")
+    figure, axes = plt.subplots(
+        6, 6, figsize=(12, 12), layout="constrained"
+    )
+    flat_axes = axes.ravel()
+    for axis, values, sample_index in zip(flat_axes, samples, sample_indices):
+        values = np.where(support, values, np.nan)
+        contour = polar_contour(
+            axis, mlat, mlt, values, maximum,
+            f"sample {sample_index + 1}", coordinate_labels=False,
+            title_fontsize=6
+        )
+    for axis in flat_axes[len(samples):]:
+        axis.set_axis_off()
+    figure.colorbar(
+        contour, ax=axes, shrink=0.72, label="corrected WIC [counts]"
+    )
+    figure.suptitle(f"Corrected-WIC individual realizations: {title}")
+    figure.savefig(output / "wic_sample_mosaic.png", dpi=160)
+    figure.savefig(output / "wic_sample_mosaic.pdf")
     plt.close(figure)
 
 
@@ -620,6 +659,9 @@ def run(arguments):
             raise ValueError("decoder produced invalid corrected WIC on learned support")
         wic_quantiles = np.quantile(wic, [0.1, 0.5, 0.9], axis=0)
         wic_quantiles[:, ~support] = np.nan
+        mosaic_count = min(36, len(wic))
+        mosaic_indices = np.arange(mosaic_count, dtype=np.int32)
+        mosaic_samples = wic[mosaic_indices].copy()
         wic_statistics = ensemble_statistics(samples)
         conductance, physics = fang_conductance_from_wic(
             wic, kp, mlt, support, fang_geometry["magnetic_field_microtesla"],
@@ -633,6 +675,8 @@ def run(arguments):
             wic_mean=wic_statistics["mean"][0], wic_anomaly_factor=wic_statistics["anomaly_factor"],
             wic_supported=support, wic_sample_kp=sample_kp,
             wic_q10=wic_quantiles[0], wic_q50=wic_quantiles[1], wic_q90=wic_quantiles[2],
+            wic_mosaic_samples=mosaic_samples,
+            wic_mosaic_sample_indices=mosaic_indices,
             conductance_mean=conductance_statistics["mean"],
             conductance_anomaly_factor=conductance_statistics["anomaly_factor"],
             conductance_supported=physics["conductance_supported"],
@@ -711,6 +755,11 @@ def run(arguments):
                 "maximum": float(np.max(sample_kp)),
             },
             "within_training_range": bool(within_range), "draws": arguments.draws,
+            "sample_mosaic": {
+                "selection": "first 36 paired ensemble members",
+                "saved_members": int(mosaic_count),
+                "sample_indices_zero_based": mosaic_indices.tolist(),
+            },
             "seed": arguments.seed, "device": device, "model_sha256": model_sha,
             "model_file": str(artifact_path),
             "kp_conditioning": (
@@ -779,6 +828,10 @@ def run(arguments):
                 wic_statistics["mean"][0], wic_quantiles, support, mlat, mlt,
                 selection["label"], destination, arguments.wic_vmax
             )
+            plot_wic_sample_mosaic(
+                mosaic_samples, mosaic_indices, support, mlat, mlt,
+                selection["label"], destination, arguments.wic_vmax
+            )
             plot_conductance(
                 conductance_statistics["mean"], conductance_quantiles,
                 physics["conductance_supported"], mlat, mlt,
@@ -786,6 +839,7 @@ def run(arguments):
             )
         selections.append(metadata)
         del samples, latent, wic, wic_quantiles, wic_statistics
+        del mosaic_samples, mosaic_indices
         del conductance, conductance_quantiles, conductance_statistics, physics
 
     if hashlib.sha256(artifact_path.read_bytes()).hexdigest() != model_sha:

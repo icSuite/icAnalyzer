@@ -595,6 +595,10 @@ def test_named_conditioning_wic_trainer_artifact(tmp_path, monkeypatch):
         )
         assert saved["conductance_sample_kp"].shape == (4,)
         assert saved["physics_unique_kp"].ndim == 1
+        assert saved["wic_mosaic_samples"].shape == (4, 46, 46)
+        np.testing.assert_array_equal(
+            saved["wic_mosaic_sample_indices"], np.arange(4)
+        )
 
     controlled_output = tmp_path / "controlled_samples"
     controlled_cli = sampler.parse_arguments([
@@ -625,6 +629,7 @@ def test_named_conditioning_wic_trainer_artifact(tmp_path, monkeypatch):
         assert np.all((-3 <= values[:, 2]) & (values[:, 2] <= -.5))
         np.testing.assert_array_equal(values[:, 3], 0.0)
         np.testing.assert_array_equal(saved["conductance_sample_kp"], 3.0)
+        assert saved["wic_mosaic_samples"].shape == (4, 46, 46)
     controlled_metadata = json.loads((
         controlled_output / "quiet_bz_south/sampling.json"
     ).read_text())
@@ -634,20 +639,27 @@ def test_named_conditioning_wic_trainer_artifact(tmp_path, monkeypatch):
     assert controlled_metadata["conditioning_sampling"][
         "fixed_conductance_conversion_kp"
     ] == 3
+    assert controlled_metadata["sample_mosaic"]["saved_members"] == 4
 
     import scripts.CVAE.plot_wic_at_kp as plotter
     plotted = []
     monkeypatch.setattr(plotter, "plot_wic", lambda *args: plotted.append(args[5]))
+    monkeypatch.setattr(
+        plotter, "plot_wic_sample_mosaic",
+        lambda *args: plotted.append(args[5])
+    )
     monkeypatch.setattr(plotter, "plot_conductance", lambda *args: plotted.append(args[5]))
     assert plotter.run(plotter.parse_arguments([str(regime_output)])) == ["bz_south"]
-    assert plotted == ["Bz South", "Bz South"]
+    assert plotted == ["Bz South", "Bz South", "Bz South"]
     plotted.clear()
     assert plotter.run(plotter.parse_arguments([str(controlled_output)])) == [
         "quiet_bz_south", "normal_bz_south"
     ]
     assert plotted == [
         "Low/quiet-like; Bz South", "Low/quiet-like; Bz South",
+        "Low/quiet-like; Bz South",
         "Moderate/normal; Bz South", "Moderate/normal; Bz South",
+        "Moderate/normal; Bz South",
     ]
 
 
@@ -745,6 +757,10 @@ def test_one_field_disk_cache_and_training_artifact(tmp_path, monkeypatch):
         assert saved["wic_mean"].shape == (46, 46)
         assert saved["wic_anomaly_factor"].shape == (46 * 46, 4)
         assert saved["wic_q50"].shape == (46, 46)
+        assert saved["wic_mosaic_samples"].shape == (4, 46, 46)
+        np.testing.assert_array_equal(
+            saved["wic_mosaic_sample_indices"], np.arange(4)
+        )
         assert saved["conductance_mean"].shape == (2, 46, 46)
         assert saved["conductance_anomaly_factor"].shape == (2 * 46 * 46, 4)
         assert saved["conductance_supported"].all()
@@ -770,12 +786,19 @@ def test_one_field_disk_cache_and_training_artifact(tmp_path, monkeypatch):
 
     plotted = []
     monkeypatch.setattr(plotter, "plot_wic", lambda *args: plotted.append("wic"))
+    monkeypatch.setattr(
+        plotter, "plot_wic_sample_mosaic",
+        lambda *args: plotted.append("mosaic")
+    )
     monkeypatch.setattr(plotter, "plot_conductance", lambda *args: plotted.append("conductance"))
     plot_arguments = plotter.parse_arguments([str(sample_output)])
     assert plot_arguments.hall_vmax == 24.0
     assert plot_arguments.pedersen_vmax == 12.0
     assert plotter.run(plot_arguments) == ["kp_00_1", "kp_01_3"]
-    assert plotted == ["wic", "conductance", "wic", "conductance"]
+    assert plotted == [
+        "wic", "mosaic", "conductance",
+        "wic", "mosaic", "conductance",
+    ]
 
 
 class FakeProduct:
