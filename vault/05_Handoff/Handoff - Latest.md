@@ -1,8 +1,34 @@
 # Handoff - Latest
 
 Last updated: 2026-11-09
-Last reviewed: 2026-11-09 (coherent ensemble summaries)
-Repository snapshot: `vae/wic-si12` at `a733138` with user annotation and generated-output changes preserved; `main` remains at `7c71591`
+Last reviewed: 2026-11-09 (pre-proton WIC CVAE diagnostic)
+Repository snapshot: `vae/wic-si12` at `aae4844` with user annotation and generated-output changes preserved; `main` remains at `7c71591`
+
+## Pre-proton WIC comparison implemented (2026-11-09)
+
+The clean test of the SI12-misalignment hypothesis is now implemented across
+the product boundary. icBuilder commit `e4c5479` conditionally carries
+detector Product-2 `wic_smoothed`/`dwic_smoothed` into precipitation CS;
+icReader commit `587c538` exposes those additive schema-1 fields. Rerun only
+precipitation CS from existing detector Product 2. Product 1, detector Product
+2, conductance Product 3 and corrected-WIC CS semantics are unchanged.
+
+icAnalyzer commit `aae4844` selects the new field with
+`prepare_wic_cvae_cache.py --wic-field preproton`, records
+`wic_preproton` throughout the cache/artifact and reuses the existing trainer
+and conditioning machinery. Sampling produces WIC morphology products only.
+It deliberately skips Apex/Zhang--Paxton/Fang and marks conductance conversion
+false because pre-proton counts are not electron-only. Plot-only regeneration
+supports these WIC-only ensembles.
+
+Regenerated CS files have new file identity, so existing automatic-mask
+manifests cannot be reused directly. Reapply the frozen Model2 checkpoint to
+the regenerated CS and route it through the frozen Model1 checkpoint; model
+retraining is unnecessary. Then prepare the pre-proton cache with that new
+mask directory. Verification passes 48 reader tests, 61 relevant builder
+tests and 69 focused analyzer tests.
+
+Portfolio impact: Central update needed: No.
 
 ## Four-variable WIC CVAE ready to run (2026-11-08)
 

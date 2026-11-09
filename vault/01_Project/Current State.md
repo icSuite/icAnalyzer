@@ -1,8 +1,33 @@
 # Current State
 
-Last reviewed: 2026-11-09 (coherent ensemble summaries)
-Repository snapshot: `vae/wic-si12` at `a733138`; `main` remains at `7c71591`
+Last reviewed: 2026-11-09 (pre-proton WIC CVAE diagnostic)
+Repository snapshot: `vae/wic-si12` at `aae4844`; `main` remains at `7c71591`
 Worktree: user annotation and generated-output changes preserved
+
+## Pre-proton WIC CVAE path ready (2026-11-09)
+
+The suspected SI12/WIC spatial-misalignment artifact can now be tested with a
+controlled pre-proton WIC model. Coordinated commits `e4c5479` in icBuilder and
+`587c538` in icReader carry optional detector Product-2 `wic_smoothed` and
+`dwic_smoothed` through precipitation CS and expose them lazily. Existing
+corrected fields and older CS files remain compatible. Only precipitation CS
+must be regenerated from the existing detector Product 2; Product 1, detector
+Product 2 and Product 3 are unchanged.
+
+Commit `aae4844` adds `prepare_wic_cvae_cache.py --wic-field preproton`. The
+cache and artifact explicitly identify `wic_preproton`; the generic trainer,
+named/Kp conditioning and controlled IMF/SML sampling remain shared with the
+corrected model. Pre-proton sampling saves WIC ensembles, mosaics, medoids and
+exceedance probabilities but cannot enter Zhang--Paxton/Fang because the
+counts still include proton emissions. The sampler enforces that boundary and
+the plot-only command handles WIC-only products.
+
+Fresh automatic masks must be exported against the regenerated CS files
+because mask provenance freezes the source path, size and modification time.
+The frozen Model1/Model2 checkpoints can be reused; no masking-model retraining
+is required. Verification: 48 icReader tests, 61 relevant icBuilder tests and
+69 focused icAnalyzer checks pass. Next regenerate precipitation CS, re-export
+the masks, prepare a pre-proton cache and train a matched hybrid4 CVAE.
 
 ## Four-variable WIC conditioning profile ready (2026-11-08)
 
