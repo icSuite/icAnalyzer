@@ -1,7 +1,7 @@
 # Current State
 
-Last reviewed: 2026-11-08 (four-variable WIC conditioning profile)
-Repository snapshot: `vae/wic-si12` at `c3a927e`; `main` remains at `7c71591`
+Last reviewed: 2026-11-09 (controlled IMF/SML sampling)
+Repository snapshot: `vae/wic-si12` at `7a1e9d2`; `main` remains at `7c71591`
 Worktree: user annotation and generated-output changes preserved
 
 ## Four-variable WIC conditioning profile ready (2026-11-08)
@@ -13,19 +13,29 @@ does not require cache regeneration. Only completeness of those four inputs is
 required during training, so missing unused solar-wind quantities no longer
 discard frames. Existing scalar-Kp and full-11 profiles remain compatible.
 
-Artifacts record the profile and exact four-column contract. Exact-condition
-sampling accepts the four model inputs plus Kp for Zhang--Paxton/Fang.
-Empirical IMF-regime sampling gives the decoder only the four trained inputs,
-while retaining the full aligned row for provenance and using each sampled
-row's Kp in the physical conversion. Rows are filtered for the model inputs
-and Kp rather than for all 11 candidate variables.
+Artifacts record the profile and exact four-column contract. The adopted
+climatological comparison does not resample empirical condition rows. Commit
+`7a1e9d2` adds `sample_wic_at_kp.py --controlled-regimes`: four IMF directions
+crossed with low/quiet-like SML `[-100,0)`, moderate/normal SML `[-300,-100)`
+and strong/disturbed SML `[-1000,-300)` nT. Within each of the 12 groups, SML,
+selected IMF-component magnitude (2--10 nT) and standard clock angle (direction
+plus/minus 30 degrees) are independent uniform draws; dipole tilt is fixed at
+zero. Kp is not a model input and is fixed at 3 only for Zhang--Paxton/Fang.
+Identical latent draws and uniform ranks pair the 12 comparisons. Saved
+provenance states that no empirical condition distribution was used.
 
-Sixty-six focused regression checks pass. A real one-epoch CPU smoke on the
+Instantaneous SML magnitude is an activity class, not a substorm classifier;
+the disturbed group mixes event types. The older empirical-row regime mode
+remains available only as a diagnostic and is not the controlled comparison.
+
+Sixty-seven focused regression checks pass. A real one-epoch CPU smoke on the
 manual cache retained 7,737/1,633/1,348 train/validation/test frames, compared
 with 5,761/1,291/997 in the earlier full-11 smoke. A four-member empirical
 Bz-south smoke loaded the saved artifact and completed the real collapsed
-Zhang--Paxton/Fang path. Next run a short CUDA smoke and then the 500-epoch
-automatic-cache `hybrid4` model on Dynamit in a fresh run directory.
+Zhang--Paxton/Fang path. A controlled quiet/normal Bz-south smoke also completed
+real sampling, Fang propagation, saved-product reload and plot-only contour
+generation. Next run all 12 groups with 50,000 draws after the 500-epoch
+automatic-cache `hybrid4` model completes.
 
 ## SuperMAG conditioning preparation and importance benchmark ready (2026-11-06)
 

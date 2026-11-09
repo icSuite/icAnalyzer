@@ -54,8 +54,9 @@ uncertainties at `https://doi.org/10.5281/zenodo.15579301`.
   SuperMAG-to-IMAGE conditioning preparation and time-blocked predictive-
   importance analysis. The WIC model supports scalar Kp, the full 11-feature
   candidate vector and the selected four-variable SML/IMF By/IMF Bz/dipole-
-  tilt profile, plus empirical IMF-regime sampling over actual training rows.
-  WIC preparation accepts manual annotations or automatic masks;
+  tilt profile. Its scientific climatology uses designed independent IMF/SML
+  groups; empirical training-row regimes remain diagnostic only. WIC
+  preparation accepts manual annotations or automatic masks;
   Hall/Pedersen preparation is `prepare_cvae_hp_cache.py`.
 - `icanalyzer/cvae/`: shared field-agnostic cache, model, loss, training,
   artifact and ensemble implementation for those supported CVAEs.

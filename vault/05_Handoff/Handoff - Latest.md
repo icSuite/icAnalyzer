@@ -1,8 +1,8 @@
 # Handoff - Latest
 
-Last updated: 2026-11-08
-Last reviewed: 2026-11-08 (four-variable WIC conditioning profile)
-Repository snapshot: `vae/wic-si12` at `c3a927e` with user annotation and generated-output changes preserved; `main` remains at `7c71591`
+Last updated: 2026-11-09
+Last reviewed: 2026-11-09 (controlled IMF/SML sampling)
+Repository snapshot: `vae/wic-si12` at `7a1e9d2` with user annotation and generated-output changes preserved; `main` remains at `7c71591`
 
 ## Four-variable WIC CVAE ready to run (2026-11-08)
 
@@ -14,15 +14,22 @@ the existing cache format. Reuse the completed automatic WIC cache and
 must be finite, which recovers frames dropped from the all-11 model because an
 unused field was missing.
 
-The saved artifact records the four inputs and profile. Both fixed-condition
-and empirical-regime sampling support it. The latter retains full condition
-rows for provenance and per-member Kp propagation, but the decoder receives
-only its trained four-column vector. Sixty-six focused tests pass. A real
-manual-cache one-epoch smoke retained 7,737/1,633/1,348 frames and a real
-four-member regime smoke completed Zhang--Paxton/Fang. Next run a fresh short
-CUDA smoke on Dynamit, followed by the 500-epoch automatic-cache model if the
-throughput and frame counts are sensible. The full-11 and scalar-Kp paths are
-unchanged.
+The scientific comparison is now controlled rather than empirical. Commit
+`7a1e9d2` adds `--controlled-regimes`, producing 12 groups: four IMF directions
+by SML `[-100,0)`, `[-300,-100)` and `[-1000,-300)` nT. SML, selected IMF
+component from 2--10 nT and clock offset within plus/minus 30 degrees are
+independent uniform draws. Tilt is fixed at zero; Kp is fixed at 3 only for the
+conductance conversion. Every group uses identical latent draws and normalized
+uniform ranks. No cache or conditioning table is needed for this sampling mode,
+and metadata explicitly states that empirical condition rows were not used.
+
+Instantaneous SML labels activity, not substorm phase; do not call the disturbed
+group a substorm sample. The old `--regimes CACHE CONDITIONING` path remains a
+diagnostic only. Sixty-seven focused checks and a real controlled sampling,
+Fang, reload and plot smoke pass. Next run all 12 groups at 50,000 draws from
+the completed hybrid4 artifact, then regenerate contours with
+`plot_wic_at_kp.py`. Full-11, scalar-Kp and empirical diagnostic compatibility
+remain intact.
 
 Portfolio impact: Central update needed: No.
 

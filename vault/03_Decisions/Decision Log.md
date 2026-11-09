@@ -1,5 +1,19 @@
 # Decision Log
 
+## 2026-11-09 — Use designed IMF/SML sampling for the hybrid4 climatology
+
+Do not use empirical training-row resampling for the scientific IMF comparison;
+that would mix the observed joint condition distribution into a controlled
+climatology. Cross four IMF directions with three SML activity bands:
+`[-100,0)`, `[-300,-100)` and `[-1000,-300)` nT. Draw SML, selected IMF
+component magnitude from2--10 nT and clock offset within plus/minus30 degrees
+independently and uniformly; fix dipole tilt at0 degrees. Use common latent
+draws and uniform ranks across groups. Hold Kp at3 only in the downstream
+Zhang--Paxton/Fang conversion rather than recovering it from observed rows.
+Treat instantaneous SML as an electrojet-activity class, not a substorm label;
+the disturbed band may mix substorms, storms, convection and recovery phases.
+Retain empirical-row sampling only as an explicitly labelled diagnostic.
+
 ## 2026-11-06 — Generalize one CVAE pipeline rather than fork a Kp copy
 
 Do not rename the supported `scripts/CVAE/` workflow to `CVAE_kp` or duplicate
