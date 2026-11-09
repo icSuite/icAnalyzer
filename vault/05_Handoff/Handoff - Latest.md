@@ -1,8 +1,8 @@
 # Handoff - Latest
 
 Last updated: 2026-11-09
-Last reviewed: 2026-11-09 (controlled IMF/SML sampling)
-Repository snapshot: `vae/wic-si12` at `e1c5902` with user annotation and generated-output changes preserved; `main` remains at `7c71591`
+Last reviewed: 2026-11-09 (coherent ensemble summaries)
+Repository snapshot: `vae/wic-si12` at `a733138` with user annotation and generated-output changes preserved; `main` remains at `7c71591`
 
 ## Four-variable WIC CVAE ready to run (2026-11-08)
 
@@ -36,6 +36,15 @@ group. New products explicitly save the first 36 paired members. The plot-only
 command can also reconstruct those members exactly from the mean and anomaly
 factor already present in older completed ensembles, so the user's existing
 50,000-member controlled samples need only be replotted, not resampled.
+
+Commit `a733138` adds the requested central coherent realization and
+probability-of-exceedance summaries. `wic_medoid.png` is one actual member: the
+morphology-space medoid after robust feature scaling, not a pixelwise composite.
+`wic_exceedance_probability.png` is the marginal fraction above 100 WIC counts
+by default, with `--wic-exceedance-threshold` available for sensitivity tests.
+The plot-only command streams the saved full anomaly factor to derive both for
+older completed products; sampling and Fang conversion are not repeated. All
+68 focused checks and a real old-product plot smoke pass.
 
 Portfolio impact: Central update needed: No.
 

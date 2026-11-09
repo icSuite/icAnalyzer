@@ -1,7 +1,7 @@
 # Current State
 
-Last reviewed: 2026-11-09 (controlled IMF/SML sampling)
-Repository snapshot: `vae/wic-si12` at `e1c5902`; `main` remains at `7c71591`
+Last reviewed: 2026-11-09 (coherent ensemble summaries)
+Repository snapshot: `vae/wic-si12` at `a733138`; `main` remains at `7c71591`
 Worktree: user annotation and generated-output changes preserved
 
 ## Four-variable WIC conditioning profile ready (2026-11-08)
@@ -35,7 +35,17 @@ directories do not require resampling: their saved mean and full anomaly factor
 exactly reconstruct the first 36 members. Both direct-member and legacy
 reconstruction plot paths passed real artifact/product smoke checks.
 
-Sixty-seven focused regression checks pass. A real one-epoch CPU smoke on the
+Commit `a733138` adds two complementary ensemble summaries. The morphology-
+space medoid is an actual ensemble member minimizing total pairwise squared
+distance after robust scaling of total brightness, latitude centroid/width,
+active area and four MLT-sector fractions. The exceedance map gives the
+pixelwise fraction above a configurable corrected-WIC threshold, defaulting to
+100 counts. New sample products save both summaries; `plot_wic_at_kp.py`
+reconstructs them in streamed batches from the saved full anomaly factor for
+older completed products. Existing 50,000-member ensembles therefore require
+only replotting, not resampling or repeated Fang propagation.
+
+Sixty-eight focused regression checks pass. A real one-epoch CPU smoke on the
 manual cache retained 7,737/1,633/1,348 train/validation/test frames, compared
 with 5,761/1,291/997 in the earlier full-11 smoke. A four-member empirical
 Bz-south smoke loaded the saved artifact and completed the real collapsed
