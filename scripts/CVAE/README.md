@@ -187,6 +187,17 @@ conductance propagation. For older completed sample directories, it exactly
 reconstructs the first 36 members from the saved mean and full anomaly factor,
 so existing 50,000-member ensembles do not need to be sampled again.
 
+Two additional distribution summaries preserve the distinction between a
+coherent realization and a marginal pixel statistic. `wic_medoid.png`/`.pdf`
+shows the actual morphology-space medoid after robust scaling of total
+brightness, latitude centroid and width, active area, and MLT sector fractions.
+It minimizes total pairwise squared distance in that morphology space.
+`wic_exceedance_probability.png`/`.pdf` shows the fraction
+of members exceeding 100 corrected-WIC counts at each pixel. Change that
+threshold with `--wic-exceedance-threshold`. The plot-only command derives both
+summaries from the saved mean and full anomaly factor for older completed
+ensembles, so this also requires no resampling.
+
 The older `--regimes CACHE CONDITIONING` mode remains available as an
 empirical-distribution diagnostic. It is not the controlled climatological
 comparison because its nuisance conditions and Kp inherit their observed joint

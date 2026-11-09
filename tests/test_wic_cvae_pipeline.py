@@ -13,13 +13,17 @@ from icanalyzer.cvae.artifacts import (
     save_run_artifact
 )
 from icanalyzer.cvae.data import ChannelTransform, split_orbit_files
-from icanalyzer.cvae.ensemble import sample_decoded_ensemble
+from icanalyzer.cvae.ensemble import ensemble_statistics, sample_decoded_ensemble
 from icanalyzer.cvae.model import SplineConditionalVAE
 from icanalyzer.cvae.regimes import (
     CONTROLLED_SML_BANDS,
     controlled_regime_conditions,
     empirical_regime_masks,
     standard_imf_clock_angle,
+)
+from icanalyzer.cvae.summaries import (
+    summarize_wic_anomaly_factor,
+    summarize_wic_samples,
 )
 from icanalyzer.cvae.cache import AutomaticFieldDataset
 from icanalyzer.cvae.conditioning import (
@@ -408,6 +412,36 @@ def test_wic_polar_contour_uses_mlat_mlt_grid():
         plt.close(figure)
 
 
+def test_wic_distribution_summaries_are_coherent_and_reconstructible():
+    samples = np.stack([
+        np.full((2, 2), 10.0, dtype=np.float32),
+        np.full((2, 2), 20.0, dtype=np.float32),
+        np.full((2, 2), 40.0, dtype=np.float32),
+    ])
+    support = np.ones((2, 2), dtype=bool)
+    mlat = np.asarray([[60.0, 60.0], [70.0, 70.0]])
+    mlt = np.asarray([[0.0, 6.0], [12.0, 18.0]])
+
+    summary = summarize_wic_samples(
+        samples, support, mlat, mlt, threshold=15.0, batch_size=2
+    )
+    assert summary["medoid_index"] == 1
+    np.testing.assert_array_equal(summary["medoid"], samples[1])
+    np.testing.assert_allclose(summary["exceedance_probability"], 2 / 3)
+
+    statistics = ensemble_statistics(samples[:, None])
+    reconstructed = summarize_wic_anomaly_factor(
+        statistics["mean"][0], statistics["anomaly_factor"],
+        support, mlat, mlt, threshold=15.0, batch_size=2
+    )
+    assert reconstructed["medoid_index"] == summary["medoid_index"]
+    np.testing.assert_allclose(reconstructed["medoid"], summary["medoid"])
+    np.testing.assert_allclose(
+        reconstructed["exceedance_probability"],
+        summary["exceedance_probability"]
+    )
+
+
 def make_wic_cache(directory):
     rows = []
     for orbit, split in enumerate(("train", "validation", "test"), start=1):
@@ -599,6 +633,10 @@ def test_named_conditioning_wic_trainer_artifact(tmp_path, monkeypatch):
         np.testing.assert_array_equal(
             saved["wic_mosaic_sample_indices"], np.arange(4)
         )
+        assert saved["wic_medoid"].shape == (46, 46)
+        assert 0 <= int(saved["wic_medoid_sample_index"]) < 4
+        assert saved["wic_exceedance_probability"].shape == (46, 46)
+        assert float(saved["wic_exceedance_threshold"]) == 100.0
 
     controlled_output = tmp_path / "controlled_samples"
     controlled_cli = sampler.parse_arguments([
@@ -640,6 +678,9 @@ def test_named_conditioning_wic_trainer_artifact(tmp_path, monkeypatch):
         "fixed_conductance_conversion_kp"
     ] == 3
     assert controlled_metadata["sample_mosaic"]["saved_members"] == 4
+    assert controlled_metadata["distribution_summaries"][
+        "exceedance_threshold_counts"
+    ] == 100.0
 
     import scripts.CVAE.plot_wic_at_kp as plotter
     plotted = []
@@ -648,9 +689,16 @@ def test_named_conditioning_wic_trainer_artifact(tmp_path, monkeypatch):
         plotter, "plot_wic_sample_mosaic",
         lambda *args: plotted.append(args[5])
     )
+    monkeypatch.setattr(
+        plotter, "plot_wic_medoid", lambda *args: plotted.append(args[5])
+    )
+    monkeypatch.setattr(
+        plotter, "plot_wic_exceedance_probability",
+        lambda *args: plotted.append(args[5])
+    )
     monkeypatch.setattr(plotter, "plot_conductance", lambda *args: plotted.append(args[5]))
     assert plotter.run(plotter.parse_arguments([str(regime_output)])) == ["bz_south"]
-    assert plotted == ["Bz South", "Bz South", "Bz South"]
+    assert plotted == ["Bz South"] * 5
     plotted.clear()
     assert plotter.run(plotter.parse_arguments([str(controlled_output)])) == [
         "quiet_bz_south", "normal_bz_south"
@@ -658,8 +706,10 @@ def test_named_conditioning_wic_trainer_artifact(tmp_path, monkeypatch):
     assert plotted == [
         "Low/quiet-like; Bz South", "Low/quiet-like; Bz South",
         "Low/quiet-like; Bz South",
+        "Low/quiet-like; Bz South", "Low/quiet-like; Bz South",
         "Moderate/normal; Bz South", "Moderate/normal; Bz South",
         "Moderate/normal; Bz South",
+        "Moderate/normal; Bz South", "Moderate/normal; Bz South",
     ]
 
 
@@ -761,6 +811,10 @@ def test_one_field_disk_cache_and_training_artifact(tmp_path, monkeypatch):
         np.testing.assert_array_equal(
             saved["wic_mosaic_sample_indices"], np.arange(4)
         )
+        assert saved["wic_medoid"].shape == (46, 46)
+        assert 0 <= int(saved["wic_medoid_sample_index"]) < 4
+        assert saved["wic_exceedance_probability"].shape == (46, 46)
+        assert float(saved["wic_exceedance_threshold"]) == 100.0
         assert saved["conductance_mean"].shape == (2, 46, 46)
         assert saved["conductance_anomaly_factor"].shape == (2 * 46 * 46, 4)
         assert saved["conductance_supported"].all()
@@ -776,6 +830,9 @@ def test_one_field_disk_cache_and_training_artifact(tmp_path, monkeypatch):
     assert sampling["fang_low_energy_policy"] == "clip"
     assert sampling["fang_magnetic_field_reference_epoch"] == "2001-01-01T00:00:00"
     assert sampling["fang_magnetic_field_coordinate_mapping"] == "test mapping"
+    assert sampling["distribution_summaries"][
+        "exceedance_threshold_counts"
+    ] == 100.0
 
     variable_kp_conductance, variable_kp_physics = sampler.fang_conductance_from_wic(
         np.ones((3, 46, 46), dtype=np.float32), np.asarray([1.0, 2.0, 3.0]),
@@ -794,6 +851,12 @@ def test_one_field_disk_cache_and_training_artifact(tmp_path, monkeypatch):
     )
     np.testing.assert_allclose(reconstructed, explicit_mosaic, atol=2e-6)
     np.testing.assert_array_equal(reconstructed_indices, np.arange(4))
+    reconstructed_summary = plotter._wic_distribution_summary(
+        legacy_product, np.ones((46, 46), dtype=bool),
+        np.zeros((46, 46)), np.zeros((46, 46)), 100.0
+    )
+    assert reconstructed_summary["medoid"].shape == (46, 46)
+    assert reconstructed_summary["exceedance_probability"].shape == (46, 46)
 
     plotted = []
     monkeypatch.setattr(plotter, "plot_wic", lambda *args: plotted.append("wic"))
@@ -801,14 +864,21 @@ def test_one_field_disk_cache_and_training_artifact(tmp_path, monkeypatch):
         plotter, "plot_wic_sample_mosaic",
         lambda *args: plotted.append("mosaic")
     )
+    monkeypatch.setattr(
+        plotter, "plot_wic_medoid", lambda *args: plotted.append("medoid")
+    )
+    monkeypatch.setattr(
+        plotter, "plot_wic_exceedance_probability",
+        lambda *args: plotted.append("exceedance")
+    )
     monkeypatch.setattr(plotter, "plot_conductance", lambda *args: plotted.append("conductance"))
     plot_arguments = plotter.parse_arguments([str(sample_output)])
     assert plot_arguments.hall_vmax == 24.0
     assert plot_arguments.pedersen_vmax == 12.0
     assert plotter.run(plot_arguments) == ["kp_00_1", "kp_01_3"]
     assert plotted == [
-        "wic", "mosaic", "conductance",
-        "wic", "mosaic", "conductance",
+        "wic", "mosaic", "medoid", "exceedance", "conductance",
+        "wic", "mosaic", "medoid", "exceedance", "conductance",
     ]
 
 

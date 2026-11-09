@@ -38,6 +38,7 @@ from icanalyzer.cvae.regimes import (
     empirical_regime_masks,
     load_training_conditions,
 )
+from icanalyzer.cvae.summaries import summarize_wic_samples
 
 
 #%% Fang configuration
@@ -132,6 +133,42 @@ def plot_wic_sample_mosaic(
     figure.suptitle(f"Corrected-WIC individual realizations: {title}")
     figure.savefig(output / "wic_sample_mosaic.png", dpi=160)
     figure.savefig(output / "wic_sample_mosaic.pdf")
+    plt.close(figure)
+
+
+def plot_wic_medoid(
+    medoid, medoid_index, support, mlat, mlt, title, output, maximum
+):
+    """Plot one coherent central ensemble member."""
+
+    figure, axis = plt.subplots(figsize=(4.6, 4.2), layout="constrained")
+    values = np.where(support, medoid, np.nan)
+    contour = polar_contour(
+        axis, mlat, mlt, values, maximum,
+        f"sample {int(medoid_index) + 1}"
+    )
+    figure.colorbar(contour, ax=axis, shrink=0.72, label="corrected WIC [counts]")
+    figure.suptitle(f"Central coherent WIC realization: {title}")
+    figure.savefig(output / "wic_medoid.png", dpi=160)
+    figure.savefig(output / "wic_medoid.pdf")
+    plt.close(figure)
+
+
+def plot_wic_exceedance_probability(
+    probability, threshold, support, mlat, mlt, title, output
+):
+    """Plot the marginal probability of exceeding one fixed WIC threshold."""
+
+    figure, axis = plt.subplots(figsize=(4.8, 4.2), layout="constrained")
+    values = np.where(support, probability, np.nan)
+    contour = polar_contour(
+        axis, mlat, mlt, values, 1.0,
+        f"P(WIC exceeds {threshold:g} counts)"
+    )
+    figure.colorbar(contour, ax=axis, shrink=0.72, label="probability")
+    figure.suptitle(f"WIC exceedance probability: {title}")
+    figure.savefig(output / "wic_exceedance_probability.png", dpi=160)
+    figure.savefig(output / "wic_exceedance_probability.pdf")
     plt.close(figure)
 
 
@@ -662,6 +699,10 @@ def run(arguments):
         mosaic_count = min(36, len(wic))
         mosaic_indices = np.arange(mosaic_count, dtype=np.int32)
         mosaic_samples = wic[mosaic_indices].copy()
+        distribution_summary = summarize_wic_samples(
+            wic, support, mlat, mlt,
+            threshold=arguments.wic_exceedance_threshold
+        )
         wic_statistics = ensemble_statistics(samples)
         conductance, physics = fang_conductance_from_wic(
             wic, kp, mlt, support, fang_geometry["magnetic_field_microtesla"],
@@ -677,6 +718,20 @@ def run(arguments):
             wic_q10=wic_quantiles[0], wic_q50=wic_quantiles[1], wic_q90=wic_quantiles[2],
             wic_mosaic_samples=mosaic_samples,
             wic_mosaic_sample_indices=mosaic_indices,
+            wic_medoid=distribution_summary["medoid"],
+            wic_medoid_sample_index=distribution_summary["medoid_index"],
+            wic_medoid_feature_names=np.asarray(
+                distribution_summary["medoid_feature_names"], dtype="U40"
+            ),
+            wic_medoid_feature_values=distribution_summary[
+                "medoid_feature_values"
+            ],
+            wic_exceedance_probability=distribution_summary[
+                "exceedance_probability"
+            ],
+            wic_exceedance_threshold=distribution_summary[
+                "exceedance_threshold"
+            ],
             conductance_mean=conductance_statistics["mean"],
             conductance_anomaly_factor=conductance_statistics["anomaly_factor"],
             conductance_supported=physics["conductance_supported"],
@@ -760,6 +815,21 @@ def run(arguments):
                 "saved_members": int(mosaic_count),
                 "sample_indices_zero_based": mosaic_indices.tolist(),
             },
+            "distribution_summaries": {
+                "medoid_sample_index_zero_based": distribution_summary[
+                    "medoid_index"
+                ],
+                "medoid_method": distribution_summary["medoid_method"],
+                "medoid_feature_names": list(
+                    distribution_summary["medoid_feature_names"]
+                ),
+                "medoid_feature_values": distribution_summary[
+                    "medoid_feature_values"
+                ].tolist(),
+                "exceedance_threshold_counts": distribution_summary[
+                    "exceedance_threshold"
+                ],
+            },
             "seed": arguments.seed, "device": device, "model_sha256": model_sha,
             "model_file": str(artifact_path),
             "kp_conditioning": (
@@ -832,6 +902,17 @@ def run(arguments):
                 mosaic_samples, mosaic_indices, support, mlat, mlt,
                 selection["label"], destination, arguments.wic_vmax
             )
+            plot_wic_medoid(
+                distribution_summary["medoid"],
+                distribution_summary["medoid_index"],
+                support, mlat, mlt, selection["label"], destination,
+                arguments.wic_vmax
+            )
+            plot_wic_exceedance_probability(
+                distribution_summary["exceedance_probability"],
+                distribution_summary["exceedance_threshold"],
+                support, mlat, mlt, selection["label"], destination
+            )
             plot_conductance(
                 conductance_statistics["mean"], conductance_quantiles,
                 physics["conductance_supported"], mlat, mlt,
@@ -840,6 +921,7 @@ def run(arguments):
         selections.append(metadata)
         del samples, latent, wic, wic_quantiles, wic_statistics
         del mosaic_samples, mosaic_indices
+        del distribution_summary
         del conductance, conductance_quantiles, conductance_statistics, physics
 
     if hashlib.sha256(artifact_path.read_bytes()).hexdigest() != model_sha:
@@ -901,6 +983,7 @@ def parse_arguments(argv=None):
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--no-plots", action="store_true")
     parser.add_argument("--wic-vmax", type=float, default=1000.0)
+    parser.add_argument("--wic-exceedance-threshold", type=float, default=100.0)
     parser.add_argument("--hall-vmax", type=float, default=24.0)
     parser.add_argument("--pedersen-vmax", type=float, default=12.0)
     parser.add_argument(
@@ -926,8 +1009,13 @@ def parse_arguments(argv=None):
         not np.isfinite(arguments.controlled_tilt)
         or not np.isfinite(arguments.conversion_kp)
         or not 0 <= arguments.conversion_kp <= 9
+        or not np.isfinite(arguments.wic_exceedance_threshold)
+        or arguments.wic_exceedance_threshold < 0
     ):
-        parser.error("controlled tilt must be finite and conversion Kp must be 0--9")
+        parser.error(
+            "controlled tilt and WIC threshold must be finite and nonnegative; "
+            "conversion Kp must be 0--9"
+        )
     if arguments.regime is not None and len(set(arguments.regime)) != len(arguments.regime):
         parser.error("requested IMF regimes must be distinct")
     if arguments.sml_band is not None and len(set(arguments.sml_band)) != len(arguments.sml_band):

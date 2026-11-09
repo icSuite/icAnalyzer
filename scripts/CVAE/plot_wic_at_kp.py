@@ -8,8 +8,11 @@ from pathlib import Path
 
 import numpy as np
 
+from icanalyzer.cvae.summaries import summarize_wic_anomaly_factor
 from scripts.CVAE.sample_wic_at_kp import (
     plot_conductance,
+    plot_wic_exceedance_probability,
+    plot_wic_medoid,
     plot_wic,
     plot_wic_sample_mosaic,
 )
@@ -42,13 +45,42 @@ def _wic_mosaic_members(saved):
     return flattened.T.reshape(count, *mean.shape), indices
 
 
+def _wic_distribution_summary(saved, support, mlat, mlt, threshold):
+    """Load current summaries or derive them from a completed older ensemble."""
+
+    required = {
+        "wic_medoid", "wic_medoid_sample_index",
+        "wic_exceedance_probability", "wic_exceedance_threshold",
+    }
+    if required.issubset(saved) and np.isclose(
+        float(saved["wic_exceedance_threshold"]), threshold
+    ):
+        return {
+            "medoid": saved["wic_medoid"],
+            "medoid_index": int(saved["wic_medoid_sample_index"]),
+            "exceedance_probability": saved["wic_exceedance_probability"],
+            "exceedance_threshold": float(saved["wic_exceedance_threshold"]),
+        }
+    return summarize_wic_anomaly_factor(
+        saved["wic_mean"], saved["wic_anomaly_factor"],
+        support, mlat, mlt, threshold=threshold
+    )
+
+
 def run(arguments):
     limits = np.asarray(
-        [arguments.wic_vmax, arguments.hall_vmax, arguments.pedersen_vmax],
+        [arguments.wic_vmax, arguments.hall_vmax, arguments.pedersen_vmax,
+         arguments.wic_exceedance_threshold],
         dtype=float
     )
-    if not np.isfinite(limits).all() or np.any(limits <= 0):
-        raise ValueError("plot limits must be positive and finite")
+    if (
+        not np.isfinite(limits).all() or np.any(limits[:3] <= 0)
+        or limits[3] < 0
+    ):
+        raise ValueError(
+            "plot limits must be finite, with positive maxima and "
+            "nonnegative threshold"
+        )
     root = arguments.sample_directory.expanduser().resolve()
     summary_path = root / "sampling_summary.json"
     if not summary_path.is_file():
@@ -88,6 +120,22 @@ def run(arguments):
                 saved["wic_supported"].astype(bool), mlat, mlt,
                 title, destination, arguments.wic_vmax
             )
+            distribution_summary = _wic_distribution_summary(
+                saved, saved["wic_supported"].astype(bool), mlat, mlt,
+                arguments.wic_exceedance_threshold
+            )
+            plot_wic_medoid(
+                distribution_summary["medoid"],
+                distribution_summary["medoid_index"],
+                saved["wic_supported"].astype(bool), mlat, mlt,
+                title, destination, arguments.wic_vmax
+            )
+            plot_wic_exceedance_probability(
+                distribution_summary["exceedance_probability"],
+                distribution_summary["exceedance_threshold"],
+                saved["wic_supported"].astype(bool), mlat, mlt,
+                title, destination
+            )
             plot_conductance(
                 saved["conductance_mean"], conductance_quantiles,
                 saved["conductance_supported"].astype(bool), mlat, mlt,
@@ -103,6 +151,7 @@ def parse_arguments(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("sample_directory", type=Path)
     parser.add_argument("--wic-vmax", type=float, default=1000.0)
+    parser.add_argument("--wic-exceedance-threshold", type=float, default=100.0)
     parser.add_argument("--hall-vmax", type=float, default=24.0)
     parser.add_argument("--pedersen-vmax", type=float, default=12.0)
     return parser.parse_args(argv)
