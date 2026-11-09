@@ -1,8 +1,8 @@
-"""Prepare a disk-backed WIC-only Kp-CVAE cache.
+"""Prepare a disk-backed one-field WIC CVAE cache.
 
-The cache contains corrected WIC, its formal standard deviation, the Product-2
-auroral-quality field, Kp, exact frame provenance and either manual annotations
-or a frozen automatic-mask policy.
+The cache contains either proton-corrected or pre-proton WIC, its formal
+standard deviation, the Product-2 auroral-quality field, Kp, exact frame
+provenance and either manual annotations or a frozen automatic-mask policy.
 Preparation never trains a model and never overwrites an existing cache.
 """
 
@@ -28,6 +28,20 @@ LEGACY_WIC_CACHE_FORMAT = "automatic_wic_cache_v1"
 SUPPORTED_WIC_CACHE_FORMATS = (WIC_CACHE_FORMAT, LEGACY_WIC_CACHE_FORMAT)
 GRID_ID = "image_apex_130km_46x46_v1"
 DEFAULT_SOURCE = Path.home() / "Dropbox/work/data/IMAGE_FUV_new/precipitation_cs/image_apex_130km_46x46_v1/IR_hardy_smoothed_wic1_si121_si131"
+WIC_FIELD_MODES = {
+    "corrected": {
+        "field_name": "wic_corrected",
+        "value_field": "wic_corrected",
+        "uncertainty_field": "dwic_corrected",
+        "proton_correction_applied": True,
+    },
+    "preproton": {
+        "field_name": "wic_preproton",
+        "value_field": "wic_smoothed",
+        "uncertainty_field": "dwic_smoothed",
+        "proton_correction_applied": False,
+    },
+}
 
 
 def read_wic_cache(cache_directory):
@@ -50,13 +64,19 @@ def _source_evidence(filename, record):
         raise ValueError(f"{filename}: mask source changed; regenerate masks for this Product-2 generation")
 
 
-def _load_wic_fields(filename, product_loader=load):
+def _load_wic_fields(filename, product_loader=load, wic_field="corrected"):
     """Load and validate the fields shared by manual and automatic selection."""
 
+    field_contract = WIC_FIELD_MODES[wic_field]
+    value_field = field_contract["value_field"]
+    uncertainty_field = field_contract["uncertainty_field"]
     with product_loader(filename) as product:
         if product.product_type != "precipitation_cs" or product.grid_id != GRID_ID or tuple(product.shape[1:]) != (46, 46):
             raise ValueError(f"{filename}: expected precipitation_cs on {GRID_ID}")
-        required = ("wic_corrected", "dwic_corrected", "method_quality_weight", "wic_coverage", "Kp")
+        required = (
+            value_field, uncertainty_field,
+            "method_quality_weight", "wic_coverage", "Kp"
+        )
         missing = [name for name in required if not hasattr(product, name)]
         if missing:
             raise ValueError(f"{filename}: missing WIC-CVAE fields: {', '.join(missing)}")
@@ -65,8 +85,8 @@ def _load_wic_fields(filename, product_loader=load):
             raise ValueError(f"{filename}: ambiguous Product-2 auroral-quality orientation")
 
         time = np.asarray(product.time, dtype="datetime64[us]")
-        values = np.asarray(product.read("wic_corrected"), dtype=np.float32)
-        errors = np.asarray(product.read("dwic_corrected"), dtype=np.float32)
+        values = np.asarray(product.read(value_field), dtype=np.float32)
+        errors = np.asarray(product.read(uncertainty_field), dtype=np.float32)
         quality = np.asarray(product.read("method_quality_weight"), dtype=np.float32)
         coverage = np.asarray(product.read("wic_coverage"), dtype=np.float32)
         kp = np.asarray(product.read("Kp"), dtype=np.float32)
@@ -80,7 +100,18 @@ def _load_wic_fields(filename, product_loader=load):
             "source_preprocessing_label": str(product.attrs.get("source_preprocessing_label", "unrecorded")),
             "method_quality_weight_method": str(product.attrs["method_quality_weight_method"]),
             "proton_energy_model": str(product.attrs.get("proton_energy_model", "unrecorded")),
-            "proton_flux_source": str(product.attrs.get("proton_flux_source", "unrecorded"))
+            "proton_flux_source": str(product.attrs.get("proton_flux_source", "unrecorded")),
+            "wic_field": {
+                "mode": wic_field,
+                **field_contract,
+                "smoothing_method": str(product.attrs.get("smoothing_method", "unrecorded")),
+                "smoothing_width_pixels": float(
+                    product.attrs.get("wic_smoothing_width_pixels", 0.0)
+                ),
+                "operation_order": str(
+                    product.attrs.get("smoothing_operation_order", "unrecorded")
+                ),
+            },
         }
 
     if values.shape[1:] != (46, 46) or any(array.shape != values.shape for array in (errors, quality, coverage)):
@@ -137,7 +168,10 @@ def _apply_mask_selection(product, selection_mask, mask_evidence, annotation_cla
     return selected
 
 
-def load_masked_wic(filename, mask_directory, mask_record, product_loader=load):
+def load_masked_wic(
+    filename, mask_directory, mask_record, product_loader=load,
+    wic_field="corrected"
+):
     """Load one Product-2 orbit and intersect WIC with a frozen automatic mask."""
 
     _source_evidence(filename, mask_record)
@@ -147,17 +181,19 @@ def load_masked_wic(filename, mask_directory, mask_record, product_loader=load):
         automatic_mask = stored["mask"]
     if automatic_mask.dtype != bool or automatic_mask.shape != (mask_record["frames"], 46, 46):
         raise ValueError(f"{mask_file}: expected Boolean (frame, 46, 46) masks")
-    product = _load_wic_fields(filename, product_loader)
+    product = _load_wic_fields(filename, product_loader, wic_field)
     if not np.array_equal(product["time"], mask_time):
         raise ValueError(f"{filename}: automatic masks and Product 2 have different timestamps")
     evidence = {"kind": "automatic", "filename": str(mask_file.resolve()), "sha256": file_sha256(mask_file)}
     return _apply_mask_selection(product, automatic_mask, evidence)
 
 
-def load_annotated_wic(filename, annotations, product_loader=load):
+def load_annotated_wic(
+    filename, annotations, product_loader=load, wic_field="corrected"
+):
     """Load one Product-2 orbit and apply completed manual frame/pixel reviews."""
 
-    product = _load_wic_fields(filename, product_loader)
+    product = _load_wic_fields(filename, product_loader, wic_field)
     count = len(product["time"])
     annotation_product = {
         "values": product["values"][:, None],
@@ -259,9 +295,15 @@ def prepare(arguments, product_loader=load):
     for split_name, paths in split.items():
         for filename in paths:
             if masks is not None:
-                product = load_masked_wic(filename, masks, records[filename.stem], product_loader)
+                product = load_masked_wic(
+                    filename, masks, records[filename.stem], product_loader,
+                    arguments.wic_field
+                )
             else:
-                product = load_annotated_wic(filename, annotations, product_loader)
+                product = load_annotated_wic(
+                    filename, annotations, product_loader,
+                    arguments.wic_field
+                )
             if reference_grid is None:
                 reference_grid = product["grid"]
                 reference_metadata = product["metadata"]
@@ -329,8 +371,10 @@ def prepare(arguments, product_loader=load):
     if count == 0:
         raise ValueError("no valid training WIC pixels for normalization")
     if negative_wic_clipped_cells:
+        field_name = WIC_FIELD_MODES[arguments.wic_field]["field_name"]
         warnings.warn(
-            f"Product 2 contained {negative_wic_clipped_cells} finite negative corrected-WIC cells; clipped them to zero before log transformation",
+            f"Product 2 contained {negative_wic_clipped_cells} finite negative "
+            f"{field_name} cells; clipped them to zero before log transformation",
             RuntimeWarning, stacklevel=2
         )
     center = total / count
@@ -339,9 +383,12 @@ def prepare(arguments, product_loader=load):
         raise ValueError("training WIC log spread must be finite and positive")
     transform = ChannelTransform([1.0], [center], [spread], kind=ChannelTransform.LOG10_KIND)
     np.save(output / "training_support.npy", training_support, allow_pickle=False)
+    field_contract = WIC_FIELD_MODES[arguments.wic_field]
+    field_name = field_contract["field_name"]
     metadata = {
         "cache_format": WIC_CACHE_FORMAT, "input_product_type": "precipitation_cs",
-        "field_names": ["wic_corrected"], "field_units": ["counts"],
+        "field_names": [field_name], "field_units": ["counts"],
+        "wic_field": {"mode": arguments.wic_field, **field_contract},
         "physical_layout": {"values": [0], "standard_deviation": [1], "quality": 2},
         "source_directory": str(source),
         "mask_source": mask_source,
@@ -352,7 +399,10 @@ def prepare(arguments, product_loader=load):
         "seed": arguments.seed, "validation_fraction": arguments.validation_fraction,
         "test_fraction": arguments.test_fraction,
         "normalization_population": "positive selected-mask training frames before intrinsic missing-fraction cut; float64 log moments",
-        "input_negative_clipping": {"wic_corrected_cells": negative_wic_clipped_cells, "policy": "finite values below zero clipped to physical zero"},
+        "input_negative_clipping": {
+            f"{field_name}_cells": negative_wic_clipped_cells,
+            "policy": "finite values below zero clipped to physical zero"
+        },
         "transform": transform.to_dict(), "grid": {name: values.tolist() for name, values in reference_grid.items()},
         "grid_id": reference_metadata["grid_id"],
         "split_files": {name: [str(path) for path in paths] for name, paths in split.items()},
@@ -368,6 +418,13 @@ def prepare(arguments, product_loader=load):
 def parse_arguments(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, default=DEFAULT_SOURCE)
+    parser.add_argument(
+        "--wic-field", choices=tuple(WIC_FIELD_MODES), default="corrected",
+        help=(
+            "corrected uses SI12-proton-corrected WIC; preproton uses the "
+            "stored smoothed WIC before SI12 correction"
+        )
+    )
     selection = parser.add_mutually_exclusive_group(required=True)
     selection.add_argument("--masks", type=Path, help="exported automatic-mask directory")
     selection.add_argument("--annotations", type=Path, help="completed self-contained schema-3 manual annotation JSON")

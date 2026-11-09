@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import warnings
 
 import numpy as np
+import pytest
 import torch
 
 from icanalyzer.cvae.artifacts import (
@@ -442,7 +443,7 @@ def test_wic_distribution_summaries_are_coherent_and_reconstructible():
     )
 
 
-def make_wic_cache(directory):
+def make_wic_cache(directory, field_name="wic_corrected"):
     rows = []
     for orbit, split in enumerate(("train", "validation", "test"), start=1):
         shard = directory / f"or_{orbit:04d}"
@@ -468,7 +469,14 @@ def make_wic_cache(directory):
     transform = ChannelTransform([1], [0], [1], kind=ChannelTransform.LOG10_KIND)
     metadata = {
         "cache_format": WIC_CACHE_FORMAT, "input_product_type": "precipitation_cs",
-        "field_names": ["wic_corrected"], "field_units": ["counts"],
+        "field_names": [field_name], "field_units": ["counts"],
+        "wic_field": {
+            "mode": (
+                "corrected" if field_name == "wic_corrected" else "preproton"
+            ),
+            "field_name": field_name,
+            "proton_correction_applied": field_name == "wic_corrected",
+        },
         "transform": transform.to_dict(), "orbits": rows, "seed": 1,
         "used_frames": {name: 2 for name in ("train", "validation", "test")},
         "maximum_missing_fraction": 0.95,
@@ -882,6 +890,84 @@ def test_one_field_disk_cache_and_training_artifact(tmp_path, monkeypatch):
     ]
 
 
+def test_preproton_wic_artifact_samples_without_conductance(
+    tmp_path, monkeypatch
+):
+    cache = make_wic_cache(tmp_path / "cache", "wic_preproton")
+    import scripts.CVAE.train_wic_cvae as trainer
+
+    def skip_training(model, *args, **kwargs):
+        model.best_validation_epoch = 1
+        model.best_validation_total = 0.5
+        return model, [{"epoch": 1}]
+
+    monkeypatch.setattr(trainer, "train_vae", skip_training)
+    monkeypatch.setattr(
+        trainer, "_run_epoch",
+        lambda *args, **kwargs: {
+            "total": 1.0, "reconstruction": 0.8, "kl": 0.2
+        }
+    )
+    run_directory = tmp_path / "run"
+    trainer.run(trainer.parse_arguments([
+        str(cache), "--output", str(run_directory), "--device", "cpu",
+        "--num-workers", "0", "--latent-dim", "2",
+        "--spline-control-points", "5",
+    ]))
+    model, _transform, artifact = load_run_artifact(
+        run_directory / "wic_cvae.pt"
+    )
+    assert model.field_names == ("wic_preproton",)
+    assert artifact["data_provenance"]["conductance_conversion"].startswith(
+        "disabled"
+    )
+
+    import scripts.CVAE.sample_wic_at_kp as sampler
+    monkeypatch.setattr(
+        sampler, "fang_magnetic_field_from_apex_grid",
+        lambda *args, **kwargs: pytest.fail(
+            "pre-proton WIC must not enter Fang conversion"
+        )
+    )
+    sample_output = tmp_path / "samples"
+    selections = sampler.run(sampler.parse_arguments([
+        str(run_directory), "--kp", "1", "--output", str(sample_output),
+        "--draws", "4", "--batch-size", "2", "--device", "cpu",
+        "--no-plots",
+    ]))
+    assert not selections[0]["conductance_conversion_applied"]
+    assert selections[0]["field_names"] == ["wic_preproton"]
+    with np.load(sample_output / "kp_00_1/ensemble_products.npz") as saved:
+        assert str(saved["wic_field_name"]) == "wic_preproton"
+        assert "conductance_mean" not in saved
+        assert saved["wic_medoid"].shape == (46, 46)
+
+    import scripts.CVAE.plot_wic_at_kp as plotter
+    plotted = []
+    monkeypatch.setattr(
+        plotter, "plot_wic", lambda *args: plotted.append(args[-1])
+    )
+    monkeypatch.setattr(
+        plotter, "plot_wic_sample_mosaic",
+        lambda *args: plotted.append(args[-1])
+    )
+    monkeypatch.setattr(
+        plotter, "plot_wic_medoid", lambda *args: plotted.append(args[-1])
+    )
+    monkeypatch.setattr(
+        plotter, "plot_wic_exceedance_probability",
+        lambda *args: plotted.append(args[-1])
+    )
+    monkeypatch.setattr(
+        plotter, "plot_conductance",
+        lambda *args: pytest.fail("pre-proton products have no conductance")
+    )
+    assert plotter.run(plotter.parse_arguments([str(sample_output)])) == [
+        "kp_00_1"
+    ]
+    assert plotted == ["Pre-proton WIC"] * 4
+
+
 class FakeProduct:
     def __init__(self, arrays):
         self.product_type = "precipitation_cs"
@@ -897,7 +983,9 @@ class FakeProduct:
         self.attrs = {
             "method_quality_weight_method": "WIC auroral-quality field defined as 1 minus dgweight",
             "count_source": "background_subtracted", "source_preprocessing_label": "test",
-            "proton_energy_model": "hardy", "proton_flux_source": "SI12"
+            "proton_energy_model": "hardy", "proton_flux_source": "SI12",
+            "smoothing_method": "gaussian", "wic_smoothing_width_pixels": 1.0,
+            "smoothing_operation_order": "before SI12 proton correction",
         }
         self._arrays = arrays
         for name in arrays:
@@ -929,6 +1017,8 @@ def test_product2_wic_and_model2_mask_alignment(tmp_path):
     arrays = {
         "wic_corrected": np.ones(shape, dtype=np.float32),
         "dwic_corrected": np.full(shape, 0.2, dtype=np.float32),
+        "wic_smoothed": np.full(shape, 5.0, dtype=np.float32),
+        "dwic_smoothed": np.full(shape, 0.3, dtype=np.float32),
         "method_quality_weight": np.full(shape, 0.5, dtype=np.float32),
         "wic_coverage": np.ones(shape, dtype=np.float32),
         "Kp": np.array([1.0, 2.0], dtype=np.float32)
@@ -943,6 +1033,15 @@ def test_product2_wic_and_model2_mask_alignment(tmp_path):
     assert loaded["metadata"]["negative_wic_clipped_cells"] == 1
     assert loaded["quality"][1, 1, 1] == np.float32(0.2)
     np.testing.assert_array_equal(loaded["kp"], [1.0, 2.0])
+
+    preproton = load_masked_wic(
+        source, mask_directory, record, lambda _: FakeProduct(arrays),
+        wic_field="preproton"
+    )
+    assert np.all(preproton["values"] == 5.0)
+    assert np.all(preproton["standard_deviation"] == np.float32(0.3))
+    assert preproton["metadata"]["wic_field"]["field_name"] == "wic_preproton"
+    assert not preproton["metadata"]["wic_field"]["proton_correction_applied"]
 
 
 def test_product2_wic_manual_annotation_alignment(tmp_path, monkeypatch):

@@ -100,25 +100,29 @@ def run(arguments):
         if not product_path.is_file():
             raise FileNotFoundError(f"missing saved ensemble product: {product_path}")
         with np.load(product_path) as saved:
+            field_name = (
+                str(saved["wic_field_name"])
+                if "wic_field_name" in saved else "wic_corrected"
+            )
+            field_label = (
+                "Corrected WIC"
+                if field_name == "wic_corrected" else "Pre-proton WIC"
+            )
             mlat = saved["mlat"]
             mlt = saved["mlt"]
             wic_quantiles = np.stack(
                 [saved["wic_q10"], saved["wic_q50"], saved["wic_q90"]]
             )
-            conductance_quantiles = np.stack([
-                saved["conductance_q10"], saved["conductance_q50"],
-                saved["conductance_q90"]
-            ])
             plot_wic(
                 saved["wic_mean"], wic_quantiles,
                 saved["wic_supported"].astype(bool), mlat, mlt,
-                title, destination, arguments.wic_vmax
+                title, destination, arguments.wic_vmax, field_label
             )
             mosaic_samples, mosaic_indices = _wic_mosaic_members(saved)
             plot_wic_sample_mosaic(
                 mosaic_samples, mosaic_indices,
                 saved["wic_supported"].astype(bool), mlat, mlt,
-                title, destination, arguments.wic_vmax
+                title, destination, arguments.wic_vmax, field_label
             )
             distribution_summary = _wic_distribution_summary(
                 saved, saved["wic_supported"].astype(bool), mlat, mlt,
@@ -128,20 +132,25 @@ def run(arguments):
                 distribution_summary["medoid"],
                 distribution_summary["medoid_index"],
                 saved["wic_supported"].astype(bool), mlat, mlt,
-                title, destination, arguments.wic_vmax
+                title, destination, arguments.wic_vmax, field_label
             )
             plot_wic_exceedance_probability(
                 distribution_summary["exceedance_probability"],
                 distribution_summary["exceedance_threshold"],
                 saved["wic_supported"].astype(bool), mlat, mlt,
-                title, destination
+                title, destination, field_label
             )
-            plot_conductance(
-                saved["conductance_mean"], conductance_quantiles,
-                saved["conductance_supported"].astype(bool), mlat, mlt,
-                title, destination,
-                (arguments.hall_vmax, arguments.pedersen_vmax)
-            )
+            if "conductance_mean" in saved:
+                conductance_quantiles = np.stack([
+                    saved["conductance_q10"], saved["conductance_q50"],
+                    saved["conductance_q90"]
+                ])
+                plot_conductance(
+                    saved["conductance_mean"], conductance_quantiles,
+                    saved["conductance_supported"].astype(bool), mlat, mlt,
+                    title, destination,
+                    (arguments.hall_vmax, arguments.pedersen_vmax)
+                )
         plotted.append(destination.name)
         print(f"Plotted {destination.name}", flush=True)
     return plotted

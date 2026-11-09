@@ -37,7 +37,8 @@ Hall/Pedersen artifacts cannot silently inherit the old WIC/SI12 labels.
 
 - `prepare_wic_cvae_cache.py`: combine corrected WIC Product 2 with either
   manual annotations or an aligned automatic-mask corpus and write the
-  disk-backed cache.
+  disk-backed cache. `--wic-field preproton` instead selects the stored
+  background-subtracted, smoothed WIC before SI12 proton correction.
 - `train_wic_cvae.py`: train the one-channel WIC CVAE with historical scalar
   Kp conditioning, the full 11-feature condition vector or the reduced
   `hybrid4` profile (SML, IMF By, IMF Bz and dipole tilt).
@@ -197,6 +198,25 @@ of members exceeding 100 corrected-WIC counts at each pixel. Change that
 threshold with `--wic-exceedance-threshold`. The plot-only command derives both
 summaries from the saved mean and full anomaly factor for older completed
 ensembles, so this also requires no resampling.
+
+For the SI12-misalignment diagnostic, first regenerate precipitation CS with
+the optional `wic_smoothed`/`dwic_smoothed` fields and export a fresh automatic
+mask corpus tied to those regenerated files. Then prepare a distinct cache:
+
+```bash
+PYTHONPATH=. python scripts/CVAE/prepare_wic_cvae_cache.py \
+  --source /path/to/regenerated/precipitation_cs/image_apex_130km_46x46_v1/IR_hardy_smoothed_wic1_si121_si131 \
+  --masks /path/to/regenerated/model1_model2_masks \
+  --wic-field preproton \
+  --minimum-valid-fraction 0.05 \
+  --output /path/to/training_data/automatic_wic_preproton_model1_model2
+```
+
+Training uses the ordinary `train_wic_cvae.py` command. The artifact records
+`wic_preproton` as its modeled field. Sampling produces WIC ensemble products,
+mosaics, medoids and exceedance probabilities, but deliberately omits
+Zhang--Paxton/Fang conductance: pre-proton WIC still contains proton emissions
+and cannot be interpreted as electron-only counts.
 
 The older `--regimes CACHE CONDITIONING` mode remains available as an
 empirical-distribution diagnostic. It is not the controlled climatological

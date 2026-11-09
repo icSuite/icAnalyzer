@@ -33,7 +33,7 @@ from icanalyzer.cvae.training import (
     train_vae,
     training_device
 )
-from scripts.CVAE.prepare_wic_cvae_cache import read_wic_cache
+from scripts.CVAE.prepare_wic_cvae_cache import WIC_FIELD_MODES, read_wic_cache
 
 
 #%% Training
@@ -45,8 +45,18 @@ def run(arguments):
     if output.exists():
         raise FileExistsError("choose a new WIC-CVAE run directory; existing runs are never overwritten")
     metadata = read_wic_cache(cache)
-    if metadata.get("field_names") != ["wic_corrected"] or metadata.get("input_product_type") != "precipitation_cs":
-        raise ValueError("expected a one-field corrected-WIC Product-2 cache")
+    supported_fields = {
+        contract["field_name"] for contract in WIC_FIELD_MODES.values()
+    }
+    field_names = metadata.get("field_names")
+    if (
+        not isinstance(field_names, list) or len(field_names) != 1
+        or field_names[0] not in supported_fields
+        or metadata.get("input_product_type") != "precipitation_cs"
+    ):
+        raise ValueError("expected a supported one-field WIC Product-2 cache")
+    field_name = field_names[0]
+    proton_corrected = field_name == "wic_corrected"
     seed = metadata["seed"] if arguments.seed is None else arguments.seed
     hole_device = resolve_hole_device(arguments.hole_device, device)
 
@@ -134,7 +144,8 @@ def run(arguments):
     )}
     configuration.update({
         "seed": seed, "device": device, "input_product_type": "precipitation_cs",
-        "field_names": ["wic_corrected"], "field_units": ["counts"],
+        "field_names": [field_name], "field_units": ["counts"],
+        "wic_field": metadata.get("wic_field"),
         "dataset_backend": metadata["cache_format"],
         "maximum_missing_fraction": metadata["maximum_missing_fraction"],
         "kp_conditioning": kp_conditioning,
@@ -170,13 +181,17 @@ def run(arguments):
         "cache_manifest_sha256": metadata["manifest_sha256"],
         "mask_source": mask_source,
         "input_product_type": "precipitation_cs", "grid_id": metadata["grid_id"],
-        "grid": metadata["grid"], "field_names": ["wic_corrected"],
+        "grid": metadata["grid"], "field_names": [field_name],
         "field_units": ["counts"], "training_support": support,
         "unsupported_training_cells": int((~support).sum()),
         "products": {name: [row["product"] for row in metadata["orbits"] if row["split"] == name] for name in datasets},
         "retained_frame_kp": {name: dataset.kp.copy() for name, dataset in datasets.items() if dataset is not None},
         "conditioning": conditioning_evidence,
-        "conductance_conversion": "not applied; this artifact represents corrected WIC counts"
+        "conductance_conversion": (
+            "not applied during training; corrected WIC may be converted during sampling"
+            if proton_corrected else
+            "disabled for this artifact because pre-proton WIC includes proton emissions"
+        )
     }
     used_frames = {
         name: 0 if dataset is None else len(dataset)
@@ -197,7 +212,7 @@ def run(arguments):
         spline_control_points=arguments.spline_control_points,
         spline_degree=arguments.spline_degree, kp_conditioning=kp_conditioning,
         conditioning=named_conditioning,
-        field_names=("wic_corrected",)
+        field_names=(field_name,)
     )
     output.mkdir(parents=True)
     (output / "cache_manifest.json").write_bytes((cache / "manifest.json").read_bytes())
@@ -249,7 +264,7 @@ def run(arguments):
             "training_configuration": configuration,
             "held_out_evaluation": evaluation, "ensemble_generated": False,
             "interpretation": (
-                f"{condition_label}-conditional corrected-WIC prior; "
+                f"{condition_label}-conditional {field_name} prior; "
                 "no conductance conversion or uncertainty calibration"
             )
         }

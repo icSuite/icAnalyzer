@@ -87,22 +87,28 @@ def polar_contour(
     return contour
 
 
-def plot_wic(mean, quantiles, support, mlat, mlt, title, output, maximum):
+def plot_wic(
+    mean, quantiles, support, mlat, mlt, title, output, maximum,
+    field_label="Corrected WIC"
+):
     figure, axes = plt.subplots(1, 4, figsize=(13, 3.4), layout="constrained")
     fields = [mean, *quantiles]
     labels = ("mean", "10th percentile", "median", "90th percentile")
     for axis, values, label in zip(axes, fields, labels):
         values = np.where(support, values, np.nan)
         contour = polar_contour(axis, mlat, mlt, values, maximum, label)
-    figure.colorbar(contour, ax=axes, shrink=0.72, label="corrected WIC [counts]")
-    figure.suptitle(f"Corrected-WIC model prior: {title}; common latent seed")
+    figure.colorbar(
+        contour, ax=axes, shrink=0.72, label=f"{field_label} [counts]"
+    )
+    figure.suptitle(f"{field_label} model prior: {title}; common latent seed")
     figure.savefig(output / "wic_at_kp.png", dpi=160)
     figure.savefig(output / "wic_at_kp.pdf")
     plt.close(figure)
 
 
 def plot_wic_sample_mosaic(
-    samples, sample_indices, support, mlat, mlt, title, output, maximum
+    samples, sample_indices, support, mlat, mlt, title, output, maximum,
+    field_label="Corrected WIC"
 ):
     """Plot up to 36 coherent WIC realizations as a polar 6x6 mosaic."""
 
@@ -128,16 +134,17 @@ def plot_wic_sample_mosaic(
     for axis in flat_axes[len(samples):]:
         axis.set_axis_off()
     figure.colorbar(
-        contour, ax=axes, shrink=0.72, label="corrected WIC [counts]"
+        contour, ax=axes, shrink=0.72, label=f"{field_label} [counts]"
     )
-    figure.suptitle(f"Corrected-WIC individual realizations: {title}")
+    figure.suptitle(f"{field_label} individual realizations: {title}")
     figure.savefig(output / "wic_sample_mosaic.png", dpi=160)
     figure.savefig(output / "wic_sample_mosaic.pdf")
     plt.close(figure)
 
 
 def plot_wic_medoid(
-    medoid, medoid_index, support, mlat, mlt, title, output, maximum
+    medoid, medoid_index, support, mlat, mlt, title, output, maximum,
+    field_label="Corrected WIC"
 ):
     """Plot one coherent central ensemble member."""
 
@@ -147,15 +154,18 @@ def plot_wic_medoid(
         axis, mlat, mlt, values, maximum,
         f"sample {int(medoid_index) + 1}"
     )
-    figure.colorbar(contour, ax=axis, shrink=0.72, label="corrected WIC [counts]")
-    figure.suptitle(f"Central coherent WIC realization: {title}")
+    figure.colorbar(
+        contour, ax=axis, shrink=0.72, label=f"{field_label} [counts]"
+    )
+    figure.suptitle(f"Central coherent {field_label} realization: {title}")
     figure.savefig(output / "wic_medoid.png", dpi=160)
     figure.savefig(output / "wic_medoid.pdf")
     plt.close(figure)
 
 
 def plot_wic_exceedance_probability(
-    probability, threshold, support, mlat, mlt, title, output
+    probability, threshold, support, mlat, mlt, title, output,
+    field_label="Corrected WIC"
 ):
     """Plot the marginal probability of exceeding one fixed WIC threshold."""
 
@@ -163,10 +173,10 @@ def plot_wic_exceedance_probability(
     values = np.where(support, probability, np.nan)
     contour = polar_contour(
         axis, mlat, mlt, values, 1.0,
-        f"P(WIC exceeds {threshold:g} counts)"
+        f"P({field_label} exceeds {threshold:g} counts)"
     )
     figure.colorbar(contour, ax=axis, shrink=0.72, label="probability")
-    figure.suptitle(f"WIC exceedance probability: {title}")
+    figure.suptitle(f"{field_label} exceedance probability: {title}")
     figure.savefig(output / "wic_exceedance_probability.png", dpi=160)
     figure.savefig(output / "wic_exceedance_probability.pdf")
     plt.close(figure)
@@ -572,8 +582,18 @@ def run(arguments):
     device = ("cuda" if torch.cuda.is_available() else "cpu") if arguments.device == "auto" else arguments.device
     torch.set_num_threads(arguments.threads)
     model, transform, artifact = load_run_artifact(artifact_path, device=device)
-    if artifact.get("artifact_type") != WIC_CVAE_ARTIFACT_TYPE or tuple(model.field_names) != ("wic_corrected",):
+    supported_wic_fields = ("wic_corrected", "wic_preproton")
+    if (
+        artifact.get("artifact_type") != WIC_CVAE_ARTIFACT_TYPE
+        or len(model.field_names) != 1
+        or model.field_names[0] not in supported_wic_fields
+    ):
         raise ValueError("requires a one-field WIC-CVAE artifact")
+    field_name = model.field_names[0]
+    conductance_enabled = field_name == "wic_corrected"
+    field_label = (
+        "Corrected WIC" if conductance_enabled else "Pre-proton WIC"
+    )
     if transform.channel_count != 1:
         raise ValueError("requires a one-channel WIC transform")
     if model.conditioning is not None:
@@ -625,8 +645,11 @@ def run(arguments):
     mlt = np.asarray(provenance["grid"]["mlt"], dtype=float)
     if support.shape != tuple(model.image_shape) or mlat.shape != support.shape or mlt.shape != support.shape or not support.any():
         raise ValueError("saved WIC support and grid do not align with the model")
-    fang_geometry = fang_magnetic_field_from_apex_grid(
-        mlat, mlt, support, arguments.fang_epoch
+    fang_geometry = (
+        fang_magnetic_field_from_apex_grid(
+            mlat, mlt, support, arguments.fang_epoch
+        )
+        if conductance_enabled else None
     )
     model_sha = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
     output.mkdir(parents=True, exist_ok=True)
@@ -679,7 +702,8 @@ def run(arguments):
         destination = output / selection["directory"]
         destination.mkdir()
         print(
-            f"{selection['label']}: generating {arguments.draws} corrected-WIC fields",
+            f"{selection['label']}: generating {arguments.draws} "
+            f"{field_name} fields",
             flush=True
         )
         condition_arguments = (
@@ -693,7 +717,7 @@ def run(arguments):
         )
         wic = samples[:, 0]
         if not np.isfinite(wic[:, support]).all() or np.any(wic[:, support] < 0):
-            raise ValueError("decoder produced invalid corrected WIC on learned support")
+            raise ValueError("decoder produced invalid WIC on learned support")
         wic_quantiles = np.quantile(wic, [0.1, 0.5, 0.9], axis=0)
         wic_quantiles[:, ~support] = np.nan
         mosaic_count = min(36, len(wic))
@@ -704,15 +728,66 @@ def run(arguments):
             threshold=arguments.wic_exceedance_threshold
         )
         wic_statistics = ensemble_statistics(samples)
-        conductance, physics = fang_conductance_from_wic(
-            wic, kp, mlt, support, fang_geometry["magnetic_field_microtesla"],
-            arguments.fang_low_energy_policy, arguments.batch_size
-        )
-        conductance_quantiles = np.quantile(conductance, [0.1, 0.5, 0.9], axis=0)
-        conductance_quantiles[:, :, ~physics["conductance_supported"]] = np.nan
-        conductance_statistics = ensemble_statistics(conductance)
+        conductance_products = {}
+        if conductance_enabled:
+            conductance, physics = fang_conductance_from_wic(
+                wic, kp, mlt, support,
+                fang_geometry["magnetic_field_microtesla"],
+                arguments.fang_low_energy_policy, arguments.batch_size
+            )
+            conductance_quantiles = np.quantile(
+                conductance, [0.1, 0.5, 0.9], axis=0
+            )
+            conductance_quantiles[
+                :, :, ~physics["conductance_supported"]
+            ] = np.nan
+            conductance_statistics = ensemble_statistics(conductance)
+            conductance_products = {
+                "conductance_mean": conductance_statistics["mean"],
+                "conductance_anomaly_factor": conductance_statistics[
+                    "anomaly_factor"
+                ],
+                "conductance_supported": physics["conductance_supported"],
+                "conductance_sample_kp": sample_kp,
+                "conductance_q10": conductance_quantiles[0],
+                "conductance_q50": conductance_quantiles[1],
+                "conductance_q90": conductance_quantiles[2],
+                "electron_mean_energy": physics["electron_mean_energy"],
+                "electron_energy_structural_spread": physics[
+                    "electron_energy_structural_spread"
+                ],
+                "electron_energy_flux_per_wic_count": physics[
+                    "electron_energy_flux_per_wic_count"
+                ],
+                "electron_response_range_flag": physics[
+                    "electron_response_range_flag"
+                ],
+                "fang_within_model_domain": physics[
+                    "fang_within_model_domain"
+                ],
+                "fang_energy_clipped_low": physics["fang_energy_clipped_low"],
+                "fang_evaluated_energy": physics["fang_evaluated_energy"],
+                "physics_unique_kp": physics["unique_kp"],
+                "physics_sample_kp_index": physics["sample_kp_index"],
+                "fang_modified_apex_longitude": fang_geometry[
+                    "modified_apex_longitude"
+                ],
+                "fang_geographic_latitude_at_130km": fang_geometry[
+                    "geographic_latitude"
+                ],
+                "fang_geographic_longitude_at_130km": fang_geometry[
+                    "geographic_longitude"
+                ],
+                "fang_apex2geo_error_degrees": fang_geometry[
+                    "apex2geo_error_degrees"
+                ],
+                "fang_magnetic_field_150km_microtesla": fang_geometry[
+                    "magnetic_field_microtesla"
+                ],
+            }
         np.savez_compressed(
             destination / "ensemble_products.npz", latent_samples=latent,
+            wic_field_name=np.asarray(field_name),
             wic_mean=wic_statistics["mean"][0], wic_anomaly_factor=wic_statistics["anomaly_factor"],
             wic_supported=support, wic_sample_kp=sample_kp,
             wic_q10=wic_quantiles[0], wic_q50=wic_quantiles[1], wic_q90=wic_quantiles[2],
@@ -732,27 +807,6 @@ def run(arguments):
             wic_exceedance_threshold=distribution_summary[
                 "exceedance_threshold"
             ],
-            conductance_mean=conductance_statistics["mean"],
-            conductance_anomaly_factor=conductance_statistics["anomaly_factor"],
-            conductance_supported=physics["conductance_supported"],
-            conductance_sample_kp=sample_kp,
-            conductance_q10=conductance_quantiles[0],
-            conductance_q50=conductance_quantiles[1],
-            conductance_q90=conductance_quantiles[2],
-            electron_mean_energy=physics["electron_mean_energy"],
-            electron_energy_structural_spread=physics["electron_energy_structural_spread"],
-            electron_energy_flux_per_wic_count=physics["electron_energy_flux_per_wic_count"],
-            electron_response_range_flag=physics["electron_response_range_flag"],
-            fang_within_model_domain=physics["fang_within_model_domain"],
-            fang_energy_clipped_low=physics["fang_energy_clipped_low"],
-            fang_evaluated_energy=physics["fang_evaluated_energy"],
-            physics_unique_kp=physics["unique_kp"],
-            physics_sample_kp_index=physics["sample_kp_index"],
-            fang_modified_apex_longitude=fang_geometry["modified_apex_longitude"],
-            fang_geographic_latitude_at_130km=fang_geometry["geographic_latitude"],
-            fang_geographic_longitude_at_130km=fang_geometry["geographic_longitude"],
-            fang_apex2geo_error_degrees=fang_geometry["apex2geo_error_degrees"],
-            fang_magnetic_field_150km_microtesla=fang_geometry["magnetic_field_microtesla"],
             conditioning_feature_names=np.asarray(
                 model.conditioning["feature_names"]
                 if condition_values is not None and model.conditioning is not None
@@ -774,9 +828,16 @@ def run(arguments):
             conditioning_source_orbit=sample_orbit,
             conditioning_source_frame=sample_source_frame,
             conditioning_source_time=sample_time,
-            mlat=mlat, mlt=mlt
+            mlat=mlat, mlt=mlt,
+            **conductance_products
         )
-        if selection["mode"] == "empirical_regime":
+        if not conductance_enabled:
+            interpretation = (
+                "Pre-proton WIC prior. Electron-conductance conversion is "
+                "deliberately omitted because these counts still include proton "
+                "emissions."
+            )
+        elif selection["mode"] == "empirical_regime":
             interpretation = (
                 "Empirical-regime WIC prior propagated member-by-member to Fang "
                 "electron conductance. Unrestricted nuisance conditions are "
@@ -795,12 +856,13 @@ def run(arguments):
                 "Exact-condition WIC prior propagated member-by-member to Fang "
                 "electron conductance."
             )
-        interpretation += (
-            " The fixed reference epoch approximates frame-specific Product-3 "
-            "IGRF because this climatological artifact has no observation time. "
-            "No proton/solar-EUV contribution, WIC measurement-noise propagation, "
-            "sampled Zhang--Paxton structural spread or calibrated uncertainty claim."
-        )
+        if conductance_enabled:
+            interpretation += (
+                " The fixed reference epoch approximates frame-specific Product-3 "
+                "IGRF because this climatological artifact has no observation time. "
+                "No proton/solar-EUV contribution, WIC measurement-noise propagation, "
+                "sampled Zhang--Paxton structural spread or calibrated uncertainty claim."
+            )
         metadata = {
             "label": selection["label"],
             "Kp": None if selection["mode"] == "empirical_regime" else kp,
@@ -847,7 +909,7 @@ def run(arguments):
                 {
                     "method": "uniform empirical training-row resampling with replacement",
                     "seed": condition_seed,
-                    "sample_specific_kp_used_for_conductance": True,
+                    "sample_specific_kp_used_for_conductance": conductance_enabled,
                     "condition_summary": _condition_summary(
                         full_condition_values, standard_clock
                     ),
@@ -857,7 +919,9 @@ def run(arguments):
                     "method": "independent uniform designed-condition sampling",
                     "seed": condition_seed,
                     "sample_specific_kp_used_for_conductance": False,
-                    "fixed_conductance_conversion_kp": float(kp),
+                    "fixed_conductance_conversion_kp": (
+                        float(kp) if conductance_enabled else None
+                    ),
                     "condition_summary": _controlled_condition_summary(
                         condition_values,
                         model.conditioning["feature_names"],
@@ -868,80 +932,116 @@ def run(arguments):
             ),
             "outside_training_columns": selection["outside_training_columns"],
             "grid_id": provenance["grid_id"], "supported_cells": int(support.sum()),
-            "conductance_supported_cells": int(physics["conductance_supported"].sum()),
-            "field_names": ["wic_corrected", "Hall", "Pedersen"],
-            "field_units": ["counts", "S", "S"],
-            "electron_energy_model": "flux-weighted collapsed Zhang--Paxton over 50--90 degrees MLAT",
-            "electron_conductance_model": "Fang 2025 electron-impact Hall/Pedersen",
-            "fang_model_doi": FANG_2025_MODEL_DOI,
-            "fang_published_energy_range_keV": list(FANG_2025_ENERGY_RANGE_KEV),
-            "fang_low_energy_policy": arguments.fang_low_energy_policy,
-            "fang_magnetic_field_model": fang_geometry["magnetic_field_model"],
-            "fang_magnetic_field_package_version": fang_geometry["magnetic_field_package_version"],
-            "fang_magnetic_field_coefficients_sha256": fang_geometry["magnetic_field_coefficients_sha256"],
-            "fang_magnetic_field_reference_epoch": fang_geometry["epoch"],
-            "fang_magnetic_field_epoch_policy": (
-                FANG_REFERENCE_EPOCH_POLICY if arguments.fang_epoch == FANG_REFERENCE_EPOCH
-                else "user-specified fixed reference epoch"
+            "conductance_conversion_applied": conductance_enabled,
+            "conductance_supported_cells": (
+                int(physics["conductance_supported"].sum())
+                if conductance_enabled else None
             ),
-            "fang_product_reference_height_km": fang_geometry["reference_height_km"],
-            "fang_magnetic_field_height_km": fang_geometry["field_height_km"],
-            "fang_magnetic_field_coordinate_mapping": fang_geometry["coordinate_mapping"],
-            "fang_magnetic_field_uncertainty_method": "not modelled; magnetic_field_std=0",
-            "conductance_field_order": ["Hall", "Pedersen"],
+            "field_names": (
+                [field_name, "Hall", "Pedersen"]
+                if conductance_enabled else [field_name]
+            ),
+            "field_units": (
+                ["counts", "S", "S"] if conductance_enabled else ["counts"]
+            ),
             "directory": destination.name,
             "interpretation": interpretation
         }
+        if conductance_enabled:
+            metadata.update({
+                "electron_energy_model": "flux-weighted collapsed Zhang--Paxton over 50--90 degrees MLAT",
+                "electron_conductance_model": "Fang 2025 electron-impact Hall/Pedersen",
+                "fang_model_doi": FANG_2025_MODEL_DOI,
+                "fang_published_energy_range_keV": list(FANG_2025_ENERGY_RANGE_KEV),
+                "fang_low_energy_policy": arguments.fang_low_energy_policy,
+                "fang_magnetic_field_model": fang_geometry["magnetic_field_model"],
+                "fang_magnetic_field_package_version": fang_geometry["magnetic_field_package_version"],
+                "fang_magnetic_field_coefficients_sha256": fang_geometry["magnetic_field_coefficients_sha256"],
+                "fang_magnetic_field_reference_epoch": fang_geometry["epoch"],
+                "fang_magnetic_field_epoch_policy": (
+                    FANG_REFERENCE_EPOCH_POLICY
+                    if arguments.fang_epoch == FANG_REFERENCE_EPOCH
+                    else "user-specified fixed reference epoch"
+                ),
+                "fang_product_reference_height_km": fang_geometry[
+                    "reference_height_km"
+                ],
+                "fang_magnetic_field_height_km": fang_geometry[
+                    "field_height_km"
+                ],
+                "fang_magnetic_field_coordinate_mapping": fang_geometry[
+                    "coordinate_mapping"
+                ],
+                "fang_magnetic_field_uncertainty_method": (
+                    "not modelled; magnetic_field_std=0"
+                ),
+                "conductance_field_order": ["Hall", "Pedersen"],
+            })
         (destination / "sampling.json").write_text(json.dumps(metadata, indent=2) + "\n")
         if not arguments.no_plots:
             plot_wic(
                 wic_statistics["mean"][0], wic_quantiles, support, mlat, mlt,
-                selection["label"], destination, arguments.wic_vmax
+                selection["label"], destination, arguments.wic_vmax,
+                field_label
             )
             plot_wic_sample_mosaic(
                 mosaic_samples, mosaic_indices, support, mlat, mlt,
-                selection["label"], destination, arguments.wic_vmax
+                selection["label"], destination, arguments.wic_vmax,
+                field_label
             )
             plot_wic_medoid(
                 distribution_summary["medoid"],
                 distribution_summary["medoid_index"],
                 support, mlat, mlt, selection["label"], destination,
-                arguments.wic_vmax
+                arguments.wic_vmax, field_label
             )
             plot_wic_exceedance_probability(
                 distribution_summary["exceedance_probability"],
                 distribution_summary["exceedance_threshold"],
-                support, mlat, mlt, selection["label"], destination
+                support, mlat, mlt, selection["label"], destination,
+                field_label
             )
-            plot_conductance(
-                conductance_statistics["mean"], conductance_quantiles,
-                physics["conductance_supported"], mlat, mlt,
-                selection["label"], destination, limits
-            )
+            if conductance_enabled:
+                plot_conductance(
+                    conductance_statistics["mean"], conductance_quantiles,
+                    physics["conductance_supported"], mlat, mlt,
+                    selection["label"], destination, limits
+                )
         selections.append(metadata)
         del samples, latent, wic, wic_quantiles, wic_statistics
         del mosaic_samples, mosaic_indices
         del distribution_summary
-        del conductance, conductance_quantiles, conductance_statistics, physics
+        if conductance_enabled:
+            del conductance, conductance_quantiles
+            del conductance_statistics, physics
 
     if hashlib.sha256(artifact_path.read_bytes()).hexdigest() != model_sha:
         raise RuntimeError("source WIC model changed during sampling")
     first_regime = selections[0].get("conditioning_regime") or {}
     controlled = first_regime.get("design") == "independent uniform conditions"
-    comparison_policy = (
-        "identical latent seed and identical uniform-rank condition draws for "
-        "every controlled IMF/SML group; SML and IMF are sampled independently, "
-        "dipole tilt and conductance-conversion Kp are fixed, and no empirical "
-        "condition-row distribution is used"
-        if controlled else
-        "identical latent seed for every requested condition or regime; empirical "
-        "regimes resample actual training condition rows and each WIC draw is "
-        "propagated with its own Kp through collapsed Zhang--Paxton and Fang before "
-        "conductance statistics"
-    )
+    if controlled:
+        comparison_policy = (
+            "identical latent seed and identical uniform-rank condition draws for "
+            "every controlled IMF/SML group; SML and IMF are sampled independently, "
+            "dipole tilt is fixed, and no empirical condition-row distribution is used"
+        )
+    elif conductance_enabled:
+        comparison_policy = (
+            "identical latent seed for every requested condition or regime; empirical "
+            "regimes resample actual training condition rows and each WIC draw is "
+            "propagated with its own Kp through collapsed Zhang--Paxton and Fang before "
+            "conductance statistics"
+        )
+    else:
+        comparison_policy = (
+            "identical latent seed for every requested condition or regime; "
+            "pre-proton WIC is summarized without electron-conductance conversion"
+        )
     summary = {
         "selections": selections,
         "comparison_policy": comparison_policy,
+        "wic_field_name": field_name,
+        "conductance_conversion_applied": conductance_enabled,
     }
     (output / "sampling_summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     return selections

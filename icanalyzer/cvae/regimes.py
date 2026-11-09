@@ -202,7 +202,9 @@ def load_training_conditions(cache_directory, conditioning_directory):
     conditioning_directory = Path(conditioning_directory).expanduser().resolve()
     cache_manifest_path = cache_directory / "manifest.json"
     cache_manifest = json.loads(cache_manifest_path.read_text())
-    if cache_manifest.get("field_names") != ["wic_corrected"]:
+    if cache_manifest.get("field_names") not in (
+        ["wic_corrected"], ["wic_preproton"]
+    ):
         raise ValueError("expected a one-field WIC CVAE cache")
     dataset = AutomaticFieldDataset(
         cache_directory, "train", include_uncertainty=False,
