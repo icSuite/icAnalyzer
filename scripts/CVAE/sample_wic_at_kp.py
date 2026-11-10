@@ -1,4 +1,4 @@
-"""Generate conditional WIC-CVAE and Zhang--Paxton/Fang ensembles."""
+"""Generate conditional WIC or paired WIC/SI12 CVAE ensembles."""
 
 #%% Imports
 
@@ -89,7 +89,7 @@ def polar_contour(
 
 def plot_wic(
     mean, quantiles, support, mlat, mlt, title, output, maximum,
-    field_label="Corrected WIC"
+    field_label="Corrected WIC", file_prefix="wic"
 ):
     figure, axes = plt.subplots(1, 4, figsize=(13, 3.4), layout="constrained")
     fields = [mean, *quantiles]
@@ -101,16 +101,16 @@ def plot_wic(
         contour, ax=axes, shrink=0.72, label=f"{field_label} [counts]"
     )
     figure.suptitle(f"{field_label} model prior: {title}; common latent seed")
-    figure.savefig(output / "wic_at_kp.png", dpi=160)
-    figure.savefig(output / "wic_at_kp.pdf")
+    figure.savefig(output / f"{file_prefix}_at_kp.png", dpi=160)
+    figure.savefig(output / f"{file_prefix}_at_kp.pdf")
     plt.close(figure)
 
 
 def plot_wic_sample_mosaic(
     samples, sample_indices, support, mlat, mlt, title, output, maximum,
-    field_label="Corrected WIC"
+    field_label="Corrected WIC", file_prefix="wic"
 ):
-    """Plot up to 36 coherent WIC realizations as a polar 6x6 mosaic."""
+    """Plot up to 36 coherent sensor realizations as a polar 6x6 mosaic."""
 
     samples = np.asarray(samples, dtype=float)
     sample_indices = np.asarray(sample_indices, dtype=int)
@@ -119,7 +119,7 @@ def plot_wic_sample_mosaic(
         or len(samples) < 1 or len(samples) > 36
         or sample_indices.shape != (len(samples),)
     ):
-        raise ValueError("WIC mosaic needs 1--36 indexed fields on the saved grid")
+        raise ValueError("sensor mosaic needs 1--36 indexed fields on the saved grid")
     figure, axes = plt.subplots(
         6, 6, figsize=(12, 12), layout="constrained"
     )
@@ -137,14 +137,14 @@ def plot_wic_sample_mosaic(
         contour, ax=axes, shrink=0.72, label=f"{field_label} [counts]"
     )
     figure.suptitle(f"{field_label} individual realizations: {title}")
-    figure.savefig(output / "wic_sample_mosaic.png", dpi=160)
-    figure.savefig(output / "wic_sample_mosaic.pdf")
+    figure.savefig(output / f"{file_prefix}_sample_mosaic.png", dpi=160)
+    figure.savefig(output / f"{file_prefix}_sample_mosaic.pdf")
     plt.close(figure)
 
 
 def plot_wic_medoid(
     medoid, medoid_index, support, mlat, mlt, title, output, maximum,
-    field_label="Corrected WIC"
+    field_label="Corrected WIC", file_prefix="wic"
 ):
     """Plot one coherent central ensemble member."""
 
@@ -158,16 +158,16 @@ def plot_wic_medoid(
         contour, ax=axis, shrink=0.72, label=f"{field_label} [counts]"
     )
     figure.suptitle(f"Central coherent {field_label} realization: {title}")
-    figure.savefig(output / "wic_medoid.png", dpi=160)
-    figure.savefig(output / "wic_medoid.pdf")
+    figure.savefig(output / f"{file_prefix}_medoid.png", dpi=160)
+    figure.savefig(output / f"{file_prefix}_medoid.pdf")
     plt.close(figure)
 
 
 def plot_wic_exceedance_probability(
     probability, threshold, support, mlat, mlt, title, output,
-    field_label="Corrected WIC"
+    field_label="Corrected WIC", file_prefix="wic"
 ):
-    """Plot the marginal probability of exceeding one fixed WIC threshold."""
+    """Plot the marginal probability of exceeding one sensor threshold."""
 
     figure, axis = plt.subplots(figsize=(4.8, 4.2), layout="constrained")
     values = np.where(support, probability, np.nan)
@@ -177,8 +177,10 @@ def plot_wic_exceedance_probability(
     )
     figure.colorbar(contour, ax=axis, shrink=0.72, label="probability")
     figure.suptitle(f"{field_label} exceedance probability: {title}")
-    figure.savefig(output / "wic_exceedance_probability.png", dpi=160)
-    figure.savefig(output / "wic_exceedance_probability.pdf")
+    figure.savefig(
+        output / f"{file_prefix}_exceedance_probability.png", dpi=160
+    )
+    figure.savefig(output / f"{file_prefix}_exceedance_probability.pdf")
     plt.close(figure)
 
 
@@ -569,8 +571,27 @@ def _controlled_condition_summary(matrix, feature_names, standard_clock, kp):
 
 def run(arguments):
     limits = np.asarray((arguments.hall_vmax, arguments.pedersen_vmax), dtype=float)
-    if arguments.draws < 2 or arguments.threads < 1 or not np.isfinite(arguments.wic_vmax) or arguments.wic_vmax <= 0:
-        raise ValueError("need at least two draws, positive threads and a positive WIC display limit")
+    sensor_limits = np.asarray(
+        (arguments.wic_vmax, arguments.si12_vmax), dtype=float
+    )
+    sensor_thresholds = np.asarray(
+        (
+            arguments.wic_exceedance_threshold,
+            arguments.si12_exceedance_threshold,
+        ),
+        dtype=float,
+    )
+    if (
+        arguments.draws < 2 or arguments.threads < 1
+        or not np.isfinite(sensor_limits).all()
+        or np.any(sensor_limits <= 0)
+        or not np.isfinite(sensor_thresholds).all()
+        or np.any(sensor_thresholds < 0)
+    ):
+        raise ValueError(
+            "need at least two draws, positive threads, positive sensor "
+            "display limits and nonnegative sensor thresholds"
+        )
     if not np.isfinite(limits).all() or np.any(limits <= 0):
         raise ValueError("conductance display limits must be finite and positive")
 
@@ -582,20 +603,25 @@ def run(arguments):
     device = ("cuda" if torch.cuda.is_available() else "cpu") if arguments.device == "auto" else arguments.device
     torch.set_num_threads(arguments.threads)
     model, transform, artifact = load_run_artifact(artifact_path, device=device)
-    supported_wic_fields = ("wic_corrected", "wic_preproton")
+    field_names = tuple(model.field_names)
+    one_field = field_names in (
+        ("wic_corrected",), ("wic_preproton",)
+    )
+    paired = field_names == ("wic_corrected", "si12")
     if (
         artifact.get("artifact_type") != WIC_CVAE_ARTIFACT_TYPE
-        or len(model.field_names) != 1
-        or model.field_names[0] not in supported_wic_fields
+        or not (one_field or paired)
     ):
-        raise ValueError("requires a one-field WIC-CVAE artifact")
-    field_name = model.field_names[0]
+        raise ValueError(
+            "requires a supported WIC or paired WIC/SI12 CVAE artifact"
+        )
+    field_name = field_names[0]
     conductance_enabled = field_name == "wic_corrected"
     field_label = (
         "Corrected WIC" if conductance_enabled else "Pre-proton WIC"
     )
-    if transform.channel_count != 1:
-        raise ValueError("requires a one-channel WIC transform")
+    if transform.channel_count != len(field_names):
+        raise ValueError("model fields and sensor transform do not align")
     if model.conditioning is not None:
         if arguments.controlled_regimes:
             names = REGIME_NAMES if arguments.regime is None else arguments.regime
@@ -643,11 +669,21 @@ def run(arguments):
     support = np.asarray(provenance["training_support"], dtype=bool)
     mlat = np.asarray(provenance["grid"]["mlat"], dtype=float)
     mlt = np.asarray(provenance["grid"]["mlt"], dtype=float)
-    if support.shape != tuple(model.image_shape) or mlat.shape != support.shape or mlt.shape != support.shape or not support.any():
-        raise ValueError("saved WIC support and grid do not align with the model")
+    grid_shape = tuple(model.image_shape)
+    expected_support_shape = (2, *grid_shape) if paired else grid_shape
+    if (
+        support.shape != expected_support_shape
+        or mlat.shape != grid_shape or mlt.shape != grid_shape
+    ):
+        raise ValueError("saved sensor support and grid do not align with the model")
+    sensor_support = support if paired else support[None]
+    if not np.all(sensor_support.reshape(len(field_names), -1).any(axis=1)):
+        raise ValueError("every modeled sensor needs nonempty learned support")
+    wic_support = sensor_support[0]
+    si12_support = sensor_support[1] if paired else None
     fang_geometry = (
         fang_magnetic_field_from_apex_grid(
-            mlat, mlt, support, arguments.fang_epoch
+            mlat, mlt, wic_support, arguments.fang_epoch
         )
         if conductance_enabled else None
     )
@@ -703,7 +739,7 @@ def run(arguments):
         destination.mkdir()
         print(
             f"{selection['label']}: generating {arguments.draws} "
-            f"{field_name} fields",
+            f"{'/'.join(field_names)} fields",
             flush=True
         )
         condition_arguments = (
@@ -713,25 +749,93 @@ def run(arguments):
         samples, latent = sample_decoded_ensemble(
             model, transform, arguments.draws, batch_size=arguments.batch_size,
             device=device, seed=arguments.seed, return_latent=True,
-            support_mask=support, **condition_arguments
+            support_mask=sensor_support, **condition_arguments
         )
         wic = samples[:, 0]
-        if not np.isfinite(wic[:, support]).all() or np.any(wic[:, support] < 0):
+        if (
+            not np.isfinite(wic[:, wic_support]).all()
+            or np.any(wic[:, wic_support] < 0)
+        ):
             raise ValueError("decoder produced invalid WIC on learned support")
         wic_quantiles = np.quantile(wic, [0.1, 0.5, 0.9], axis=0)
-        wic_quantiles[:, ~support] = np.nan
+        wic_quantiles[:, ~wic_support] = np.nan
         mosaic_count = min(36, len(wic))
         mosaic_indices = np.arange(mosaic_count, dtype=np.int32)
         mosaic_samples = wic[mosaic_indices].copy()
         distribution_summary = summarize_wic_samples(
-            wic, support, mlat, mlt,
+            wic, wic_support, mlat, mlt,
             threshold=arguments.wic_exceedance_threshold
         )
-        wic_statistics = ensemble_statistics(samples)
+        sensor_statistics = ensemble_statistics(samples)
+        cell_count = int(np.prod(model.image_shape))
+        wic_statistics = {
+            "mean": sensor_statistics["mean"][0],
+            "anomaly_factor": sensor_statistics["anomaly_factor"][:cell_count],
+        }
+        si12_products = {}
+        si12_statistics = None
+        si12_quantiles = None
+        si12_mosaic_samples = None
+        si12_distribution_summary = None
+        if paired:
+            si12 = samples[:, 1]
+            if (
+                not np.isfinite(si12[:, si12_support]).all()
+                or np.any(si12[:, si12_support] < 0)
+            ):
+                raise ValueError(
+                    "decoder produced invalid SI12 on learned support"
+                )
+            si12_quantiles = np.quantile(si12, [0.1, 0.5, 0.9], axis=0)
+            si12_quantiles[:, ~si12_support] = np.nan
+            si12_mosaic_samples = si12[mosaic_indices].copy()
+            si12_distribution_summary = summarize_wic_samples(
+                si12, si12_support, mlat, mlt,
+                threshold=arguments.si12_exceedance_threshold
+            )
+            si12_feature_names = tuple(
+                name.replace("wic", "si12")
+                for name in si12_distribution_summary[
+                    "medoid_feature_names"
+                ]
+            )
+            si12_statistics = {
+                "mean": sensor_statistics["mean"][1],
+                "anomaly_factor": sensor_statistics["anomaly_factor"][
+                    cell_count:2 * cell_count
+                ],
+            }
+            si12_products = {
+                "si12_mean": si12_statistics["mean"],
+                "si12_anomaly_factor": si12_statistics["anomaly_factor"],
+                "si12_supported": si12_support,
+                "si12_sample_kp": sample_kp,
+                "si12_q10": si12_quantiles[0],
+                "si12_q50": si12_quantiles[1],
+                "si12_q90": si12_quantiles[2],
+                "si12_mosaic_samples": si12_mosaic_samples,
+                "si12_mosaic_sample_indices": mosaic_indices,
+                "si12_medoid": si12_distribution_summary["medoid"],
+                "si12_medoid_sample_index": si12_distribution_summary[
+                    "medoid_index"
+                ],
+                "si12_medoid_feature_names": np.asarray(
+                    si12_feature_names, dtype="U40"
+                ),
+                "si12_medoid_feature_values": si12_distribution_summary[
+                    "medoid_feature_values"
+                ],
+                "si12_exceedance_probability": si12_distribution_summary[
+                    "exceedance_probability"
+                ],
+                "si12_exceedance_threshold": si12_distribution_summary[
+                    "exceedance_threshold"
+                ],
+            }
         conductance_products = {}
         if conductance_enabled:
             conductance, physics = fang_conductance_from_wic(
-                wic, kp, mlt, support,
+                wic, kp, mlt, wic_support,
                 fang_geometry["magnetic_field_microtesla"],
                 arguments.fang_low_energy_policy, arguments.batch_size
             )
@@ -787,9 +891,11 @@ def run(arguments):
             }
         np.savez_compressed(
             destination / "ensemble_products.npz", latent_samples=latent,
+            model_field_names=np.asarray(field_names, dtype="U32"),
             wic_field_name=np.asarray(field_name),
-            wic_mean=wic_statistics["mean"][0], wic_anomaly_factor=wic_statistics["anomaly_factor"],
-            wic_supported=support, wic_sample_kp=sample_kp,
+            wic_mean=wic_statistics["mean"],
+            wic_anomaly_factor=wic_statistics["anomaly_factor"],
+            wic_supported=wic_support, wic_sample_kp=sample_kp,
             wic_q10=wic_quantiles[0], wic_q50=wic_quantiles[1], wic_q90=wic_quantiles[2],
             wic_mosaic_samples=mosaic_samples,
             wic_mosaic_sample_indices=mosaic_indices,
@@ -829,9 +935,17 @@ def run(arguments):
             conditioning_source_frame=sample_source_frame,
             conditioning_source_time=sample_time,
             mlat=mlat, mlt=mlt,
+            **si12_products,
             **conductance_products
         )
-        if not conductance_enabled:
+        if paired:
+            interpretation = (
+                "Joint corrected-WIC/SI12 prior sampled with one shared latent "
+                "vector per paired member. Corrected WIC is propagated to Fang "
+                "electron conductance; SI12 is retained as a proton-emission "
+                "proxy without proton-conductance conversion."
+            )
+        elif not conductance_enabled:
             interpretation = (
                 "Pre-proton WIC prior. Electron-conductance conversion is "
                 "deliberately omitted because these counts still include proton "
@@ -860,7 +974,7 @@ def run(arguments):
             interpretation += (
                 " The fixed reference epoch approximates frame-specific Product-3 "
                 "IGRF because this climatological artifact has no observation time. "
-                "No proton/solar-EUV contribution, WIC measurement-noise propagation, "
+                "No proton-conductance or solar-EUV contribution, WIC measurement-noise propagation, "
                 "sampled Zhang--Paxton structural spread or calibrated uncertainty claim."
             )
         metadata = {
@@ -873,7 +987,10 @@ def run(arguments):
             },
             "within_training_range": bool(within_range), "draws": arguments.draws,
             "sample_mosaic": {
-                "selection": "first 36 paired ensemble members",
+                "selection": (
+                    "first 36 joint WIC/SI12 ensemble members"
+                    if paired else "first 36 ensemble members"
+                ),
                 "saved_members": int(mosaic_count),
                 "sample_indices_zero_based": mosaic_indices.tolist(),
             },
@@ -891,6 +1008,28 @@ def run(arguments):
                 "exceedance_threshold_counts": distribution_summary[
                     "exceedance_threshold"
                 ],
+                "si12": (
+                    {
+                        "medoid_sample_index_zero_based": (
+                            si12_distribution_summary["medoid_index"]
+                        ),
+                        "medoid_method": si12_distribution_summary[
+                            "medoid_method"
+                        ],
+                        "medoid_feature_names": list(
+                            si12_feature_names
+                        ),
+                        "medoid_feature_values": si12_distribution_summary[
+                            "medoid_feature_values"
+                        ].tolist(),
+                        "exceedance_threshold_counts": (
+                            si12_distribution_summary[
+                                "exceedance_threshold"
+                            ]
+                        ),
+                    }
+                    if paired else None
+                ),
             },
             "seed": arguments.seed, "device": device, "model_sha256": model_sha,
             "model_file": str(artifact_path),
@@ -931,18 +1070,44 @@ def run(arguments):
                 if selection["mode"] == "controlled_regime" else None
             ),
             "outside_training_columns": selection["outside_training_columns"],
-            "grid_id": provenance["grid_id"], "supported_cells": int(support.sum()),
+            "grid_id": provenance["grid_id"],
+            "supported_cells": int(wic_support.sum()),
+            "sensor_supported_cells": {
+                name: int(current_support.sum())
+                for name, current_support in zip(
+                    field_names, sensor_support
+                )
+            },
+            "paired_sensor_samples": paired,
+            "sensor_pairing": (
+                {
+                    "member_identity": (
+                        "same latent vector and conditioning row for corrected "
+                        "WIC and SI12"
+                    ),
+                    "anomaly_factor_alignment": (
+                        "wic_anomaly_factor and si12_anomaly_factor columns "
+                        "refer to the same ensemble members"
+                    ),
+                    "mosaic_alignment": (
+                        "WIC and SI12 mosaics use identical zero-based sample indices"
+                    ),
+                }
+                if paired else None
+            ),
             "conductance_conversion_applied": conductance_enabled,
+            "proton_conductance_conversion_applied": False,
             "conductance_supported_cells": (
                 int(physics["conductance_supported"].sum())
                 if conductance_enabled else None
             ),
             "field_names": (
-                [field_name, "Hall", "Pedersen"]
-                if conductance_enabled else [field_name]
+                [*field_names, "Hall", "Pedersen"]
+                if conductance_enabled else list(field_names)
             ),
             "field_units": (
-                ["counts", "S", "S"] if conductance_enabled else ["counts"]
+                [*["counts"] * len(field_names), "S", "S"]
+                if conductance_enabled else ["counts"] * len(field_names)
             ),
             "directory": destination.name,
             "interpretation": interpretation
@@ -980,27 +1145,50 @@ def run(arguments):
         (destination / "sampling.json").write_text(json.dumps(metadata, indent=2) + "\n")
         if not arguments.no_plots:
             plot_wic(
-                wic_statistics["mean"][0], wic_quantiles, support, mlat, mlt,
+                wic_statistics["mean"], wic_quantiles, wic_support, mlat, mlt,
                 selection["label"], destination, arguments.wic_vmax,
                 field_label
             )
             plot_wic_sample_mosaic(
-                mosaic_samples, mosaic_indices, support, mlat, mlt,
+                mosaic_samples, mosaic_indices, wic_support, mlat, mlt,
                 selection["label"], destination, arguments.wic_vmax,
                 field_label
             )
             plot_wic_medoid(
                 distribution_summary["medoid"],
                 distribution_summary["medoid_index"],
-                support, mlat, mlt, selection["label"], destination,
+                wic_support, mlat, mlt, selection["label"], destination,
                 arguments.wic_vmax, field_label
             )
             plot_wic_exceedance_probability(
                 distribution_summary["exceedance_probability"],
                 distribution_summary["exceedance_threshold"],
-                support, mlat, mlt, selection["label"], destination,
+                wic_support, mlat, mlt, selection["label"], destination,
                 field_label
             )
+            if paired:
+                plot_wic(
+                    si12_statistics["mean"], si12_quantiles, si12_support,
+                    mlat, mlt, selection["label"], destination,
+                    arguments.si12_vmax, "SI12", "si12"
+                )
+                plot_wic_sample_mosaic(
+                    si12_mosaic_samples, mosaic_indices, si12_support,
+                    mlat, mlt, selection["label"], destination,
+                    arguments.si12_vmax, "SI12", "si12"
+                )
+                plot_wic_medoid(
+                    si12_distribution_summary["medoid"],
+                    si12_distribution_summary["medoid_index"],
+                    si12_support, mlat, mlt, selection["label"],
+                    destination, arguments.si12_vmax, "SI12", "si12"
+                )
+                plot_wic_exceedance_probability(
+                    si12_distribution_summary["exceedance_probability"],
+                    si12_distribution_summary["exceedance_threshold"],
+                    si12_support, mlat, mlt, selection["label"],
+                    destination, "SI12", "si12"
+                )
             if conductance_enabled:
                 plot_conductance(
                     conductance_statistics["mean"], conductance_quantiles,
@@ -1009,11 +1197,16 @@ def run(arguments):
                 )
         selections.append(metadata)
         del samples, latent, wic, wic_quantiles, wic_statistics
+        del sensor_statistics
         del mosaic_samples, mosaic_indices
         del distribution_summary
+        if paired:
+            del si12, si12_quantiles, si12_statistics
+            del si12_mosaic_samples, si12_distribution_summary
         if conductance_enabled:
             del conductance, conductance_quantiles
             del conductance_statistics, physics
+        del si12_products, conductance_products
 
     if hashlib.sha256(artifact_path.read_bytes()).hexdigest() != model_sha:
         raise RuntimeError("source WIC model changed during sampling")
@@ -1028,9 +1221,10 @@ def run(arguments):
     elif conductance_enabled:
         comparison_policy = (
             "identical latent seed for every requested condition or regime; empirical "
-            "regimes resample actual training condition rows and each WIC draw is "
+            "regimes resample actual training condition rows and each corrected-WIC draw is "
             "propagated with its own Kp through collapsed Zhang--Paxton and Fang before "
-            "conductance statistics"
+            "conductance statistics; paired models retain the matching SI12 draw "
+            "from the same latent vector"
         )
     else:
         comparison_policy = (
@@ -1040,8 +1234,11 @@ def run(arguments):
     summary = {
         "selections": selections,
         "comparison_policy": comparison_policy,
+        "model_field_names": list(field_names),
         "wic_field_name": field_name,
+        "paired_sensor_samples": paired,
         "conductance_conversion_applied": conductance_enabled,
+        "proton_conductance_conversion_applied": False,
     }
     (output / "sampling_summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     return selections
@@ -1084,6 +1281,8 @@ def parse_arguments(argv=None):
     parser.add_argument("--no-plots", action="store_true")
     parser.add_argument("--wic-vmax", type=float, default=1000.0)
     parser.add_argument("--wic-exceedance-threshold", type=float, default=100.0)
+    parser.add_argument("--si12-vmax", type=float, default=50.0)
+    parser.add_argument("--si12-exceedance-threshold", type=float, default=10.0)
     parser.add_argument("--hall-vmax", type=float, default=24.0)
     parser.add_argument("--pedersen-vmax", type=float, default=12.0)
     parser.add_argument(
@@ -1111,9 +1310,11 @@ def parse_arguments(argv=None):
         or not 0 <= arguments.conversion_kp <= 9
         or not np.isfinite(arguments.wic_exceedance_threshold)
         or arguments.wic_exceedance_threshold < 0
+        or not np.isfinite(arguments.si12_exceedance_threshold)
+        or arguments.si12_exceedance_threshold < 0
     ):
         parser.error(
-            "controlled tilt and WIC threshold must be finite and nonnegative; "
+            "controlled tilt and sensor thresholds must be finite and nonnegative; "
             "conversion Kp must be 0--9"
         )
     if arguments.regime is not None and len(set(arguments.regime)) != len(arguments.regime):

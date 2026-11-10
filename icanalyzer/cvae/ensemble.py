@@ -107,10 +107,22 @@ def sample_decoded_ensemble(
             )
     if support_mask is not None:
         support_mask = np.asarray(support_mask, dtype=bool)
-        if support_mask.shape != tuple(model.image_shape) or not support_mask.any():
-            raise ValueError("support_mask must match the grid and contain supported cells")
-        supported = torch.as_tensor(support_mask, device=device)[None, None]
-        physical_zero = transform.transform(np.zeros((1, transform.channel_count, 1, 1), dtype=np.float32))
+        grid_shape = tuple(model.image_shape)
+        if support_mask.shape == grid_shape:
+            support_mask = np.broadcast_to(
+                support_mask, (transform.channel_count, *grid_shape)
+            ).copy()
+        if (
+            support_mask.shape != (transform.channel_count, *grid_shape)
+            or not np.all(support_mask.reshape(transform.channel_count, -1).any(axis=1))
+        ):
+            raise ValueError(
+                "support_mask must contain one nonempty grid per output channel"
+            )
+        supported = torch.as_tensor(support_mask, device=device)[None]
+        physical_zero = transform.transform(
+            np.zeros((1, transform.channel_count, 1, 1), dtype=np.float32)
+        )
         physical_zero = torch.as_tensor(physical_zero, device=device)
 
     physical = np.empty(
@@ -148,7 +160,9 @@ def sample_decoded_ensemble(
                 transformed = torch.where(supported, transformed, physical_zero)
             physical[start:stop] = transform.inverse(transformed).cpu().numpy()
             if support_mask is not None:
-                physical[start:stop, :, ~support_mask] = 0.0
+                physical[start:stop] = np.where(
+                    support_mask[None], physical[start:stop], 0.0
+                )
 
     if not return_latent:
         return physical

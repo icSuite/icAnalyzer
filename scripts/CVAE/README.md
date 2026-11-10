@@ -158,8 +158,21 @@ their union while receiving both quality maps, and the reconstruction loss is
 the equal mean of independently normalized WIC and SI12 errors. Formal sensor
 uncertainties are stored but deliberately do not enter this baseline loss.
 Training artifacts and held-out evaluation report the two channel
-reconstruction contributions separately. Joint sampling and proton-conductance
-postprocessing are separate later milestones.
+reconstruction contributions separately. The same sampler accepts the paired
+artifact: every latent draw produces one aligned corrected-WIC/SI12 member.
+It saves separate means, quantiles, anomaly factors, medoids, exceedance maps
+and matching 6x6 mosaics for both sensors. The anomaly-factor columns and
+mosaic indices are shared, preserving cross-sensor covariance and member
+identity. Corrected WIC still enters collapsed Zhang--Paxton/Fang electron
+conductance. SI12 remains a proton-emission proxy; no proton-conductance
+conversion is applied or implied.
+
+For paired products the plot command additionally writes `si12_at_kp`,
+`si12_sample_mosaic`, `si12_medoid` and `si12_exceedance_probability` PNG/PDF
+files. Defaults are a 50-count SI12 color limit and 10-count exceedance
+threshold; override them with `--si12-vmax` and
+`--si12-exceedance-threshold`. Sampling and plotting use the same commands
+shown below; point `CVAE_RUN` at the paired run directory.
 
 Exact-condition sampling remains available for diagnostics through a JSON list
 containing all 11 conceptual conditions. It should not be used to represent a

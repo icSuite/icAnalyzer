@@ -1,8 +1,8 @@
 # Handoff - Latest
 
 Last updated: 2026-11-10
-Last reviewed: 2026-11-10 (paired corrected-WIC/SI12 CVAE baseline)
-Repository snapshot: `vae/wic-si12` at `ed952e8` plus the uncommitted paired-CVAE implementation, with user annotation and generated-output changes preserved; `main` remains at `7c71591`
+Last reviewed: 2026-11-10 (paired corrected-WIC/SI12 sampling)
+Repository snapshot: `vae/wic-si12` at `2aee6a2` plus the uncommitted paired-sampling implementation, with user annotation and generated-output changes preserved; `main` remains at `7c71591`
 
 ## Paired corrected-WIC/SI12 cache and trainer implemented (2026-11-10)
 
@@ -21,19 +21,29 @@ baseline loss. Shared artificial holes preserve the paired spatial comparison.
 The saved configuration, cache manifest and evaluation retain the exact
 two-channel contract and report per-channel reconstruction terms.
 
-Verification: 69 relevant checks pass with the known sandbox-incompatible
+Verification: 70 relevant checks pass with the known sandbox-incompatible
 multiprocessing socket check excluded. A real one-epoch CPU training smoke also
 completed forward/backward optimization, held-out evaluation and artifact
 reload. The historical one-field WIC, scalar-Kp/named-conditioning and
-Hall/Pedersen paths remain compatible. Sampling still accepts only one-field
-WIC artifacts; joint WIC/SI12 sampling and proton postprocessing have not been
-implemented and should be the next separate milestone after inspecting a real
-trained paired model.
+Hall/Pedersen paths remain compatible.
 
-Next action: prepare the automatic Model1+Model2 paired cache outside the
-repository, then train it with the existing `hybrid4` conditioning table on
-Dynamit. Commit only the source, tests, README and vault changes; preserve the
-user-edited annotation JSON and generated-output directories.
+Joint sampling and plot-only regeneration are implemented in the existing
+`sample_wic_at_kp.py` and `plot_wic_at_kp.py` commands. Every latent vector
+produces a paired corrected-WIC/SI12 member. Separate WIC and SI12 means,
+quantiles, anomaly factors, medoids, exceedance probabilities and matching 6x6
+mosaics are saved; anomaly columns and mosaic sample indices remain aligned so
+the cross-sensor relationship is preserved. Corrected WIC still produces Fang
+electron Hall/Pedersen conductance. SI12 is not converted to proton
+conductance, and saved metadata says so explicitly. Defaults are 50 counts for
+the SI12 plot maximum and 10 counts for its exceedance threshold. The
+one-channel saved-product contract remains readable and unchanged. A real
+synthetic-artifact plot smoke rendered all nine WIC, SI12 and conductance PNGs.
+
+Next action: the user's Dynamit paired `hybrid4` run was reported 91% complete.
+Let it finish, then sample the controlled IMF/SML regimes with 50,000 draws and
+run the plot-only command. Commit only the source, tests, README and vault
+changes; preserve the user-edited annotation JSON and generated-output
+directories.
 
 Portfolio impact: Central update needed: No.
 

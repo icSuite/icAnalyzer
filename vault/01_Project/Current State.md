@@ -1,7 +1,7 @@
 # Current State
 
-Last reviewed: 2026-11-10 (paired corrected-WIC/SI12 CVAE baseline)
-Repository snapshot: `vae/wic-si12` at `ed952e8` plus the uncommitted paired-CVAE implementation; `main` remains at `7c71591`
+Last reviewed: 2026-11-10 (paired corrected-WIC/SI12 sampling)
+Repository snapshot: `vae/wic-si12` at `2aee6a2` plus the uncommitted paired-sampling implementation; `main` remains at `7c71591`
 Worktree: user annotation and generated-output changes preserved
 
 ## Paired corrected-WIC/SI12 CVAE training path ready (2026-11-10)
@@ -26,13 +26,24 @@ training holes remove the same spatial region from both sensor inputs and are
 rejected if they eliminate all support from either channel. Held-out summaries
 report the two channel reconstruction terms separately.
 
-Sixty-nine relevant regression checks pass, with only the known sandbox-only
+Seventy relevant regression checks pass, with only the known sandbox-only
 spawned-worker socket test deselected. A real one-epoch CPU smoke completed
 cache loading, paired forward/backward training, validation, test evaluation,
 artifact save and artifact reload. Existing one-field WIC and Hall/Pedersen
-cache/model behavior remains covered. Next prepare an external automatic-mask
-paired cache and train the `hybrid4` model on Dynamit. Joint sampling and any
-proton-conductance postprocessing are deliberately later milestones.
+cache/model behavior remains covered.
+
+The existing `sample_wic_at_kp.py` and `plot_wic_at_kp.py` now accept paired
+artifacts. Each latent vector decodes one aligned corrected-WIC/SI12 member.
+Saved WIC and SI12 anomaly factors retain the same ensemble-column ordering,
+and the two 6x6 mosaics use identical sample indices, so cross-sensor
+covariance and member identity remain recoverable. Both channels receive
+separate means, quantiles, medoids and exceedance maps using their own learned
+support. Corrected WIC continues through collapsed Zhang--Paxton/Fang electron
+conductance; SI12 is stored and plotted only as a proton-emission proxy. No
+proton-conductance conversion is claimed. A real synthetic-artifact smoke
+rendered all nine WIC, SI12 and conductance PNG products. The user's Dynamit
+paired `hybrid4` training run was reported 91% complete. Next let it finish,
+then run the existing controlled-regime sampler with 50,000 draws.
 
 ## Pre-proton WIC CVAE path ready (2026-11-09)
 

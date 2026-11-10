@@ -1,4 +1,4 @@
-"""Create polar WIC/Fang plots from completed conditional ensembles."""
+"""Create polar WIC/SI12/Fang plots from conditional ensembles."""
 
 #%% Imports
 
@@ -20,22 +20,24 @@ from scripts.CVAE.sample_wic_at_kp import (
 
 #%% Plot saved summaries without sampling again
 
-def _wic_mosaic_members(saved):
-    """Load explicit mosaic members or reconstruct them from saved anomalies."""
+def _sensor_mosaic_members(saved, prefix):
+    """Load sensor mosaic members or reconstruct them from saved anomalies."""
 
-    if {
-        "wic_mosaic_samples", "wic_mosaic_sample_indices"
-    }.issubset(saved):
-        return saved["wic_mosaic_samples"], saved["wic_mosaic_sample_indices"]
+    samples_name = f"{prefix}_mosaic_samples"
+    indices_name = f"{prefix}_mosaic_sample_indices"
+    if {samples_name, indices_name}.issubset(saved):
+        return saved[samples_name], saved[indices_name]
 
-    mean = np.asarray(saved["wic_mean"], dtype=np.float64)
-    anomaly_factor = np.asarray(saved["wic_anomaly_factor"])
+    mean = np.asarray(saved[f"{prefix}_mean"], dtype=np.float64)
+    anomaly_factor = np.asarray(saved[f"{prefix}_anomaly_factor"])
     if (
         mean.ndim != 2 or anomaly_factor.ndim != 2
         or anomaly_factor.shape[0] != mean.size
         or anomaly_factor.shape[1] < 2
     ):
-        raise ValueError("saved WIC mean and anomaly factor cannot reconstruct samples")
+        raise ValueError(
+            f"saved {prefix} mean and anomaly factor cannot reconstruct samples"
+        )
     count = min(36, anomaly_factor.shape[1])
     indices = np.arange(count, dtype=np.int32)
     flattened = (
@@ -45,37 +47,60 @@ def _wic_mosaic_members(saved):
     return flattened.T.reshape(count, *mean.shape), indices
 
 
-def _wic_distribution_summary(saved, support, mlat, mlt, threshold):
-    """Load current summaries or derive them from a completed older ensemble."""
+def _wic_mosaic_members(saved):
+    """Backward-compatible WIC mosaic reconstruction helper."""
+
+    return _sensor_mosaic_members(saved, "wic")
+
+
+def _sensor_distribution_summary(
+    saved, prefix, support, mlat, mlt, threshold
+):
+    """Load one sensor summary or derive it from a saved anomaly factor."""
 
     required = {
-        "wic_medoid", "wic_medoid_sample_index",
-        "wic_exceedance_probability", "wic_exceedance_threshold",
+        f"{prefix}_medoid", f"{prefix}_medoid_sample_index",
+        f"{prefix}_exceedance_probability",
+        f"{prefix}_exceedance_threshold",
     }
     if required.issubset(saved) and np.isclose(
-        float(saved["wic_exceedance_threshold"]), threshold
+        float(saved[f"{prefix}_exceedance_threshold"]), threshold
     ):
         return {
-            "medoid": saved["wic_medoid"],
-            "medoid_index": int(saved["wic_medoid_sample_index"]),
-            "exceedance_probability": saved["wic_exceedance_probability"],
-            "exceedance_threshold": float(saved["wic_exceedance_threshold"]),
+            "medoid": saved[f"{prefix}_medoid"],
+            "medoid_index": int(saved[f"{prefix}_medoid_sample_index"]),
+            "exceedance_probability": saved[
+                f"{prefix}_exceedance_probability"
+            ],
+            "exceedance_threshold": float(
+                saved[f"{prefix}_exceedance_threshold"]
+            ),
         }
     return summarize_wic_anomaly_factor(
-        saved["wic_mean"], saved["wic_anomaly_factor"],
+        saved[f"{prefix}_mean"], saved[f"{prefix}_anomaly_factor"],
         support, mlat, mlt, threshold=threshold
+    )
+
+
+def _wic_distribution_summary(saved, support, mlat, mlt, threshold):
+    """Backward-compatible WIC distribution-summary helper."""
+
+    return _sensor_distribution_summary(
+        saved, "wic", support, mlat, mlt, threshold
     )
 
 
 def run(arguments):
     limits = np.asarray(
         [arguments.wic_vmax, arguments.hall_vmax, arguments.pedersen_vmax,
-         arguments.wic_exceedance_threshold],
+         arguments.wic_exceedance_threshold, arguments.si12_vmax,
+         arguments.si12_exceedance_threshold],
         dtype=float
     )
     if (
-        not np.isfinite(limits).all() or np.any(limits[:3] <= 0)
-        or limits[3] < 0
+        not np.isfinite(limits).all()
+        or np.any(limits[[0, 1, 2, 4]] <= 0)
+        or np.any(limits[[3, 5]] < 0)
     ):
         raise ValueError(
             "plot limits must be finite, with positive maxima and "
@@ -140,6 +165,40 @@ def run(arguments):
                 saved["wic_supported"].astype(bool), mlat, mlt,
                 title, destination, field_label
             )
+            if "si12_mean" in saved:
+                si12_support = saved["si12_supported"].astype(bool)
+                si12_quantiles = np.stack([
+                    saved["si12_q10"], saved["si12_q50"],
+                    saved["si12_q90"]
+                ])
+                plot_wic(
+                    saved["si12_mean"], si12_quantiles,
+                    si12_support, mlat, mlt, title, destination,
+                    arguments.si12_vmax, "SI12", "si12"
+                )
+                si12_mosaic, si12_indices = _sensor_mosaic_members(
+                    saved, "si12"
+                )
+                plot_wic_sample_mosaic(
+                    si12_mosaic, si12_indices, si12_support,
+                    mlat, mlt, title, destination,
+                    arguments.si12_vmax, "SI12", "si12"
+                )
+                si12_summary = _sensor_distribution_summary(
+                    saved, "si12", si12_support, mlat, mlt,
+                    arguments.si12_exceedance_threshold
+                )
+                plot_wic_medoid(
+                    si12_summary["medoid"], si12_summary["medoid_index"],
+                    si12_support, mlat, mlt, title, destination,
+                    arguments.si12_vmax, "SI12", "si12"
+                )
+                plot_wic_exceedance_probability(
+                    si12_summary["exceedance_probability"],
+                    si12_summary["exceedance_threshold"],
+                    si12_support, mlat, mlt, title, destination,
+                    "SI12", "si12"
+                )
             if "conductance_mean" in saved:
                 conductance_quantiles = np.stack([
                     saved["conductance_q10"], saved["conductance_q50"],
@@ -161,6 +220,8 @@ def parse_arguments(argv=None):
     parser.add_argument("sample_directory", type=Path)
     parser.add_argument("--wic-vmax", type=float, default=1000.0)
     parser.add_argument("--wic-exceedance-threshold", type=float, default=100.0)
+    parser.add_argument("--si12-vmax", type=float, default=50.0)
+    parser.add_argument("--si12-exceedance-threshold", type=float, default=10.0)
     parser.add_argument("--hall-vmax", type=float, default=24.0)
     parser.add_argument("--pedersen-vmax", type=float, default=12.0)
     return parser.parse_args(argv)
