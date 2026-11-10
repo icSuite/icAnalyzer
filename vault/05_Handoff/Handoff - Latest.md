@@ -1,8 +1,41 @@
 # Handoff - Latest
 
-Last updated: 2026-11-09
-Last reviewed: 2026-11-09 (pre-proton WIC CVAE diagnostic)
-Repository snapshot: `vae/wic-si12` at `aae4844` with user annotation and generated-output changes preserved; `main` remains at `7c71591`
+Last updated: 2026-11-10
+Last reviewed: 2026-11-10 (paired corrected-WIC/SI12 CVAE baseline)
+Repository snapshot: `vae/wic-si12` at `ed952e8` plus the uncommitted paired-CVAE implementation, with user annotation and generated-output changes preserved; `main` remains at `7c71591`
+
+## Paired corrected-WIC/SI12 cache and trainer implemented (2026-11-10)
+
+The paired baseline is ready for a real run. Use
+`scripts/CVAE/prepare_wic_si12_cvae_cache.py` with either the existing manual
+annotations or a frozen automatic-mask directory. The selection mask remains
+WIC-derived, as decided, but WIC and SI12 have independent intrinsic validity
+and quality maps. A valid WIC pixel is not required for a valid SI12 pixel, or
+vice versa. Both formal standard deviations are cached for later work.
+
+The existing `train_wic_cvae.py` accepts the new cache. Paired runs use four
+encoder channels (corrected WIC, SI12 and one quality map for each), union
+partial-convolution support and an equal mean of the separately normalized WIC
+and SI12 reconstruction errors. Measurement uncertainty does not enter this
+baseline loss. Shared artificial holes preserve the paired spatial comparison.
+The saved configuration, cache manifest and evaluation retain the exact
+two-channel contract and report per-channel reconstruction terms.
+
+Verification: 69 relevant checks pass with the known sandbox-incompatible
+multiprocessing socket check excluded. A real one-epoch CPU training smoke also
+completed forward/backward optimization, held-out evaluation and artifact
+reload. The historical one-field WIC, scalar-Kp/named-conditioning and
+Hall/Pedersen paths remain compatible. Sampling still accepts only one-field
+WIC artifacts; joint WIC/SI12 sampling and proton postprocessing have not been
+implemented and should be the next separate milestone after inspecting a real
+trained paired model.
+
+Next action: prepare the automatic Model1+Model2 paired cache outside the
+repository, then train it with the existing `hybrid4` conditioning table on
+Dynamit. Commit only the source, tests, README and vault changes; preserve the
+user-edited annotation JSON and generated-output directories.
+
+Portfolio impact: Central update needed: No.
 
 ## Pre-proton WIC comparison implemented (2026-11-09)
 

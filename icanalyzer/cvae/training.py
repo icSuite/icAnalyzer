@@ -9,6 +9,7 @@ import torch
 from tqdm.auto import tqdm
 
 from .loss import (
+    CHANNEL_BALANCED_LOSS_KIND,
     GAUSSIAN_UNCERTAINTY_LOSS_KIND,
     LEGACY_LOSS_CONFIGURATION,
     MEASUREMENT_UNCERTAINTY_LOSS_KIND,
@@ -43,7 +44,10 @@ def add_training_holes(encoder_input, mask, probability, hole_size, generator):
     for index in range(encoder_input.shape[0]):
         if torch.rand((), generator=generator).item() >= probability:
             continue
-        candidates = torch.nonzero(mask[index, 0], as_tuple=False)
+        candidates = torch.nonzero(
+            torch.any(mask[index].to(dtype=torch.bool), dim=0),
+            as_tuple=False
+        )
         if candidates.shape[0] == 0:
             continue
         choice = torch.randint(candidates.shape[0], (), generator=generator).item()
@@ -52,7 +56,7 @@ def add_training_holes(encoder_input, mask, probability, hole_size, generator):
         left = min(max(column - hole_size // 2, 0), width - hole_size)
         remaining = mask[index].clone()
         remaining[:, top:top + hole_size, left:left + hole_size] = False
-        if not torch.any(remaining):
+        if not torch.all(remaining.flatten(1).any(dim=1)):
             continue
         input_mask[index] = remaining
         damaged_input[index, :, top:top + hole_size, left:left + hole_size] = 0.0
@@ -74,7 +78,9 @@ def add_training_holes_vectorized(encoder_input, mask, probability, hole_size, g
     selected = torch.rand(
         batch_size, device=mask.device, generator=generator
     ) < probability
-    support = mask[:, 0].reshape(batch_size, -1)
+    support = torch.any(mask.to(dtype=torch.bool), dim=1).reshape(
+        batch_size, -1
+    )
     selected &= support.any(dim=1)
     indices = torch.nonzero(selected, as_tuple=False).flatten()
 
@@ -101,7 +107,7 @@ def add_training_holes_vectorized(encoder_input, mask, probability, hole_size, g
         & (columns < left[:, None, None] + hole_size)
     )
     remaining = mask[indices] & ~holes[:, None]
-    keep = remaining.flatten(1).any(dim=1)
+    keep = remaining.flatten(2).any(dim=2).all(dim=1)
     kept_indices = indices[keep]
     kept_holes = holes[keep]
 
@@ -147,6 +153,7 @@ def _run_epoch(
     metric_names = ("total", "reconstruction", "kl")
     # Match Python's float64 accumulation without synchronizing every GPU batch.
     totals = torch.zeros(len(metric_names), dtype=torch.float64, device=device)
+    channel_totals = None
     non_blocking = device.type == "cuda" and getattr(loader, "pin_memory", False)
     sample_count = 0
     coverage = loss_configuration.get("coverage_weighting")
@@ -242,6 +249,9 @@ def _run_epoch(
                 mu,
                 logvar,
                 beta=beta,
+                channel_balanced=(
+                    loss_configuration["kind"] == CHANNEL_BALANCED_LOSS_KIND
+                ),
                 **uncertainty_arguments,
             )
             if training:
@@ -251,10 +261,25 @@ def _run_epoch(
         batch_size = encoder_input.shape[0]
         sample_count += batch_size
         totals += torch.stack([losses[name].detach().to(dtype=torch.float64) for name in metric_names])
+        if "channel_reconstruction" in losses:
+            current = losses["channel_reconstruction"].detach().to(
+                dtype=torch.float64
+            )
+            if channel_totals is None:
+                channel_totals = torch.zeros_like(current)
+            channel_totals += current
 
     if sample_count == 0:
         raise ValueError("data loader contains no samples")
-    return {name: value / sample_count for name, value in zip(metric_names, totals.cpu().tolist())}
+    metrics = {
+        name: value / sample_count
+        for name, value in zip(metric_names, totals.cpu().tolist())
+    }
+    if channel_totals is not None:
+        metrics["channel_reconstruction"] = [
+            value / sample_count for value in channel_totals.cpu().tolist()
+        ]
+    return metrics
 
 
 def train_vae(

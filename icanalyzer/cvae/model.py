@@ -78,6 +78,8 @@ class SplineConditionalVAE(nn.Module):
         spline_control_points=30,
         spline_degree=3,
         quality_weight_in_encoder=True,
+        quality_weight_channels=None,
+        encoder_mask_policy="intersection",
         decoder_feature_size=18,
         kp_conditioning=None,
         conditioning=None,
@@ -88,17 +90,27 @@ class SplineConditionalVAE(nn.Module):
         self.latent_dim = int(latent_dim)
         self.spline_control_points = int(spline_control_points)
         self.spline_degree = int(spline_degree)
-        self.quality_weight_in_encoder = bool(quality_weight_in_encoder)
-        self.decoder_feature_size = int(decoder_feature_size)
-        self.kp_conditioning = None if kp_conditioning is None else dict(kp_conditioning)
-        self.conditioning = None if conditioning is None else dict(conditioning)
-        if self.kp_conditioning is not None and self.conditioning is not None:
-            raise ValueError("Kp and named conditioning configurations are mutually exclusive")
         if field_names is None:
             raise ValueError("field_names must explicitly identify the modeled fields")
         self.field_names = tuple(str(name) for name in field_names)
         if not self.field_names or any(not name for name in self.field_names) or len(set(self.field_names)) != len(self.field_names):
             raise ValueError("field_names must contain distinct nonempty names")
+        if quality_weight_channels is None:
+            quality_weight_channels = int(bool(quality_weight_in_encoder))
+        self.quality_weight_channels = int(quality_weight_channels)
+        if self.quality_weight_channels not in (0, 1, len(self.field_names)):
+            raise ValueError(
+                "encoder quality channels must be zero, one or match fields"
+            )
+        self.quality_weight_in_encoder = self.quality_weight_channels > 0
+        self.encoder_mask_policy = str(encoder_mask_policy)
+        if self.encoder_mask_policy not in ("intersection", "union"):
+            raise ValueError("encoder mask policy must be intersection or union")
+        self.decoder_feature_size = int(decoder_feature_size)
+        self.kp_conditioning = None if kp_conditioning is None else dict(kp_conditioning)
+        self.conditioning = None if conditioning is None else dict(conditioning)
+        if self.kp_conditioning is not None and self.conditioning is not None:
+            raise ValueError("Kp and named conditioning configurations are mutually exclusive")
         condition_size = 0
         if self.kp_conditioning is not None:
             condition_size = int(self.kp_conditioning.get("embedding_dim", 8))
@@ -136,7 +148,7 @@ class SplineConditionalVAE(nn.Module):
         if self.spline_control_points <= self.spline_degree:
             raise ValueError("spline control-point count must exceed its degree")
 
-        encoder_channels = len(self.field_names) + int(self.quality_weight_in_encoder)
+        encoder_channels = len(self.field_names) + self.quality_weight_channels
         self.enc_pconv1 = PartialConv2d(
             encoder_channels, 16, kernel_size=3, stride=2, padding=1,
             return_mask=True
@@ -280,7 +292,21 @@ class SplineConditionalVAE(nn.Module):
     def encode(self, values, valid, kp=None, conditioning=None):
         if valid is None:
             raise ValueError("partial-convolution encoder requires a validity mask")
-        common_mask = torch.all(valid.to(dtype=torch.bool), dim=1, keepdim=True)
+        if values.ndim != 4 or values.shape[1] != self.enc_pconv1.in_channels:
+            raise ValueError("encoder input channels do not match model configuration")
+        if (
+            valid.ndim != 4 or valid.shape[0] != values.shape[0]
+            or valid.shape[-2:] != values.shape[-2:]
+            or valid.shape[1] not in (1, len(self.field_names))
+        ):
+            raise ValueError(
+                "validity must have one channel or one per modeled field"
+            )
+        valid = valid.to(dtype=torch.bool)
+        if self.encoder_mask_policy == "union":
+            common_mask = torch.any(valid, dim=1, keepdim=True)
+        else:
+            common_mask = torch.all(valid, dim=1, keepdim=True)
         hidden, _mask = self._encode_convolutions(
             values, common_mask.to(dtype=values.dtype)
         )
@@ -399,13 +425,20 @@ class SplineConditionalVAE(nn.Module):
             "spline_degree": self.spline_degree,
             "encoder": "partial_convolution",
             "encoder_channels": [self.enc_pconv1.in_channels, 16, 32, 64],
-            "encoder_input_fields": (
-                [*self.field_names, "auroral_interest_weight"]
-                if self.quality_weight_in_encoder
-                else list(self.field_names)
-            ),
+            "encoder_input_fields": [
+                *self.field_names,
+                *(
+                    ["auroral_interest_weight"]
+                    if self.quality_weight_channels == 1
+                    else [f"{name}_quality_weight" for name in self.field_names]
+                    if self.quality_weight_channels == len(self.field_names)
+                    else []
+                ),
+            ],
             "field_names": list(self.field_names),
             "quality_weight_in_encoder": self.quality_weight_in_encoder,
+            "quality_weight_channels": self.quality_weight_channels,
+            "encoder_mask_policy": self.encoder_mask_policy,
             "decoder_seed_shape": list(self.decoder_seed_shape),
             "decoder_channels": [64, 32, 16, len(self.field_names)],
         }
@@ -432,6 +465,12 @@ class SplineConditionalVAE(nn.Module):
             spline_degree=int(configuration["spline_degree"]),
             quality_weight_in_encoder=configuration.get(
                 "quality_weight_in_encoder", False
+            ),
+            quality_weight_channels=configuration.get(
+                "quality_weight_channels"
+            ),
+            encoder_mask_policy=configuration.get(
+                "encoder_mask_policy", "intersection"
             ),
             decoder_feature_size=configuration.get("decoder_feature_size", 18),
             kp_conditioning=configuration.get("kp_conditioning"),

@@ -1,8 +1,38 @@
 # Current State
 
-Last reviewed: 2026-11-09 (pre-proton WIC CVAE diagnostic)
-Repository snapshot: `vae/wic-si12` at `aae4844`; `main` remains at `7c71591`
+Last reviewed: 2026-11-10 (paired corrected-WIC/SI12 CVAE baseline)
+Repository snapshot: `vae/wic-si12` at `ed952e8` plus the uncommitted paired-CVAE implementation; `main` remains at `7c71591`
 Worktree: user annotation and generated-output changes preserved
+
+## Paired corrected-WIC/SI12 CVAE training path ready (2026-11-10)
+
+The first joint sensor milestone is implemented without duplicating the CVAE
+trainer. `prepare_wic_si12_cvae_cache.py` applies the existing manual or frozen
+Model1+Model2 WIC selection to both corrected WIC and SI12. It then retains
+separate sensor validity and quality maps: each channel independently requires
+finite counts and formal uncertainty plus positive native coverage. Frames
+must pass the requested minimum valid fraction in both channels. The cache
+stores corrected WIC, SI12, `dwic_corrected`, `dsi12` and both quality maps;
+formal uncertainty is retained for later experiments but is not used by the
+baseline loss.
+
+`train_wic_cvae.py` now dispatches between the existing one-field cache and the
+new paired cache. The paired encoder receives both transformed images and both
+quality maps. Its partial-convolution support is the union of the two sensor
+masks, so one available sensor is not discarded when the other is missing.
+The reconstruction objective gives WIC and SI12 equal weight after independently
+normalizing each channel by its own valid quality-weight sum. Artificial
+training holes remove the same spatial region from both sensor inputs and are
+rejected if they eliminate all support from either channel. Held-out summaries
+report the two channel reconstruction terms separately.
+
+Sixty-nine relevant regression checks pass, with only the known sandbox-only
+spawned-worker socket test deselected. A real one-epoch CPU smoke completed
+cache loading, paired forward/backward training, validation, test evaluation,
+artifact save and artifact reload. Existing one-field WIC and Hall/Pedersen
+cache/model behavior remains covered. Next prepare an external automatic-mask
+paired cache and train the `hybrid4` model on Dynamit. Joint sampling and any
+proton-conductance postprocessing are deliberately later milestones.
 
 ## Pre-proton WIC CVAE path ready (2026-11-09)
 

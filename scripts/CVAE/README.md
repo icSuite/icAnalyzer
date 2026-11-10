@@ -39,9 +39,14 @@ Hall/Pedersen artifacts cannot silently inherit the old WIC/SI12 labels.
   manual annotations or an aligned automatic-mask corpus and write the
   disk-backed cache. `--wic-field preproton` instead selects the stored
   background-subtracted, smoothed WIC before SI12 proton correction.
-- `train_wic_cvae.py`: train the one-channel WIC CVAE with historical scalar
-  Kp conditioning, the full 11-feature condition vector or the reduced
-  `hybrid4` profile (SML, IMF By, IMF Bz and dipole tilt).
+- `prepare_wic_si12_cvae_cache.py`: apply the same manual or automatic WIC
+  selection to corrected WIC and SI12 while retaining separate sensor-validity
+  and sensor-quality maps. It caches `dwic_corrected` and `dsi12` for future
+  uncertainty experiments.
+- `train_wic_cvae.py`: train either the one-channel WIC CVAE or the paired
+  corrected-WIC/SI12 CVAE with historical scalar Kp conditioning, the full
+  11-feature condition vector or the reduced `hybrid4` profile (SML, IMF By,
+  IMF Bz and dipole tilt).
 - `sample_wic_at_kp.py`: draw WIC at selected Kp, exact named conditions or
   empirical IMF regimes and propagate each member through collapsed
   Zhang--Paxton and Fang electron conductance.
@@ -56,6 +61,7 @@ PYTHONPATH=. python scripts/CVAE/train_automatic_cvae.py --help
 PYTHONPATH=. python scripts/CVAE/sample_conductance_at_kp.py --help
 
 PYTHONPATH=. python scripts/CVAE/prepare_wic_cvae_cache.py --help
+PYTHONPATH=. python scripts/CVAE/prepare_wic_si12_cvae_cache.py --help
 PYTHONPATH=. python scripts/CVAE/train_wic_cvae.py --help
 PYTHONPATH=. python scripts/CVAE/sample_wic_at_kp.py --help
 PYTHONPATH=. python scripts/CVAE/plot_wic_at_kp.py --help
@@ -132,6 +138,28 @@ PYTHONPATH=. python scripts/CVAE/train_wic_cvae.py \
   --learning-rate 0.0001 --seed 1 --training-holes \
   --num-workers 4 --prefetch-factor 4 --device cuda
 ```
+
+For a paired corrected-WIC/SI12 run, prepare a distinct two-channel cache. The
+scientific selection remains entirely WIC-derived, but native WIC and SI12
+validity and coverage remain separate. A frame must satisfy the requested
+minimum valid fraction in both channels:
+
+```bash
+PYTHONPATH=. python scripts/CVAE/prepare_wic_si12_cvae_cache.py \
+  --source /path/to/precipitation_cs/image_apex_130km_46x46_v1/IR_hardy_smoothed_wic1_si121_si131 \
+  --masks /path/to/model1_model2_masks \
+  --minimum-valid-fraction 0.05 \
+  --output /path/to/training_data/automatic_wic_si12_model1_model2_valid5
+```
+
+Use that cache with the same trainer and hybrid4 options shown above. The
+paired cache supplies two validity masks and two quality maps. The encoder uses
+their union while receiving both quality maps, and the reconstruction loss is
+the equal mean of independently normalized WIC and SI12 errors. Formal sensor
+uncertainties are stored but deliberately do not enter this baseline loss.
+Training artifacts and held-out evaluation report the two channel
+reconstruction contributions separately. Joint sampling and proton-conductance
+postprocessing are separate later milestones.
 
 Exact-condition sampling remains available for diagnostics through a JSON list
 containing all 11 conceptual conditions. It should not be used to represent a

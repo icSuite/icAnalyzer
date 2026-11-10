@@ -17,6 +17,7 @@ from .data import ChannelTransform
 #%% Completed-cache identity and evidence
 
 AUTOMATIC_CONDUCTANCE_CACHE_FORMAT = "automatic_conductance_cache_v1"
+WIC_SI12_CACHE_FORMAT = "wic_si12_cvae_cache_v1"
 
 
 def file_sha256(path):
@@ -52,7 +53,24 @@ class AutomaticFieldDataset(Dataset):
         self.field_count = len(field_names or [])
         if self.field_count < 1 or self.transform.channel_count != self.field_count:
             raise ValueError("cache field names and transform channels do not align")
-        self.physical_channels = 2 * self.field_count + 1
+        self.quality_channel_count = int(
+            self.metadata.get("quality_channel_count", 1)
+        )
+        self.valid_channel_count = int(
+            self.metadata.get("valid_channel_count", 1)
+        )
+        allowed_counts = (1, self.field_count)
+        if self.quality_channel_count not in allowed_counts:
+            raise ValueError(
+                "cache quality channels must be one or match the field count"
+            )
+        if self.valid_channel_count not in allowed_counts:
+            raise ValueError(
+                "cache validity channels must be one or match the field count"
+            )
+        self.physical_channels = (
+            2 * self.field_count + self.quality_channel_count
+        )
         if not np.isfinite(cache_mib) or cache_mib <= 0 or max_open_orbits < 1:
             raise ValueError("cache MiB and maximum open orbits must be positive")
         self.cache_limit = int(cache_mib * 1024**2)
@@ -131,7 +149,7 @@ class AutomaticFieldDataset(Dataset):
         count = self.rows[number]["prepared_frames"]
         bytes_per_frame = 46 * 46 * (
             self.physical_channels * np.dtype(np.float32).itemsize
-            + np.dtype(bool).itemsize
+            + self.valid_channel_count * np.dtype(bool).itemsize
         )
         size = count * bytes_per_frame
         if size > self.cache_limit:
@@ -152,9 +170,14 @@ class AutomaticFieldDataset(Dataset):
             )
             valid = np.load(path / "valid.npy", mmap_mode="r", allow_pickle=False)
             expected = (count, self.physical_channels, 46, 46)
+            valid_expected = (
+                (count, 46, 46)
+                if self.valid_channel_count == 1
+                else (count, self.valid_channel_count, 46, 46)
+            )
             if (
                 physical.dtype != np.float32 or physical.shape != expected
-                or valid.dtype != bool or valid.shape != (count, 46, 46)
+                or valid.dtype != bool or valid.shape != valid_expected
             ):
                 physical._mmap.close()
                 valid._mmap.close()
@@ -172,7 +195,11 @@ class AutomaticFieldDataset(Dataset):
             )
             valid = np.memmap(
                 path / "valid.npy", mode="r", dtype=bool,
-                shape=(count, 46, 46), offset=valid_layout[0],
+                shape=(
+                    (count, 46, 46)
+                    if self.valid_channel_count == 1
+                    else (count, self.valid_channel_count, 46, 46)
+                ), offset=valid_layout[0],
                 order=valid_layout[1]
             )
         self.open_shards[number] = (physical, valid)
@@ -183,12 +210,17 @@ class AutomaticFieldDataset(Dataset):
         physical, valid = self._shard(int(self.shard_ids[index]))
         frame = int(self.frame_ids[index])
         values = physical[frame, :self.field_count].copy()
-        mask = valid[frame][None].copy()
+        mask = valid[frame].copy()
+        if self.valid_channel_count == 1:
+            mask = mask[None]
         weight = physical[
-            frame, 2 * self.field_count:2 * self.field_count + 1
+            frame,
+            2 * self.field_count:
+            2 * self.field_count + self.quality_channel_count
         ].copy()
         target = self.transform.transform(values[None])[0].astype(np.float32)
-        target[:, ~mask[0]] = 0.0
+        target_mask = np.broadcast_to(mask, target.shape)
+        target = np.where(target_mask, target, 0.0)
         batch = {
             "encoder_input": torch.from_numpy(
                 np.concatenate((target, weight), axis=0)
@@ -213,10 +245,10 @@ class AutomaticFieldDataset(Dataset):
             batch.update({
                 "variance": torch.from_numpy(variance),
                 "physical_target": torch.from_numpy(
-                    np.where(mask, values, 0.0)
+                    np.where(target_mask, values, 0.0)
                 ),
                 "physical_standard_deviation": torch.from_numpy(
-                    np.where(mask, errors, 0.0)
+                    np.where(target_mask, errors, 0.0)
                 )
             })
         return batch

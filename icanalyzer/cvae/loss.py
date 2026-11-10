@@ -86,6 +86,16 @@ LEGACY_LOSS_CONFIGURATION = {
     "measurement_uncertainty_in_loss": False
 }
 
+CHANNEL_BALANCED_LOSS_KIND = "channel_balanced_weighted_mse_v1"
+CHANNEL_BALANCED_LOSS_CONFIGURATION = {
+    "kind": CHANNEL_BALANCED_LOSS_KIND,
+    "reconstruction_reduction": (
+        "equal_mean_of_per_channel_quality_weighted_mse_times_pixel_count"
+    ),
+    "kl_reduction": "sum_batch_and_latent",
+    "measurement_uncertainty_in_loss": False,
+}
+
 MEASUREMENT_UNCERTAINTY_LOSS_KIND = "training_median_precision_v1"
 GAUSSIAN_UNCERTAINTY_LOSS_KIND = "quality_weighted_gaussian_v1"
 
@@ -111,7 +121,10 @@ def validate_loss_configuration(configuration):
     if configuration is None:
         raise ValueError("loss_configuration is required so loss semantics are explicit")
     kind = configuration.get("kind")
-    supported = ("legacy_weighted_mse_v1", MEASUREMENT_UNCERTAINTY_LOSS_KIND, GAUSSIAN_UNCERTAINTY_LOSS_KIND)
+    supported = (
+        "legacy_weighted_mse_v1", CHANNEL_BALANCED_LOSS_KIND,
+        MEASUREMENT_UNCERTAINTY_LOSS_KIND, GAUSSIAN_UNCERTAINTY_LOSS_KIND
+    )
     if kind not in supported:
         raise ValueError(f"unsupported current CVAE loss configuration {kind!r}")
     if configuration.get("coverage_weighting") is not None:
@@ -150,6 +163,7 @@ def vae_loss(
     variance_floor=1e-3,
     maximum_relative_precision=100.0,
     model_error_std=None,
+    channel_balanced=False,
 ):
     """Return the legacy-scaled reconstruction loss and summed KL term.
 
@@ -173,9 +187,17 @@ def vae_loss(
             raise ValueError("multi-sample reconstruction must have shape (batch, sample, channel, y, x)")
     else:
         raise ValueError("reconstructed values must contain one or more latent samples")
-    expected_support_shape = (target.shape[0], 1, *target.shape[-2:])
+    expected_support_shape = (
+        target.shape
+        if channel_balanced
+        else (target.shape[0], 1, *target.shape[-2:])
+    )
     if mask.shape != expected_support_shape or weight.shape != expected_support_shape:
-        raise ValueError("mask and weight must have shape (batch, 1, y, x)")
+        raise ValueError(
+            "mask and weight must match the target for channel-balanced loss"
+            if channel_balanced else
+            "mask and weight must have shape (batch, 1, y, x)"
+        )
 
     mask = mask.to(dtype=torch.bool)
     weight = torch.where(
@@ -184,6 +206,39 @@ def vae_loss(
         torch.zeros_like(weight, dtype=reconstructed.dtype),
     )
     weight = torch.clamp(weight, min=0.0)
+    if channel_balanced:
+        if (
+            transformed_variance is not None or precision_scale is not None
+            or model_error_std is not None
+        ):
+            raise ValueError(
+                "channel-balanced baseline does not use measurement uncertainty"
+            )
+        if reconstructed.ndim == 5:
+            squared_error = torch.mean(
+                (reconstructed - target[:, None])**2, dim=1
+            )
+        else:
+            squared_error = (reconstructed - target)**2
+        channel_weight = weight.sum(dim=(0, 2, 3))
+        if torch.any(channel_weight <= 0):
+            raise ValueError("every modeled channel needs positive loss weight")
+        channel_mse = torch.sum(
+            weight * squared_error, dim=(0, 2, 3)
+        ) / channel_weight
+        pixel_count = int(np.prod(target.shape[-2:]))
+        channel_reconstruction = channel_mse * pixel_count
+        reconstruction_loss = torch.mean(channel_reconstruction)
+        kl_loss = -0.5 * torch.sum(
+            1.0 + logvar - mu.pow(2) - logvar.exp()
+        )
+        return {
+            "total": reconstruction_loss + float(beta) * kl_loss,
+            "reconstruction": reconstruction_loss,
+            "kl": kl_loss,
+            "channel_reconstruction": channel_reconstruction,
+        }
+
     likelihood_offset = reconstructed.new_zeros(())
     if model_error_std is not None:
         if transformed_variance is None or transformed_variance.shape != target.shape:

@@ -1,8 +1,8 @@
-"""Train a one-field Kp-conditional spline VAE from a WIC cache.
+"""Train a conditional spline VAE from a WIC or paired WIC/SI12 cache.
 
-This initial diagnostic path uses the existing quality-weighted legacy loss.
-Measurement-uncertainty and spatial-coverage experiments remain intentionally
-out of scope so the scientific change is limited to the modeled field.
+One-field caches retain the historical quality-weighted loss. Paired caches
+use equal per-channel reconstruction terms with separate validity and quality.
+Measurement uncertainty remains outside the baseline loss in both cases.
 """
 
 #%% Imports
@@ -16,7 +16,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from icanalyzer.cvae.artifacts import WIC_CVAE_ARTIFACT_TYPE, save_run_artifact
-from icanalyzer.cvae.cache import AutomaticFieldDataset
+from icanalyzer.cvae.cache import AutomaticFieldDataset, WIC_SI12_CACHE_FORMAT
 from icanalyzer.cvae.conditioning import (
     CONDITIONING_PROFILES,
     align_conditioning_features,
@@ -24,7 +24,10 @@ from icanalyzer.cvae.conditioning import (
     resolve_conditioning_features,
 )
 from icanalyzer.cvae.data import fit_kp_conditioning
-from icanalyzer.cvae.loss import LEGACY_LOSS_CONFIGURATION
+from icanalyzer.cvae.loss import (
+    CHANNEL_BALANCED_LOSS_CONFIGURATION,
+    LEGACY_LOSS_CONFIGURATION,
+)
 from icanalyzer.cvae.model import SplineConditionalVAE
 from icanalyzer.cvae.training import (
     _run_epoch,
@@ -34,6 +37,10 @@ from icanalyzer.cvae.training import (
     training_device
 )
 from scripts.CVAE.prepare_wic_cvae_cache import WIC_FIELD_MODES, read_wic_cache
+from scripts.CVAE.prepare_wic_si12_cvae_cache import (
+    FIELD_NAMES as WIC_SI12_FIELD_NAMES,
+    read_wic_si12_cache,
+)
 
 
 #%% Training
@@ -44,19 +51,29 @@ def run(arguments):
     device = training_device(arguments.device)
     if output.exists():
         raise FileExistsError("choose a new WIC-CVAE run directory; existing runs are never overwritten")
-    metadata = read_wic_cache(cache)
+    cache_format = json.loads((cache / "manifest.json").read_text()).get(
+        "cache_format"
+    )
+    metadata = (
+        read_wic_si12_cache(cache)
+        if cache_format == WIC_SI12_CACHE_FORMAT
+        else read_wic_cache(cache)
+    )
     supported_fields = {
         contract["field_name"] for contract in WIC_FIELD_MODES.values()
     }
     field_names = metadata.get("field_names")
+    one_field = (
+        isinstance(field_names, list) and len(field_names) == 1
+        and field_names[0] in supported_fields
+    )
+    paired = field_names == list(WIC_SI12_FIELD_NAMES)
     if (
-        not isinstance(field_names, list) or len(field_names) != 1
-        or field_names[0] not in supported_fields
+        not (one_field or paired)
         or metadata.get("input_product_type") != "precipitation_cs"
     ):
-        raise ValueError("expected a supported one-field WIC Product-2 cache")
-    field_name = field_names[0]
-    proton_corrected = field_name == "wic_corrected"
+        raise ValueError("expected a supported WIC or paired WIC/SI12 cache")
+    proton_corrected = paired or field_names[0] == "wic_corrected"
     seed = metadata["seed"] if arguments.seed is None else arguments.seed
     hole_device = resolve_hole_device(arguments.hole_device, device)
 
@@ -132,7 +149,10 @@ def run(arguments):
             "missing_condition_frames_dropped": condition_dropped,
             "alignment": "exact orbit, Product-2 source-frame index and timestamp",
         }
-    loss_configuration = dict(LEGACY_LOSS_CONFIGURATION)
+    loss_configuration = dict(
+        CHANNEL_BALANCED_LOSS_CONFIGURATION
+        if paired else LEGACY_LOSS_CONFIGURATION
+    )
     mask_source = metadata.get("mask_source")
     if mask_source is None:
         mask_source = {"kind": "automatic", **metadata["automatic_masks"]}
@@ -144,7 +164,7 @@ def run(arguments):
     )}
     configuration.update({
         "seed": seed, "device": device, "input_product_type": "precipitation_cs",
-        "field_names": [field_name], "field_units": ["counts"],
+        "field_names": field_names, "field_units": metadata["field_units"],
         "wic_field": metadata.get("wic_field"),
         "dataset_backend": metadata["cache_format"],
         "maximum_missing_fraction": metadata["maximum_missing_fraction"],
@@ -157,7 +177,11 @@ def run(arguments):
         "max_open_orbits_per_worker": arguments.max_open_orbits,
         "num_workers": arguments.num_workers, "prefetch_factor": arguments.prefetch_factor,
         "persistent_workers": arguments.num_workers > 0,
-        "pin_memory": device == "cuda", "uncertainty_arrays_loaded": False,
+        "pin_memory": device == "cuda",
+        "uncertainty_arrays_cached": bool(
+            metadata.get("uncertainty_arrays_cached", True)
+        ),
+        "uncertainty_arrays_loaded": False,
         "training_holes": {
             "probability": arguments.hole_probability, "size": arguments.hole_size,
             "seed": seed + 3, "device": hole_device,
@@ -171,19 +195,24 @@ def run(arguments):
             }
             for name, dataset in datasets.items()
         },
-        "support_policy": f"{mask_source['kind']} mask AND native finite WIC/quality/coverage support"
+        "support_policy": metadata.get(
+            "mask_policy",
+            f"{mask_source['kind']} mask AND native finite WIC/quality/coverage support"
+        )
     })
     support = np.load(cache / "training_support.npy", allow_pickle=False)
-    if support.shape != (46, 46) or not support.any():
-        raise ValueError("WIC training support must be a nonempty 46x46 mask")
+    expected_support_shape = (2, 46, 46) if paired else (46, 46)
+    if support.shape != expected_support_shape or not support.any():
+        raise ValueError("training support does not match the modeled fields")
     provenance = {
         "dataset_backend": metadata["cache_format"], "cache_directory": str(cache),
         "cache_manifest_sha256": metadata["manifest_sha256"],
         "mask_source": mask_source,
         "input_product_type": "precipitation_cs", "grid_id": metadata["grid_id"],
-        "grid": metadata["grid"], "field_names": [field_name],
-        "field_units": ["counts"], "training_support": support,
+        "grid": metadata["grid"], "field_names": field_names,
+        "field_units": metadata["field_units"], "training_support": support,
         "unsupported_training_cells": int((~support).sum()),
+        "sensor_support_overlap": metadata.get("sensor_support_overlap"),
         "products": {name: [row["product"] for row in metadata["orbits"] if row["split"] == name] for name in datasets},
         "retained_frame_kp": {name: dataset.kp.copy() for name, dataset in datasets.items() if dataset is not None},
         "conditioning": conditioning_evidence,
@@ -202,7 +231,8 @@ def run(arguments):
         else f"{arguments.conditioning_profile} named"
     )
     print(
-        f"WIC-CVAE frames: {used_frames}. Conditioning: {condition_label}. "
+        f"{'WIC/SI12' if paired else 'WIC'}-CVAE frames: {used_frames}. "
+        f"Conditioning: {condition_label}. "
         f"Device: {device}. No ensembles will be generated.", flush=True
     )
 
@@ -212,7 +242,9 @@ def run(arguments):
         spline_control_points=arguments.spline_control_points,
         spline_degree=arguments.spline_degree, kp_conditioning=kp_conditioning,
         conditioning=named_conditioning,
-        field_names=(field_name,)
+        quality_weight_channels=metadata.get("quality_channel_count", 1),
+        encoder_mask_policy="union" if paired else "intersection",
+        field_names=tuple(field_names)
     )
     output.mkdir(parents=True)
     (output / "cache_manifest.json").write_bytes((cache / "manifest.json").read_bytes())
@@ -264,12 +296,15 @@ def run(arguments):
             "training_configuration": configuration,
             "held_out_evaluation": evaluation, "ensemble_generated": False,
             "interpretation": (
-                f"{condition_label}-conditional {field_name} prior; "
+                f"{condition_label}-conditional {'/'.join(field_names)} prior; "
                 "no conductance conversion or uncertainty calibration"
             )
         }
         (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
-        print(f"Saved {artifact}. WIC-CVAE training complete; sampling is separate.", flush=True)
+        print(
+            f"Saved {artifact}. {'WIC/SI12' if paired else 'WIC'}-CVAE "
+            "training complete; sampling is separate.", flush=True
+        )
         return summary
     finally:
         for dataset in datasets.values():
