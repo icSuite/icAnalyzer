@@ -16,10 +16,13 @@ from icreader import load
 
 from icanalyzer.cvae.conditioning import (
     CONDITIONING_FORMAT,
+    DERIVED_CONDITIONING_FIELDS,
+    SML_HISTORY_DEFINITION,
     SUPERMAG_SOURCE_COLUMNS,
     SUPERMAG_UNITS,
     align_conditioning,
     conditioning_coverage,
+    derive_sml_history,
     read_supermag_files,
 )
 
@@ -109,6 +112,7 @@ def prepare(arguments, product_loader=load):
     files = supermag_files(arguments.supermag_dir, arguments.years)
     print(f"Reading {len(files)} SuperMAG yearly file(s)...", flush=True)
     supermag, supermag_provenance = read_supermag_files(files)
+    supermag = derive_sml_history(supermag)
     images, image_provenance = load_image_frame_times(
         arguments.source, supermag["time"][0], supermag["time"][-1],
         arguments.maximum_time_offset_seconds, arguments.orbits,
@@ -132,6 +136,11 @@ def prepare(arguments, product_loader=load):
             canonical: {"source": source, "units": SUPERMAG_UNITS[canonical]}
             for source, canonical in SUPERMAG_SOURCE_COLUMNS.items()
         },
+        "derived_columns": {
+            name: {"units": SUPERMAG_UNITS[name]}
+            for name in DERIVED_CONDITIONING_FIELDS
+        },
+        "history_features": SML_HISTORY_DEFINITION,
         "source_header_anomalies": [
             "SuperMAG labels VxGSE, VyGSE and VzGSM with nT in this export; stored values are treated as velocity in km/s without conversion"
         ],

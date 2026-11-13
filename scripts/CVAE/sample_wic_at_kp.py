@@ -420,8 +420,11 @@ def _regime_selections(paths, names, model, artifact, arguments):
     model_names = resolve_conditioning_features(
         model.conditioning["feature_names"]
     )
-    model_columns = [CONDITIONING_FEATURE_NAMES.index(name) for name in model_names]
-    rows = load_training_conditions(paths[0], paths[1])
+    full_names = tuple(dict.fromkeys((*CONDITIONING_FEATURE_NAMES, *model_names)))
+    model_columns = [full_names.index(name) for name in model_names]
+    rows = load_training_conditions(
+        paths[0], paths[1], feature_names=full_names
+    )
     evidence = rows["provenance"]
     expected_cache = artifact["data_provenance"].get("cache_manifest_sha256")
     expected_conditioning = (
@@ -433,13 +436,14 @@ def _regime_selections(paths, names, model, artifact, arguments):
         raise ValueError("regime conditioning table differs from model training")
 
     masks, definitions, standard_clock = empirical_regime_masks(
-        rows["matrix"], field_minimum=arguments.regime_field_minimum,
+        rows["matrix"][:, :len(CONDITIONING_FEATURE_NAMES)],
+        field_minimum=arguments.regime_field_minimum,
         field_maximum=arguments.regime_field_maximum,
         clock_half_width=arguments.regime_clock_half_width,
         maximum_absolute_tilt=arguments.regime_tilt_limit
     )
     model_finite = np.all(np.isfinite(rows["matrix"][:, model_columns]), axis=1)
-    kp_column = CONDITIONING_FEATURE_NAMES.index("kp")
+    kp_column = full_names.index("kp")
     kp_finite = np.isfinite(rows["matrix"][:, kp_column])
     selections = []
     for name in names:
@@ -452,6 +456,7 @@ def _regime_selections(paths, names, model, artifact, arguments):
             "directory": name, "conditions": None,
             "vector": rows["matrix"][selected][:, model_columns],
             "pool_full_vector": rows["matrix"][selected],
+            "pool_full_feature_names": full_names,
             "pool_kp": rows["matrix"][selected, kp_column],
             "pool_standard_clock": standard_clock[selected].astype(np.float32),
             "pool_orbit": rows["orbit"][selected],
@@ -924,7 +929,7 @@ def run(arguments):
                 dtype=np.float32
             ),
             conditioning_full_feature_names=np.asarray(
-                CONDITIONING_FEATURE_NAMES
+                selection["pool_full_feature_names"]
                 if selection["mode"] == "empirical_regime" else (),
                 dtype="U32"
             ),

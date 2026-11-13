@@ -51,28 +51,42 @@ SUPERMAG_UNITS = {
     "clock_angle_gsm": "degrees", "density": "1/cm^3",
     "dynamic_pressure": "nPa", "epsilon": "GW", "newell": "Wb/s",
 }
+SUPERMAG_UNITS.update({
+    "sml_mean_30m": "nT",
+    "sml_slope_5m": "nT/min",
+})
 for _name in SUPERMAG_SOURCE_COLUMNS.values():
     if _name.endswith("station_count"):
         SUPERMAG_UNITS[_name] = "count"
 
 CORE_CONDITIONING_FIELDS = ("by_gsm", "bz_gsm", "sml", "smr", "newell")
 TIME_SOURCE_COLUMNS = ("year", "month", "day", "hour", "min", "sec")
-CONDITIONING_FORMAT = "image_supermag_conditioning_v1"
+CONDITIONING_FORMAT_V1 = "image_supermag_conditioning_v1"
+CONDITIONING_FORMAT = "image_supermag_conditioning_v2"
+SUPPORTED_CONDITIONING_FORMATS = (CONDITIONING_FORMAT_V1, CONDITIONING_FORMAT)
 CONDITIONING_SOURCE_FIELDS = (
     "sml", "smr", "by_gsm", "bz_gsm", "vx_gse",
     "clock_angle_gsm", "dynamic_pressure", "newell",
 )
+DERIVED_CONDITIONING_FIELDS = ("sml_mean_30m", "sml_slope_5m")
 CONDITIONING_FEATURE_NAMES = (
     "sml", "smr", "by_gsm", "bz_gsm", "vx_gse", "dynamic_pressure",
     "newell", "kp", "day_of_year_sin", "day_of_year_cos", "dipole_tilt",
     "clock_angle_sin", "clock_angle_cos",
 )
+SUPPORTED_CONDITIONING_FEATURE_NAMES = (
+    *CONDITIONING_FEATURE_NAMES, *DERIVED_CONDITIONING_FIELDS
+)
 CONDITIONING_PROFILES = {
     "all11": CONDITIONING_FEATURE_NAMES,
     "hybrid4": ("sml", "by_gsm", "bz_gsm", "dipole_tilt"),
+    "hybrid6_sml_history": (
+        "sml", "sml_mean_30m", "sml_slope_5m",
+        "by_gsm", "bz_gsm", "dipole_tilt",
+    ),
 }
 CONCEPTUAL_CONDITIONING_FEATURES = {
-    "sml": ("sml",),
+    "sml": ("sml", "sml_mean_30m", "sml_slope_5m"),
     "smr": ("smr",),
     "imf_by": ("by_gsm",),
     "imf_bz": ("bz_gsm",),
@@ -83,6 +97,23 @@ CONCEPTUAL_CONDITIONING_FEATURES = {
     "kp": ("kp",),
     "day_of_year": ("day_of_year_sin", "day_of_year_cos"),
     "dipole_tilt": ("dipole_tilt",),
+}
+
+SML_HISTORY_DEFINITION = {
+    "causal": True,
+    "sml_mean_30m": {
+        "window": "inclusive t-29 through t",
+        "samples": 30,
+        "statistic": "arithmetic mean",
+        "units": "nT",
+    },
+    "sml_slope_5m": {
+        "window": "inclusive t-4 through t",
+        "samples": 5,
+        "statistic": "ordinary least-squares slope against elapsed minutes",
+        "units": "nT/min",
+    },
+    "validity": "all window samples must be finite and exactly one minute apart",
 }
 
 
@@ -187,6 +218,66 @@ def read_supermag_files(filenames):
     return combined, provenance
 
 
+#%% Causal one-minute history features
+
+def _trailing_window_statistic(time, values, samples, statistic):
+    """Evaluate a causal statistic only on complete contiguous minute windows."""
+
+    time = np.asarray(time, dtype="datetime64[us]")
+    values = np.asarray(values, dtype=np.float64)
+    result = np.full(len(values), np.nan, dtype=np.float32)
+    if time.ndim != 1 or values.ndim != 1 or time.shape != values.shape:
+        raise ValueError("history time and values must be aligned one-dimensional arrays")
+    if samples < 2 or len(values) < samples:
+        return result
+
+    finite = np.isfinite(values).astype(np.int64)
+    safe = np.where(np.isfinite(values), values, 0.0)
+    value_sum = np.r_[0.0, np.cumsum(safe)]
+    finite_sum = np.r_[0, np.cumsum(finite)]
+    bad_step = np.r_[False, np.diff(time) != np.timedelta64(1, "m")]
+    bad_step_sum = np.r_[0, np.cumsum(bad_step)]
+    stops = np.arange(samples - 1, len(values))
+    starts = stops - samples + 1
+    complete = (
+        finite_sum[stops + 1] - finite_sum[starts] == samples
+    ) & (
+        bad_step_sum[stops + 1] - bad_step_sum[starts + 1] == 0
+    )
+    valid_stops = stops[complete]
+    valid_starts = starts[complete]
+    if statistic == "mean":
+        result[valid_stops] = (
+            (value_sum[valid_stops + 1] - value_sum[valid_starts]) / samples
+        ).astype(np.float32)
+    elif statistic == "slope":
+        elapsed = np.arange(samples, dtype=np.float64)
+        centered = elapsed - elapsed.mean()
+        denominator = np.sum(centered**2)
+        numerators = np.correlate(safe, centered, mode="valid")
+        result[valid_stops] = (numerators[valid_starts] / denominator).astype(
+            np.float32
+        )
+    else:
+        raise ValueError(f"unsupported trailing statistic: {statistic}")
+    return result
+
+
+def derive_sml_history(supermag):
+    """Add causal 30-minute mean and 5-minute slope to a SuperMAG table."""
+
+    if "time" not in supermag or "sml" not in supermag:
+        raise ValueError("SML history requires SuperMAG time and sml fields")
+    result = dict(supermag)
+    result["sml_mean_30m"] = _trailing_window_statistic(
+        result["time"], result["sml"], 30, "mean"
+    )
+    result["sml_slope_5m"] = _trailing_window_statistic(
+        result["time"], result["sml"], 5, "slope"
+    )
+    return result
+
+
 #%% IMAGE-time alignment and quantitative coverage
 
 def align_conditioning(supermag, image_times, maximum_offset_seconds=30.0):
@@ -225,7 +316,11 @@ def conditioning_coverage(aligned):
     matched = np.asarray(aligned["time_matched"], dtype=bool)
     denominator = int(matched.sum())
     fields = {}
-    for name in SUPERMAG_SOURCE_COLUMNS.values():
+    coverage_fields = (
+        *SUPERMAG_SOURCE_COLUMNS.values(),
+        *(name for name in DERIVED_CONDITIONING_FIELDS if name in aligned),
+    )
+    for name in coverage_fields:
         finite = matched & np.isfinite(aligned[name])
         fields[name] = {
             "finite_frames": int(finite.sum()),
@@ -323,7 +418,7 @@ def resolve_conditioning_features(profile_or_names="all11"):
         names = tuple(profile_or_names)
     if (
         not names or len(set(names)) != len(names)
-        or any(name not in CONDITIONING_FEATURE_NAMES for name in names)
+        or any(name not in SUPPORTED_CONDITIONING_FEATURE_NAMES for name in names)
     ):
         raise ValueError("conditioning feature names must be a nonempty supported subset")
     return tuple(names)
@@ -335,6 +430,10 @@ def conditioning_feature_matrix(condition, positions, time, kp, feature_names="a
     features = {
         name: condition[name][positions] for name in CONDITIONING_SOURCE_FIELDS
     }
+    features.update({
+        name: condition[name][positions]
+        for name in DERIVED_CONDITIONING_FIELDS if name in condition
+    })
     features.update(conditioning_time_features(time))
     features.update({
         "kp": np.asarray(kp),
@@ -342,6 +441,11 @@ def conditioning_feature_matrix(condition, positions, time, kp, feature_names="a
         "clock_angle_cos": np.cos(np.deg2rad(features["clock_angle_gsm"])),
     })
     names = resolve_conditioning_features(feature_names)
+    missing = [name for name in names if name not in features]
+    if missing:
+        raise ValueError(
+            "conditioning table lacks selected features: " + ", ".join(missing)
+        )
     return np.column_stack([features[name] for name in names]).astype(np.float32)
 
 
@@ -353,13 +457,18 @@ def load_prepared_conditioning(directory):
     directory = Path(directory).expanduser().resolve()
     manifest_path = directory / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
-    if manifest.get("format") != CONDITIONING_FORMAT:
-        raise ValueError(f"expected completed {CONDITIONING_FORMAT} data")
+    data_format = manifest.get("format")
+    if data_format not in SUPPORTED_CONDITIONING_FORMATS:
+        raise ValueError(
+            "expected completed IMAGE/SuperMAG conditioning data in a supported format"
+        )
     with np.load(directory / manifest["array_file"], allow_pickle=False) as saved:
         condition = {name: saved[name].copy() for name in saved.files}
     required = {
         "orbit", "source_frame", "time", *CONDITIONING_SOURCE_FIELDS
     }
+    if data_format == CONDITIONING_FORMAT:
+        required.update(DERIVED_CONDITIONING_FIELDS)
     missing = sorted(required - set(condition))
     if missing:
         raise ValueError("conditioning table lacks fields: " + ", ".join(missing))
@@ -440,7 +549,9 @@ def conditioning_vector_from_record(record, feature_names="all11"):
 
     names = resolve_conditioning_features(feature_names)
     record_names = {
-        "sml": "sml", "smr": "smr", "by_gsm": "imf_by",
+        "sml": "sml", "sml_mean_30m": "sml_mean_30m",
+        "sml_slope_5m": "sml_slope_5m",
+        "smr": "smr", "by_gsm": "imf_by",
         "bz_gsm": "imf_bz", "vx_gse": "vx",
         "dynamic_pressure": "dynamic_pressure", "newell": "newell",
         "kp": "kp", "dipole_tilt": "dipole_tilt",

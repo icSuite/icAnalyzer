@@ -13,8 +13,8 @@ from sklearn.metrics import r2_score
 from icanalyzer.cvae.cache import file_sha256
 from icanalyzer.cvae.conditioning import (
     CONDITIONING_FEATURE_NAMES,
-    CONDITIONING_FORMAT,
     CONCEPTUAL_CONDITIONING_FEATURES,
+    SUPPORTED_CONDITIONING_FORMATS,
     conditioning_feature_matrix,
     conditioning_time_features,
 )
@@ -72,7 +72,7 @@ def load_benchmark_data(cache_directory, conditioning_directory):
     conditioning = Path(conditioning_directory).expanduser().resolve()
     cache_manifest = json.loads((cache / "manifest.json").read_text())
     condition_manifest = json.loads((conditioning / "manifest.json").read_text())
-    if condition_manifest.get("format") != CONDITIONING_FORMAT:
+    if condition_manifest.get("format") not in SUPPORTED_CONDITIONING_FORMATS:
         raise ValueError("expected completed IMAGE/SuperMAG conditioning data")
     if cache_manifest.get("field_names") != ["wic_corrected"]:
         raise ValueError("conditioning benchmark requires a one-field WIC cache")

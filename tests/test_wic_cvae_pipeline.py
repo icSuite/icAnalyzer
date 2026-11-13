@@ -1,4 +1,6 @@
 import json
+import io
+import pickle
 from pathlib import Path
 from types import SimpleNamespace
 import warnings
@@ -10,6 +12,7 @@ import torch
 from icanalyzer.cvae.artifacts import (
     CONDUCTANCE_CVAE_ARTIFACT_TYPE,
     WIC_CVAE_ARTIFACT_TYPE,
+    _Numpy1CompatibleUnpickler,
     load_run_artifact,
     save_run_artifact
 )
@@ -30,15 +33,125 @@ from icanalyzer.cvae.cache import AutomaticFieldDataset
 from icanalyzer.cvae.conditioning import (
     CONDITIONING_FEATURE_NAMES,
     CONDITIONING_FORMAT,
+    CONDITIONING_FORMAT_V1,
+    CONDITIONING_PROFILES,
     SUPERMAG_SOURCE_COLUMNS,
     align_conditioning,
     align_conditioning_features,
     conditioning_vector_from_record,
     conditioning_coverage,
+    derive_sml_history,
     fit_conditioning_normalization,
     read_supermag_file,
 )
 from scripts.CVAE.prepare_wic_cvae_cache import WIC_CACHE_FORMAT, load_annotated_wic, load_masked_wic
+from scripts.CVAE.plot_wic_si12_event_comparison import nearest_event_minutes
+from scripts.CVAE import sample_wic_si12_event as event_script
+from scripts.CVAE.sample_wic_si12_event import event_conditions
+
+
+def test_numpy2_private_core_array_pickle_loads_under_numpy1():
+    expected = np.asarray([[True, False], [False, True]])
+    numpy1_pickle = pickle.dumps(expected, protocol=0)
+    numpy2_pickle = numpy1_pickle.replace(
+        b"cnumpy.core.multiarray\n", b"cnumpy._core.multiarray\n"
+    )
+    assert numpy2_pickle != numpy1_pickle
+    restored = _Numpy1CompatibleUnpickler(io.BytesIO(numpy2_pickle)).load()
+    np.testing.assert_array_equal(restored, expected)
+
+
+def test_event_plot_matches_each_image_to_nearest_minute():
+    event_time = np.asarray([
+        "2000-08-28T08:50:00", "2000-08-28T08:51:00",
+        "2000-08-28T08:52:00",
+    ], dtype="datetime64[us]")
+    frame_time = np.asarray([
+        "2000-08-28T08:49:53", "2000-08-28T08:51:22",
+        "2000-08-28T08:52:02",
+    ], dtype="datetime64[us]")
+    index, offset = nearest_event_minutes(frame_time, event_time)
+    np.testing.assert_array_equal(index, [0, 1, 2])
+    np.testing.assert_allclose(offset, [-7, 22, 2])
+
+    with pytest.raises(ValueError, match="nearest CVAE minute"):
+        nearest_event_minutes(
+            np.asarray(["2000-08-28T08:48:00"], dtype="datetime64[us]"),
+            event_time
+        )
+
+
+def test_completed_event_can_resume_to_add_sensor_medoids(tmp_path, monkeypatch):
+    run_directory = tmp_path / "run"
+    run_directory.mkdir()
+    supermag_file = tmp_path / "year_2000.txt"
+    supermag_file.write_text("mock")
+    output = tmp_path / "event"
+    model = SimpleNamespace(
+        field_names=("wic_corrected", "si12"), image_shape=(2, 2),
+        conditioning={
+            "feature_names": ["sml", "by_gsm", "bz_gsm", "dipole_tilt"],
+            "training_min": [-1000, -20, -20, -40],
+            "training_max": [0, 20, 20, 40],
+        },
+    )
+    support = np.ones((2, 2, 2), dtype=bool)
+    artifact = {
+        "artifact_type": WIC_CVAE_ARTIFACT_TYPE,
+        "data_provenance": {
+            "training_support": support,
+            "grid": {
+                "mlat": [[60, 60], [70, 70]],
+                "mlt": [[0, 6], [12, 18]],
+            },
+        },
+    }
+    supermag = {
+        "time": np.asarray(["2000-08-28T08:50:00"], dtype="datetime64[us]"),
+        "sml": np.asarray([-200.]),
+        "by_gsm": np.asarray([2.]),
+        "bz_gsm": np.asarray([-3.]),
+    }
+    samples = np.asarray([
+        [[[1, 1], [1, 1]], [[1, 2], [1, 2]]],
+        [[[2, 2], [2, 2]], [[2, 3], [2, 3]]],
+        [[[3, 3], [3, 3]], [[3, 4], [3, 4]]],
+        [[[9, 1], [1, 1]], [[9, 1], [1, 1]]],
+    ], dtype=np.float32)
+    monkeypatch.setattr(
+        event_script, "load_run_artifact",
+        lambda *args, **kwargs: (model, object(), artifact)
+    )
+    monkeypatch.setattr(
+        event_script, "read_supermag_file",
+        lambda *args: (supermag, {"sha256": "supermag-hash"})
+    )
+    monkeypatch.setattr(event_script, "sha256", lambda *args: "artifact-hash")
+    monkeypatch.setattr(
+        event_script, "sample_decoded_ensemble",
+        lambda *args, **kwargs: samples.copy()
+    )
+    arguments = SimpleNamespace(
+        run_directory=run_directory, supermag=supermag_file,
+        start="2000-08-28T08:50:00", stop="2000-08-28T08:50:00",
+        output=output, draws=4, batch_size=2, maximum_imf_gap_minutes=0,
+        seed=3, threads=1, device="cpu", resume=False, add_medoids=False,
+        wic_medoid_threshold=1., si12_medoid_threshold=1.,
+    )
+    event_script.run(arguments)
+    assert np.load(output / "completed_minutes.npy").all()
+    assert not (output / "event_medoids.npy").exists()
+
+    arguments.resume = True
+    arguments.add_medoids = True
+    event_script.run(arguments)
+    medoids = np.load(output / "event_medoids.npy")
+    indices = np.load(output / "event_medoid_indices.npy")
+    assert np.load(output / "completed_medoid_minutes.npy").all()
+    assert medoids.shape == (1, 2, 2, 2)
+    assert np.all((indices >= 0) & (indices < len(samples)))
+    for channel in range(2):
+        np.testing.assert_array_equal(medoids[0, channel], samples[indices[0, channel], channel])
 
 
 def test_supermag_reader_alignment_and_core_coverage(tmp_path):
@@ -80,6 +193,105 @@ def test_supermag_reader_alignment_and_core_coverage(tmp_path):
     coverage = conditioning_coverage(aligned)
     assert coverage["time_matched_frames"] == 2
     assert coverage["core_joint_finite_frames"] == 1
+
+
+def test_sml_history_is_causal_and_requires_contiguous_finite_minutes():
+    time = np.arange(
+        np.datetime64("2000-01-01T00:00"),
+        np.datetime64("2000-01-01T00:40"),
+        np.timedelta64(1, "m"),
+    ).astype("datetime64[us]")
+    sml = 10 - 2 * np.arange(len(time), dtype=np.float32)
+    history = derive_sml_history({"time": time, "sml": sml})
+    assert np.isnan(history["sml_mean_30m"][:29]).all()
+    assert np.isnan(history["sml_slope_5m"][:4]).all()
+    np.testing.assert_allclose(history["sml_mean_30m"][29], -19)
+    np.testing.assert_allclose(history["sml_slope_5m"][4:], -2)
+
+    nonfinite = sml.copy()
+    nonfinite[20] = np.nan
+    history = derive_sml_history({"time": time, "sml": nonfinite})
+    assert np.isnan(history["sml_mean_30m"][29:40]).all()
+    assert np.isfinite(history["sml_slope_5m"][25:]).all()
+
+    gapped_time = np.delete(time, 20)
+    gapped_sml = np.delete(sml, 20)
+    history = derive_sml_history({"time": gapped_time, "sml": gapped_sml})
+    assert np.isnan(history["sml_mean_30m"][29:]).all()
+
+
+def test_event_conditions_use_every_complete_minute_without_interpolation():
+    time = np.arange(
+        np.datetime64("2000-08-28T08:49"),
+        np.datetime64("2000-08-28T08:54"),
+        np.timedelta64(1, "m"),
+    ).astype("datetime64[us]")
+    supermag = {
+        "time": time,
+        "sml": np.asarray([-10, -20, -30, -40, -50], dtype=float),
+        "by_gsm": np.asarray([1, 2, 3, 4, 5], dtype=float),
+        "bz_gsm": np.asarray([-1, -2, -3, -4, -5], dtype=float),
+    }
+    selected_time, matrix, interpolated = event_conditions(
+        supermag, "2000-08-28T08:49:53", "2000-08-28T08:52:02"
+    )
+    np.testing.assert_array_equal(
+        selected_time,
+        np.asarray([
+            "2000-08-28T08:50:00", "2000-08-28T08:51:00",
+            "2000-08-28T08:52:00",
+        ], dtype="datetime64[us]")
+    )
+    np.testing.assert_allclose(matrix[:, :3], [
+        [-20, 2, -2], [-30, 3, -3], [-40, 4, -4]
+    ])
+    assert np.isfinite(matrix[:, 3]).all()
+    assert not interpolated.any()
+
+    missing = {name: values[[0, 1, 3, 4]] for name, values in supermag.items()}
+    with pytest.raises(ValueError, match="required event minutes"):
+        event_conditions(missing, "2000-08-28T08:49:53", "2000-08-28T08:52:02")
+
+    imf_gap = {name: values.copy() for name, values in supermag.items()}
+    imf_gap["by_gsm"][2] = np.nan
+    imf_gap["bz_gsm"][2] = np.nan
+    with pytest.raises(ValueError, match="nonfinite hybrid4"):
+        event_conditions(imf_gap, "2000-08-28T08:49:53", "2000-08-28T08:52:02")
+    _, filled_matrix, filled = event_conditions(
+        imf_gap, "2000-08-28T08:49:53", "2000-08-28T08:52:02",
+        maximum_imf_gap_minutes=1
+    )
+    np.testing.assert_allclose(filled_matrix[1, 1:3], [3, -3])
+    np.testing.assert_array_equal(filled, [False, True, False])
+
+
+def test_event_conditions_build_hybrid6_history_before_event_selection():
+    time = np.arange(
+        np.datetime64("2000-08-28T08:00"),
+        np.datetime64("2000-08-28T08:40"),
+        np.timedelta64(1, "m"),
+    ).astype("datetime64[us]")
+    minute = np.arange(len(time), dtype=np.float32)
+    supermag = {
+        "time": time,
+        "sml": -100 - 3 * minute,
+        "by_gsm": 1 + minute / 10,
+        "bz_gsm": -2 - minute / 10,
+    }
+    selected_time, matrix, _ = event_conditions(
+        supermag, "2000-08-28T08:30:00", "2000-08-28T08:32:00",
+        feature_names="hybrid6_sml_history"
+    )
+    assert matrix.shape == (3, 6)
+    np.testing.assert_array_equal(
+        selected_time.astype("datetime64[m]"), time[30:33].astype("datetime64[m]")
+    )
+    np.testing.assert_allclose(matrix[:, 0], supermag["sml"][30:33])
+    np.testing.assert_allclose(matrix[:, 1], [-146.5, -149.5, -152.5])
+    np.testing.assert_allclose(matrix[:, 2], -3)
+    np.testing.assert_allclose(matrix[:, 3:5], np.column_stack((
+        supermag["by_gsm"][30:33], supermag["bz_gsm"][30:33]
+    )))
 
 
 def test_conditioning_benchmark_morphology_targets_are_explicit():
@@ -138,7 +350,7 @@ def test_named_conditioning_exact_join_dataset_and_model(tmp_path):
     }
     np.savez(conditioning_directory / "conditioning.npz", **arrays)
     (conditioning_directory / "manifest.json").write_text(json.dumps({
-        "format": CONDITIONING_FORMAT, "array_file": "conditioning.npz"
+        "format": CONDITIONING_FORMAT_V1, "array_file": "conditioning.npz"
     }))
     matrix, _, _ = align_conditioning_features(
         conditioning_directory, orbit, source_frame, time, [1., 3., 5.]
@@ -223,6 +435,13 @@ def test_named_conditioning_exact_join_dataset_and_model(tmp_path):
         "sml": -200, "imf_by": 2, "imf_bz": -3, "dipole_tilt": 10
     }, feature_names="hybrid4")
     np.testing.assert_array_equal(hybrid_requested, [-200, 2, -3, 10])
+    history_requested = conditioning_vector_from_record({
+        "sml": -200, "sml_mean_30m": -150, "sml_slope_5m": -12,
+        "imf_by": 2, "imf_bz": -3, "dipole_tilt": 10,
+    }, feature_names="hybrid6_sml_history")
+    np.testing.assert_array_equal(
+        history_requested, [-200, -150, -12, 2, -3, 10]
+    )
 
 
 def test_empirical_imf_regimes_use_standard_clock_and_leave_nuisance_free():
@@ -509,6 +728,7 @@ def make_named_conditioning(directory, cache):
         by_gsm=sequence, bz_gsm=-sequence, vx_gse=-400 - 10 * sequence,
         clock_angle_gsm=30 * sequence,
         dynamic_pressure=sequence, newell=1000 * sequence,
+        sml_mean_30m=-90 * sequence, sml_slope_5m=-5 * sequence,
     )
     (directory / "manifest.json").write_text(json.dumps({
         "format": CONDITIONING_FORMAT, "array_file": "conditioning.npz"
@@ -568,6 +788,7 @@ def test_named_conditioning_wic_trainer_artifact(tmp_path, monkeypatch):
         "sml", "by_gsm", "bz_gsm", "dipole_tilt"
     ]
     assert hybrid_summary["training_configuration"]["conditioning_profile"] == "hybrid4"
+
     assert artifact["data_provenance"]["conditioning"]["profile"] == "hybrid4"
 
     import scripts.CVAE.sample_wic_at_kp as sampler
@@ -719,6 +940,23 @@ def test_named_conditioning_wic_trainer_artifact(tmp_path, monkeypatch):
         "Moderate/normal; Bz South",
         "Moderate/normal; Bz South", "Moderate/normal; Bz South",
     ]
+
+    history_output = tmp_path / "history_run"
+    history_arguments = trainer.parse_arguments([
+        str(cache), "--conditioning", str(conditioning),
+        "--conditioning-profile", "hybrid6_sml_history",
+        "--conditioning-embedding-dim", "6", "--output", str(history_output),
+        "--device", "cpu", "--num-workers", "0", "--epochs", "1",
+        "--latent-dim", "2", "--spline-control-points", "5"
+    ])
+    history_summary = trainer.run(history_arguments)
+    history_model, _, _ = load_run_artifact(history_output / "wic_cvae.pt")
+    assert history_model.conditioning["feature_names"] == list(
+        CONDITIONING_PROFILES["hybrid6_sml_history"]
+    )
+    assert history_summary["training_configuration"]["conditioning_profile"] == (
+        "hybrid6_sml_history"
+    )
 
 
 def test_one_field_disk_cache_and_training_artifact(tmp_path, monkeypatch):

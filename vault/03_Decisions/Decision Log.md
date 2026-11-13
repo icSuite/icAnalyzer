@@ -1,5 +1,29 @@
 # Decision Log
 
+## 2026-11-13 — Test causal SML history before adding image sequences or IMF smoothing
+
+Use the existing paired corrected-WIC/SI12 CVAE architecture and image cache for
+the first temporal-conditioning experiment. Compare the current `hybrid4`
+baseline against `hybrid6_sml_history`: current SML, the inclusive trailing
+30-minute SML arithmetic mean, the inclusive trailing five-minute least-squares
+SML slope in nT/min, current IMF By, current IMF Bz and dipole tilt. Derive both
+history terms on the continuous one-minute SuperMAG series before alignment to
+IMAGE frames, require complete finite one-minute windows and fit normalization
+only on the retained training split. Keep model structure, split, seed and
+training settings fixed. Defer IMF smoothing and image-sequence conditioning so
+the SML-history effect remains identifiable.
+
+## 2026-11-12 — Use orbit 261 frames 42--185 for the real-event demonstration
+
+Use the interval 2000-08-28 08:49:53 through13:42:02 UTC, corresponding to
+IMAGE orbit261 frames42--185. Sample all293 complete SuperMAG minutes from08:50
+through13:42 with the paired hybrid4 model and50000 draws per minute. Use common
+latent draws across minutes and retain pixelwise corrected-WIC/SI12 medians.
+Treat the result as a time sequence of conditional marginals, not a learned
+dynamical trajectory. Require the original one-minute SuperMAG series; do not
+interpolate the149 minutes missing from the IMAGE-aligned conditioning table.
+The user will launch the run; implementation and validation must not start it.
+
 ## 2026-11-09 — Use designed IMF/SML sampling for the hybrid4 climatology
 
 Do not use empirical training-row resampling for the scientific IMF comparison;

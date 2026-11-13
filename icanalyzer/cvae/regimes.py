@@ -13,6 +13,7 @@ from .conditioning import (
     CONDITIONING_FEATURE_NAMES,
     CONDITIONING_PROFILES,
     align_conditioning_features,
+    resolve_conditioning_features,
 )
 
 
@@ -195,7 +196,9 @@ def empirical_regime_masks(
 
 #%% Exact training-row recovery
 
-def load_training_conditions(cache_directory, conditioning_directory):
+def load_training_conditions(
+    cache_directory, conditioning_directory, feature_names="all11"
+):
     """Recover all aligned condition rows for the named CVAE train split."""
 
     cache_directory = Path(cache_directory).expanduser().resolve()
@@ -211,9 +214,10 @@ def load_training_conditions(cache_directory, conditioning_directory):
         expected_cache_format=cache_manifest["cache_format"]
     )
     try:
+        names = resolve_conditioning_features(feature_names)
         matrix, condition_manifest, condition_sha256 = align_conditioning_features(
             conditioning_directory, dataset.frame_orbit, dataset.source_frames,
-            dataset.frame_time, dataset.kp
+            dataset.frame_time, dataset.kp, feature_names=names
         )
         result = {
             "matrix": matrix,
@@ -232,9 +236,14 @@ def load_training_conditions(cache_directory, conditioning_directory):
         "conditioning_manifest_sha256": condition_sha256,
         "conditioning_format": condition_manifest["format"],
         "split": "train",
+        "feature_names": list(names),
         "aligned_frames": int(len(result["matrix"])),
-        "complete_all11_frames": int(
+        "complete_requested_frames": int(
             np.all(np.isfinite(result["matrix"]), axis=1).sum()
         ),
     }
+    if names == CONDITIONING_FEATURE_NAMES:
+        result["provenance"]["complete_all11_frames"] = result["provenance"][
+            "complete_requested_frames"
+        ]
     return result

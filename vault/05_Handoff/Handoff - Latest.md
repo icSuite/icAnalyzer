@@ -1,8 +1,72 @@
 # Handoff - Latest
 
-Last updated: 2026-11-10
-Last reviewed: 2026-11-10 (paired corrected-WIC/SI12 sampling)
-Repository snapshot: `vae/wic-si12` at `2aee6a2` plus the uncommitted paired-sampling implementation, with user annotation and generated-output changes preserved; `main` remains at `7c71591`
+Last updated: 2026-11-13
+Last reviewed: 2026-11-13 (causal SML-history conditioning)
+Repository snapshot: `vae/wic-si12` at `043f9da` plus the uncommitted event and SML-history implementation, with user annotation and generated-output changes preserved; `main` remains at `7c71591`
+
+## Causal SML-history profile implemented; user run is next (2026-11-13)
+
+The next controlled comparison is `hybrid4` versus
+`hybrid6_sml_history`, holding the paired cache, architecture, split, seed and
+training settings fixed. The six-column profile is current SML, trailing
+30-minute SML mean over `t-29...t`, trailing five-minute least-squares SML
+slope over `t-4...t` in nT/min, current IMF By/Bz and dipole tilt. Both history
+terms are causal and are derived from the continuous one-minute SuperMAG table
+before sparse IMAGE-frame alignment. Missing samples or non-one-minute cadence
+invalidate the affected window.
+
+`prepare_conditioning_data.py` now writes version-2 tables containing those
+derived fields and an exact manifest definition. Use a new output directory;
+the completed `supermag_all` version-1 table remains valid for old profiles but
+cannot train the history profile. The generic trainer exposes
+`--conditioning-profile hybrid6_sml_history`; no model or image-cache change is
+required. Exact-condition and empirical-row sampling carry the expanded vector.
+The paired event sampler accepts both profiles and computes history using raw
+pre-event minutes before selecting the requested event. It preserves the old
+hybrid4 event format for resume compatibility and uses a versioned named format
+for new history outputs. The2x3 plotter reads either.
+
+Verification:24 focused tests pass. Reading the actual year2000 SuperMAG file
+and constructing orbit-261 conditions gave293 finite rows x6 columns, retained
+the one explicitly allowed IMF interpolation at11:42, and did not sample the
+CVAE. No preparation, training or event run was started. The user's next steps
+are to create the external version-2 conditioning table, inspect coverage and
+retained split counts, then launch matched training. IMF circular averaging is
+not part of this first test.
+
+Portfolio impact: Central update needed: No.
+
+## Orbit-261 event complete; comparison plotter ready (2026-11-13)
+
+The chosen event is orbit261 frames42--185, 2000-08-28 08:49:53 through
+13:42:02 UTC. These inclusive bounds select293 complete one-minute timestamps
+from08:50 through13:42. Do not use the prepared IMAGE-aligned conditioning table
+as a one-minute source: it contains conditions at only144 unique minutes in
+this interval and omits149 intervening minutes.
+
+The user completed the event:293/293 minutes,50000 paired draws per minute,
+saved median shape293x2x46x46, and no conditions outside the training range.
+The explicit one-minute IMF fill at11:42 is recorded with By/Bz=3.555/-3.6 nT.
+Interpret the result as conditional marginals with common latent draws, not a
+learned temporal trajectory. The NumPy2-to-NumPy1 artifact fallback remains
+necessary locally and leaves the checkpoint unchanged.
+
+The user selected a2x3 comparison layout: corrected WIC on row1, SI12 on row2;
+IMAGE, CVAE median and CVAE medoid in the three columns. The completed event
+did not retain ensemble members, so medoids cannot be reconstructed from the
+saved medians. Rerun the exact event command with `--resume --add-medoids`.
+This skips median calculation but repeats all decoding, saves separate sensor
+medoids and member indices, and can resume independently. WIC and SI12 medoids
+are selected separately and need not share member identity.
+
+After medoids complete, `plot_wic_si12_event_comparison.py` maps frames42--185
+to144 unique CVAE minutes within30 seconds and writes the requested2x3 PNGs,
+mapping CSV and HTML gallery. Scales default to1500/50 counts. IMAGE retains
+native finite support, CVAE retains learned support and blank source frame182
+stays blank. Four focused tests, syntax, CLI and real timestamp/grid validation
+pass. Per user request, the agent ran neither medoid sampling nor plotting.
+
+Portfolio impact: Central update needed: No.
 
 ## Paired corrected-WIC/SI12 cache and trainer implemented (2026-11-10)
 
@@ -39,11 +103,10 @@ the SI12 plot maximum and 10 counts for its exceedance threshold. The
 one-channel saved-product contract remains readable and unchanged. A real
 synthetic-artifact plot smoke rendered all nine WIC, SI12 and conductance PNGs.
 
-Next action: the user's Dynamit paired `hybrid4` run was reported 91% complete.
-Let it finish, then sample the controlled IMF/SML regimes with 50,000 draws and
-run the plot-only command. Commit only the source, tests, README and vault
-changes; preserve the user-edited annotation JSON and generated-output
-directories.
+Paired `hybrid4` training and orbit-261 event sampling are complete. Controlled
+IMF/SML regime sampling remains a separate analysis. Preserve the user-edited
+annotation JSON and generated-output directories when committing source, tests,
+README and vault changes.
 
 Portfolio impact: Central update needed: No.
 

@@ -1,8 +1,72 @@
 # Current State
 
-Last reviewed: 2026-11-10 (paired corrected-WIC/SI12 sampling)
-Repository snapshot: `vae/wic-si12` at `2aee6a2` plus the uncommitted paired-sampling implementation; `main` remains at `7c71591`
+Last reviewed: 2026-11-13 (causal SML-history conditioning)
+Repository snapshot: `vae/wic-si12` at `043f9da` plus the uncommitted event and SML-history implementation; `main` remains at `7c71591`
 Worktree: user annotation and generated-output changes preserved
+
+## Causal SML-history conditioning ready to prepare and train (2026-11-13)
+
+The approved controlled test is implemented as `hybrid6_sml_history` without
+changing the CVAE architecture or image cache. Its ordered inputs are current
+SML, inclusive trailing30-minute SML mean, inclusive trailing five-minute
+least-squares SML slope in nT/min, current IMF By/Bz and dipole tilt. History
+is derived on the continuous one-minute SuperMAG series before IMAGE alignment;
+every history window must be finite and exactly one minute apart. The new
+version-2 conditioning manifest records those definitions. Version-1 tables
+and existing `all11`/`hybrid4` artifacts remain readable.
+
+`train_wic_cvae.py --conditioning-profile hybrid6_sml_history` uses the same
+generic trainer, per-split finite-row filtering and training-split-only
+standardization. Exact-condition and empirical-row sampling understand the new
+columns. `sample_wic_si12_event.py` accepts either reduced profile and derives
+pre-event SML history from the full raw SuperMAG file before selecting event
+minutes. Existing hybrid4 event configuration/output formats are unchanged.
+The comparison plotter also accepts new named-event output.
+
+Verification:24 focused CVAE checks pass. A read-only real-data validation on
+year2000 produced293/293 finite orbit-261 history condition rows, shape293x6,
+with the known single11:42 IMF interpolation and no sampling. No conditioning
+table, training run or event run was started. Next the user should prepare a
+new version-2 conditioning directory, confirm retained split counts, train the
+matched paired model, and only then rerun the orbit-261 event. IMF averaging
+remains deliberately deferred to keep this first comparison identifiable.
+
+## Orbit-261 event complete; comparison plotting ready (2026-11-13)
+
+The user selected IMAGE orbit261 frames42--185, from 2000-08-28 08:49:53
+through13:42:02 UTC, for the real-event hybrid4 demonstration. The bounds
+contain293 complete SuperMAG minutes,08:50--13:42 inclusive. The prepared
+IMAGE-aligned conditioning table has all four hybrid4 values for the144 source
+frames but only144 unique SuperMAG minutes, with149 intervening minutes absent;
+those values must not be interpolated.
+
+The user completed all293 event minutes with50000 paired draws per minute.
+Saved corrected-WIC/SI12 medians have shape293x2x46x46, all completion flags
+are true and no event conditions lie outside the training range. The one raw
+IMF gap at11:42 UTC was explicitly interpolated to By/Bz=3.555/-3.6 nT and is
+recorded in the condition output. The same latent seed was used at every
+minute; these remain conditional marginals rather than a temporal model.
+
+`plot_wic_si12_event_comparison.py` now maps orbit261 frames42--185 to the
+nearest CVAE minute within30 seconds and writes144 fixed-scale2x3 figures.
+Rows are corrected WIC and SI12; columns are IMAGE, CVAE median and CVAE
+medoid. The original event retained no ensemble members, so medoids cannot be
+derived from its median files. `sample_wic_si12_event.py --resume
+--add-medoids` regenerates the exact deterministic ensembles, skips completed
+medians and checkpoints separate WIC/SI12 morphology medoids and member
+indices. Sensor medoids are selected separately and need not be one paired
+member. This second pass has the same decoding cost as the original event.
+
+The CVAE plots use learned support while IMAGE retains its finite footprint;
+negative IMAGE values are clipped as in cache preparation. Frame182 has no
+finite IMAGE data and remains blank. The plot command also writes `frames.csv`
+and an HTML gallery. Actual mapping validation spans CVAE indices0--292 with144
+unique minutes and maximum absolute offset30 seconds. Four focused tests pass.
+The user will run medoid sampling and plotting; the agent ran neither.
+
+The artifact loader retains its narrow NumPy2-private-path fallback so the
+paired checkpoint loads under local NumPy1.23 without changing either artifact
+or environment.
 
 ## Paired corrected-WIC/SI12 CVAE training path ready (2026-11-10)
 
@@ -41,9 +105,9 @@ separate means, quantiles, medoids and exceedance maps using their own learned
 support. Corrected WIC continues through collapsed Zhang--Paxton/Fang electron
 conductance; SI12 is stored and plotted only as a proton-emission proxy. No
 proton-conductance conversion is claimed. A real synthetic-artifact smoke
-rendered all nine WIC, SI12 and conductance PNG products. The user's Dynamit
-paired `hybrid4` training run was reported 91% complete. Next let it finish,
-then run the existing controlled-regime sampler with 50,000 draws.
+rendered all nine WIC, SI12 and conductance PNG products. Paired `hybrid4`
+training and orbit-261 event sampling are complete; controlled-regime sampling
+remains separate.
 
 ## Pre-proton WIC CVAE path ready (2026-11-09)
 

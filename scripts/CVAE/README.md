@@ -45,11 +45,17 @@ Hall/Pedersen artifacts cannot silently inherit the old WIC/SI12 labels.
   uncertainty experiments.
 - `train_wic_cvae.py`: train either the one-channel WIC CVAE or the paired
   corrected-WIC/SI12 CVAE with historical scalar Kp conditioning, the full
-  11-feature condition vector or the reduced `hybrid4` profile (SML, IMF By,
-  IMF Bz and dipole tilt).
+  11-feature condition vector, the reduced `hybrid4` profile (SML, IMF By,
+  IMF Bz and dipole tilt), or `hybrid6_sml_history`, which adds causal SML
+  mean and slope terms.
 - `sample_wic_at_kp.py`: draw WIC at selected Kp, exact named conditions or
   empirical IMF regimes and propagate each member through collapsed
   Zhang--Paxton and Fang electron conductance.
+- `sample_wic_si12_event.py`: use a real one-minute SML/IMF/tilt sequence to
+  sample paired corrected-WIC/SI12 medians from either reduced profile, with
+  per-minute checkpoints.
+- `plot_wic_si12_event_comparison.py`: match IMAGE orbit frames to the nearest
+  event minute and export 2x3 IMAGE/median/medoid WIC/SI12 figures.
 - `plot_wic_at_kp.py`: regenerate polar WIC and conductance summaries from
   saved Kp or named-condition ensembles without resampling.
 
@@ -73,12 +79,18 @@ Prepare the combined conditioning table outside the repository:
 PYTHONPATH=. python scripts/CVAE/prepare_conditioning_data.py \
   --supermag-dir /media/bing/LaCie/supermag_data \
   --source ~/Dropbox/work/data/IMAGE_FUV_new/precipitation_cs/image_apex_130km_46x46_v1/IR_hardy_smoothed_wic1_si121_si131 \
-  --output ~/Dropbox/work/data/IMAGE_CVAE/conditioning/supermag_all
+  --output ~/Dropbox/work/data/IMAGE_CVAE/conditioning/supermag_sml_history_v2
 ```
 
 The output includes all Product-2 frames overlapping the supplied SuperMAG
 time span. Nearest-minute alignment is limited to 30 seconds by default;
 long gaps and source fill values remain missing rather than being interpolated.
+Before IMAGE alignment, the continuous one-minute series is also used to
+derive a causal 30-minute SML mean over `t-29...t` and a causal five-minute
+least-squares SML slope over `t-4...t`, in nT/min. Every sample in a history
+window must be finite and exactly one minute apart. The version-2 manifest
+records these definitions. Existing version-1 `supermag_all` tables remain
+readable for `all11` and `hybrid4`, but do not contain the two history columns.
 
 Run the scientific parameter benchmark against the corresponding frozen
 Model1+Model2 automatic WIC cache:
@@ -173,6 +185,105 @@ files. Defaults are a 50-count SI12 color limit and 10-count exceedance
 threshold; override them with `--si12-vmax` and
 `--si12-exceedance-threshold`. Sampling and plotting use the same commands
 shown below; point `CVAE_RUN` at the paired run directory.
+
+For the controlled SML-history test, keep the paired image cache, architecture,
+split, seed and optimization settings fixed and change only the conditioning
+table/profile and output directory. No image cache regeneration is needed:
+
+```bash
+PYTHONPATH=. python scripts/CVAE/train_wic_cvae.py \
+  /path/to/training_data/automatic_wic_si12_model1_model2_valid5 \
+  --conditioning ~/Dropbox/work/data/IMAGE_CVAE/conditioning/supermag_sml_history_v2 \
+  --conditioning-profile hybrid6_sml_history \
+  --conditioning-embedding-dim 32 \
+  --output ~/Dropbox/work/data/IMAGE_CVAE/cvae_runs/wic_si12_hybrid6_sml_history \
+  --epochs 500 --batch-size 264 --beta 0.048 \
+  --latent-dim 36 --spline-control-points 30 --spline-degree 3 \
+  --learning-rate 0.0001 --seed 1 --training-holes \
+  --num-workers 4 --prefetch-factor 4 --device cuda
+```
+
+The six inputs are ordered as current SML, trailing 30-minute SML mean,
+trailing five-minute SML slope, current IMF By, current IMF Bz and dipole tilt.
+Frames with an incomplete requested history window are excluded just like any
+other nonfinite condition. Compare the retained split counts with the matched
+`hybrid4` run before interpreting model differences.
+
+The event sampler accepts paired `hybrid4` and `hybrid6_sml_history` artifacts
+and requires the original one-minute SuperMAG export. For the history profile,
+the trailing terms are derived from the full file before the event interval is
+selected, so the first event minute uses its actual pre-event context. It does
+not interpolate the IMAGE-aligned conditioning table, because IMAGE frames
+are only about two minutes apart. Event bounds are inclusive; partial boundary
+minutes are omitted. The same latent seed is reused at every minute to reduce
+Monte Carlo flicker, but the result remains a sequence of conditional
+marginals rather than a learned temporal trajectory. For orbit 261 frames
+42--185, the exact bounds select 293 minutes from 08:50 through 13:42 UTC:
+
+```bash
+CVAE_RUN=~/Dropbox/work/data/IMAGE_CVAE/cvae_runs/wic_si12_hybrid4_model1_model2_valid5_20261110
+EVENT_OUT=~/Dropbox/work/temp_storage/CVAE_orbit_261/event_hybrid4_50k
+
+PYTHONPATH=. python scripts/CVAE/sample_wic_si12_event.py \
+  "$CVAE_RUN" /path/to/supermag/year_2000.txt \
+  --start 2000-08-28T08:49:53 --stop 2000-08-28T13:42:02 \
+  --output "$EVENT_OUT" \
+  --draws 50000 --batch-size 500 --device cuda \
+  --maximum-imf-gap-minutes 1
+```
+
+The orbit-261 interval has one missing IMF minute at11:42 UTC, bracketed by
+finite values at11:41 and11:43. The explicit option above linearly interpolates
+that single By/Bz row and records `imf_interpolated` in the condition file.
+Without the option, any missing IMF value remains a hard error. Gaps longer
+than the requested maximum and unbounded endpoint gaps are never filled.
+
+The output stores `event_medians.npy` with dimensions
+`minute, sensor, row, column`, `event_conditions.npz`, exact source/model
+provenance and one completion flag per minute. If an interrupted run has the
+same configuration, repeat the command with `--resume`; completed minutes are
+not decoded again.
+
+Medians do not retain a coherent ensemble member. To add separate WIC and SI12
+morphology medoids to an already completed event, repeat the exact sampling
+command with `--resume --add-medoids`. This regenerates the deterministic
+ensembles but skips median calculation, then saves `event_medoids.npy`, the two
+member indices and independent medoid completion flags. The WIC and SI12
+medoids are selected separately and therefore need not be the same paired
+member:
+
+```bash
+PYTHONPATH=. python scripts/CVAE/sample_wic_si12_event.py \
+  "$CVAE_RUN" "$SUPERMAG" \
+  --start 2000-08-28T08:49:53 --stop 2000-08-28T13:42:02 \
+  --output "$EVENT_OUT" \
+  --draws 50000 --batch-size 500 --device cuda \
+  --maximum-imf-gap-minutes 1 --resume --add-medoids
+```
+
+After the event run completes, compare every selected IMAGE frame with its
+nearest CVAE minute. The2x3 layout uses corrected WIC on the first row and SI12
+on the second; columns are IMAGE observation, CVAE pixelwise median and CVAE
+morphology medoid. IMAGE negative values are clipped to zero to match CVAE
+cache preparation. The default fixed scales are1500 WIC counts and50 SI12
+counts, and `--frame-stop` is inclusive:
+
+```bash
+EVENT_OUT=~/Dropbox/work/temp_storage/CVAE_orbit_261/event_hybrid4_50k
+IMAGE_ORBIT=~/Dropbox/work/data/IMAGE_FUV_new/precipitation_cs/image_apex_130km_46x46_v1/IR_hardy_smoothed_wic1_si121_si131/or_0261.nc
+COMPARISON_OUT="$EVENT_OUT/image_comparison"
+
+PYTHONPATH=. python scripts/CVAE/plot_wic_si12_event_comparison.py \
+  "$EVENT_OUT" "$IMAGE_ORBIT" \
+  --frame-start 42 --frame-stop 185 \
+  --output "$COMPARISON_OUT"
+```
+
+This writes144 PNGs, `frames.csv` with the IMAGE-to-CVAE time mapping and
+conditions, and a lazy-loading `index.html` gallery. The CVAE panels retain the
+model's learned support; the IMAGE panels retain each observation's finite
+footprint. A source frame with no finite observation remains blank rather than
+being fabricated.
 
 Exact-condition sampling remains available for diagnostics through a JSON list
 containing all 11 conceptual conditions. It should not be used to represent a
