@@ -2,6 +2,7 @@
 
 #%% Native images and their actual grid
 
+from copy import deepcopy
 from pathlib import Path
 import warnings
 
@@ -15,8 +16,18 @@ from scripts.manual_masking.annotation_store import BOUNDARY_FIELDS, decode_mask
 def load_native_images(filename, document):
     filename = Path(filename).resolve()
     with load(filename) as product:
-        if product.grid_id != "image_apex_130km_46x46_v1" or product.shape[1:] != (46, 46):
-            raise ValueError("annotation tool requires the native 46x46 IMAGE CS grid")
+        image_shape = tuple(document.get("mask_shape", product.shape[1:]))
+        expected_grid_id = document.get("grid_transfer", {}).get("target_grid_id")
+        if tuple(product.shape[1:]) != image_shape:
+            raise ValueError(
+                f"annotation tool requires image shape {image_shape}, got "
+                f"{tuple(product.shape[1:])}"
+            )
+        if expected_grid_id is not None and str(product.grid_id) != expected_grid_id:
+            raise ValueError(
+                f"annotation tool requires grid {expected_grid_id}, got {product.grid_id}"
+            )
+        product_grid_id = str(product.grid_id)
         if product.product_type == "conductance_cs":
             fields = ("H", "P", "method_quality_weight", "coverage")
             names = ("Hall", "Pedersen", "auroral quality", "coverage")
@@ -45,7 +56,7 @@ def load_native_images(filename, document):
             companion = Path(companion_attribute)
         if companion.exists():
             with load(companion) as precipitation:
-                if precipitation.grid_id != "image_apex_130km_46x46_v1" or not np.array_equal(precipitation.time, times):
+                if str(precipitation.grid_id) != product_grid_id or not np.array_equal(precipitation.time, times):
                     raise ValueError("WIC companion must match the conductance grid and frame times")
                 if not np.allclose(precipitation.mlat, latitude) or not np.allclose(precipitation.mlt, local_time):
                     raise ValueError("WIC companion coordinates differ from conductance images")
@@ -86,10 +97,11 @@ def native_orbit_record(document, orbit, times, source_wic, seed=None):
         return old
 
     record = new_orbit_record(orbit, len(times))
+    image_shape = tuple(document.get("mask_shape", (46, 46)))
     record.update(
-        mask_shape=[46, 46], frame_index_space="native_cs",
+        mask_shape=list(image_shape), frame_index_space="native_cs",
         source_times_utc=np.datetime_as_string(times, unit="us").tolist(),
-        target_annotated_runs=encode_mask(np.ones((46, 46), dtype=bool))
+        target_annotated_runs=encode_mask(np.ones(image_shape, dtype=bool))
     )
     if old is None:
         # CSV boundaries are detector WIC IDs, not CS array indices.
@@ -105,7 +117,9 @@ def native_orbit_record(document, orbit, times, source_wic, seed=None):
         distances = np.abs(times[:, None] - old_times[None, :])
         nearest = distances.argmin(axis=1)
         matched = distances[np.arange(len(times)), nearest] <= np.timedelta64(1, "s")
-        footprint = decode_mask(old["target_annotated_runs"], shape=(46, 46))
+        if tuple(old.get("mask_shape", image_shape)) != image_shape:
+            raise ValueError(f"orbit {orbit}: stored mask shape differs from document")
+        footprint = decode_mask(old["target_annotated_runs"], shape=image_shape)
         classes = [frame_class(old, int(frame)) if found else "bad" for frame, found in zip(nearest, matched)]
         accepted = np.flatnonzero(np.isin(classes, ("full", "partial")))
         full = np.flatnonzero(np.asarray(classes) == "full")
@@ -121,9 +135,9 @@ def native_orbit_record(document, orbit, times, source_wic, seed=None):
                 if frame_class(record, frame) == "full":
                     previous_mask = None
                     continue
-                mask = np.zeros((46, 46), dtype=bool)
+                mask = np.zeros(image_shape, dtype=bool)
                 if matched[frame]:
-                    mask = propagated_mask(old, int(nearest[frame]), shape=(46, 46)) & footprint
+                    mask = propagated_mask(old, int(nearest[frame]), shape=image_shape) & footprint
                 if previous_mask is None or not np.array_equal(mask, previous_mask):
                     earlier = [number for number in keyframe_frames(old) if number <= nearest[frame]]
                     payload = dict(old["keyframes"][str(earlier[-1])]) if earlier and classes[frame] == "partial" else {}

@@ -1,9 +1,17 @@
 """Focused checks of timestamp selection and paired manual masks."""
 
+import json
+
 import numpy as np
 import pytest
 
-from scripts.manual_masking.annotated_data import apply_annotations, annotation_intervals, select_annotation_files
+from scripts.manual_masking.annotated_data import (
+    annotation_mask_arrays,
+    apply_annotations,
+    annotation_intervals,
+    load_annotations,
+    select_annotation_files,
+)
 from scripts.manual_masking.annotation_store import encode_mask
 from scripts.IMAGE.vae_pipeline.run_conductance_pipeline import parse_arguments
 from scripts.IMAGE.vae_pipeline.run_wic_si12_pipeline import parse_arguments as parse_fuv
@@ -134,6 +142,49 @@ def test_annotation_times_are_embedded():
     times = np.array(["2000-01-01", "2000-01-02"], dtype="datetime64[us]")
     record = {"orbit": 85, "n_frames": 2, "source_times_utc": np.datetime_as_string(times, unit="us").tolist()}
     np.testing.assert_array_equal(annotation_times(record), times)
+
+
+def test_schema3_annotations_and_masks_use_declared_184_shape(tmp_path):
+    shape = (184, 184)
+    times = np.array(["2000-01-01T00:00:00"], dtype="datetime64[us]")
+    mask = np.ones(shape, dtype=bool)
+    mask[:, 92:] = False
+    record = {
+        "orbit": 85, "n_frames": 1, "review_status": "complete",
+        "usable_start": 0, "usable_stop": 0,
+        "full_good_start": None, "full_good_stop": None,
+        "mask_shape": list(shape),
+        "source_times_utc": np.datetime_as_string(times, unit="us").tolist(),
+        "target_annotated_runs": encode_mask(np.ones(shape, dtype=bool)),
+        "keyframes": {"0": {"valid_runs": encode_mask(mask)}},
+    }
+    document = {
+        "schema_version": 3, "mask_shape": list(shape),
+        "target_grid": {
+            "mlat": np.zeros(shape).tolist(),
+            "mlt": np.zeros(shape).tolist(),
+        },
+        "grid_transfer": {"target_grid_id": "grid184"},
+        "orbits": {"0085": record},
+    }
+    path = tmp_path / "annotations184.json"
+    path.write_text(json.dumps(document))
+    annotations = load_annotations(path)
+    assert annotations["image_shape"] == shape
+    assert annotations["grid_id"] == "grid184"
+
+    product = {
+        "values": np.ones((1, 1, *shape)), "time": times,
+        "orbit": np.array([85]), "source_indices": {"wic": np.array([0])},
+        "grid": {"mlat": np.zeros(shape), "mlt": np.zeros(shape)},
+    }
+    masks, classes, source_frames, unmatched = annotation_mask_arrays(
+        product, annotations
+    )
+    np.testing.assert_array_equal(masks[0], mask)
+    assert classes.tolist() == ["partial"]
+    assert source_frames.tolist() == [0]
+    assert unmatched == 0
 
 
 def test_new_native_review_uses_source_ids_and_roundtrips_46x46_masks(tmp_path):

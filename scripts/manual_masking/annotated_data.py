@@ -55,8 +55,14 @@ def load_annotations(filename, segments=None):
     filename = Path(filename).expanduser().resolve()
     contents = filename.read_bytes()
     document = json.loads(contents)
-    if document.get("schema_version") != 3 or document.get("mask_shape") != [46, 46]:
-        raise ValueError("--annotations requires the self-contained schema-3 46x46 annotation JSON")
+    if document.get("schema_version") != 3:
+        raise ValueError("--annotations requires a self-contained schema-3 annotation JSON")
+    image_shape = tuple(document.get("mask_shape", ()))
+    if (
+        len(image_shape) != 2
+        or any(not isinstance(value, int) or value < 1 for value in image_shape)
+    ):
+        raise ValueError("annotation mask_shape must contain two positive integers")
     if "target_grid" not in document:
         raise ValueError("annotation is missing the embedded target_grid")
     reviewed_statuses = ("complete", "no_usable") if segments is not None else ("complete",)
@@ -67,6 +73,8 @@ def load_annotations(filename, segments=None):
     source_times = {}
     timeline_hash = hashlib.sha256()
     for orbit, record in sorted(records.items()):
+        if tuple(record.get("mask_shape", image_shape)) != image_shape:
+            raise ValueError(f"orbit {orbit}: annotation mask shape differs from the document")
         times = annotation_times(record)
         source_times[orbit] = times
         timeline_hash.update(str(orbit).encode())
@@ -74,20 +82,30 @@ def load_annotations(filename, segments=None):
 
     lat = np.asarray(document["target_grid"]["mlat"], dtype=float)
     mlt = np.asarray(document["target_grid"]["mlt"], dtype=float)
-    if lat.shape != (46, 46) or mlt.shape != (46, 46):
-        raise ValueError("embedded target_grid must contain 46x46 mlat and mlt arrays")
+    if lat.shape != image_shape or mlt.shape != image_shape:
+        raise ValueError(
+            f"embedded target_grid must contain {image_shape[0]}x{image_shape[1]} "
+            "mlat and mlt arrays"
+        )
     provenance = {
         "filename": str(filename), "sha256": hashlib.sha256(contents).hexdigest(),
         "source_times_sha256": timeline_hash.hexdigest(), "completed_orbits": len(records),
         "time_matching": "nearest original frame within 1 second; unmatched frames excluded",
         "partial_masks": "last earlier keyframe within the same partial interval",
-        "outside_original_grid": "Frame classes and drawn geometry apply across the entire native grid" if all(decode_mask(record["target_annotated_runs"], shape=(46, 46)).all() for record in records.values()) else "per-orbit explicit target_annotated_runs domain",
+        "image_shape": list(image_shape),
+        "grid_id": document.get("grid_transfer", {}).get("target_grid_id"),
+        "outside_original_grid": "Frame classes and drawn geometry apply across the entire native grid" if all(decode_mask(record["target_annotated_runs"], shape=image_shape).all() for record in records.values()) else "per-orbit explicit target_annotated_runs domain",
         "missing_fraction_policy": "intrinsic product validity before manual masking"
     }
     provenance["annotation_context"] = "embedded source_times_utc and target_grid"
     if any(record.get("frame_index_space") == "native_cs" for record in records.values()):
         provenance["time_matching"] = "nearest per-orbit annotation source frame within 1 second; unmatched frames excluded"
-    annotations = {"records": records, "source_times": source_times, "grid": {"mlat": lat, "mlt": mlt}, "provenance": provenance}
+    annotations = {
+        "records": records, "source_times": source_times,
+        "image_shape": image_shape,
+        "grid_id": provenance["grid_id"],
+        "grid": {"mlat": lat, "mlt": mlt}, "provenance": provenance
+    }
     if segments is not None:
         segments = Path(segments).expanduser().resolve()
         annotations["csv_intervals"] = load_good_orbit_intervals(segments)
@@ -125,14 +143,21 @@ def select_annotation_files(files, annotations):
 def annotation_mask_arrays(product, annotations):
     """Return manual masks, classes and source frames on a loaded product axis."""
 
+    count, _, height, width = product["values"].shape
+    image_shape = tuple(annotations.get("image_shape", (height, width)))
+    if (height, width) != image_shape:
+        raise ValueError(
+            f"annotation masks use {image_shape}, input product uses {(height, width)}"
+        )
     for name in ("mlat", "mlt"):
+        if np.shape(product["grid"][name]) != image_shape:
+            raise ValueError(f"input product {name} grid does not match its image shape")
         difference = product["grid"][name] - annotations["grid"][name]
         if name == "mlt":
             difference = (difference + 12) % 24 - 12
         if not np.allclose(difference, 0, atol=1e-6):
             raise ValueError("annotation masks and input product use different grids")
 
-    count, _, height, width = product["values"].shape
     masks = np.zeros((count, height, width), dtype=bool)
     classes = np.full(count, "excluded", dtype="U8")
     source_frames = np.full(count, -1, dtype=int)

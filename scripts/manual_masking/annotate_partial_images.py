@@ -75,7 +75,7 @@ DEFAULT_ANNOTATION_FILE = (
 DEFAULT_SEGMENT_FILE = REPOSITORY_ROOT / "data" / "good_orbit_segments.csv"
 
 PAGE_SIZE = 36
-MASK_SHAPE = (46, 46)
+DEFAULT_MASK_SHAPE = (46, 46)
 CLASS_COLORS = {
     "unreviewed": "#777777",
     "bad": "#d62728",
@@ -301,11 +301,11 @@ class MaskEditor:
         self._buttons.append(button)
 
     def _lasso_selected(self, vertices: list[tuple[float, float]]) -> None:
-        rows, columns = MASK_SHAPE
+        rows, columns = self.parent.mask_shape
         xx, yy = np.meshgrid(np.arange(columns), np.arange(rows))
         points = np.column_stack([xx.ravel(), yy.ravel()])
         path = MatplotlibPath(vertices, closed=True)
-        self.mask = path.contains_points(points, radius=0.15).reshape(MASK_SHAPE) & self.parent.footprint
+        self.mask = path.contains_points(points, radius=0.15).reshape(self.parent.mask_shape) & self.parent.footprint
         self.vertices = [[float(x), float(y)] for x, y in vertices]
         self.geometry = {
             "kind": "lasso",
@@ -443,7 +443,7 @@ class MaskEditor:
         points = line.get("points")
         if not isinstance(points, list) or len(points) != 2:
             raise ValueError("Saved line does not contain two points")
-        return line_side_mask(line, MASK_SHAPE)
+        return line_side_mask(line, self.parent.mask_shape)
 
     def _line_entries(self) -> list[dict[str, object]]:
         if self.geometry is None or self.geometry.get("kind") != "line_set":
@@ -579,7 +579,7 @@ class MaskEditor:
         self._refresh_overlay("All pixels are valid in the draft.")
 
     def all_invalid(self, _event: object = None) -> None:
-        self.mask = np.zeros(MASK_SHAPE, dtype=bool)
+        self.mask = np.zeros(self.parent.mask_shape, dtype=bool)
         self.vertices = None
         self.geometry = None
         self._clear_line_artists()
@@ -641,9 +641,12 @@ class PartialImageAnnotator:
         self.show_empty_orbits = show_empty_orbits
         self.document = load_document(self.annotation_file)
         if not self.annotation_file.exists():
-            self.document.update(schema_version=3, mask_shape=[46, 46], coordinate_system="target image pixels (column, row)")
-        if self.document.get("schema_version") != 3 or self.document.get("mask_shape") != [46, 46]:
-            raise ValueError("use the self-contained schema-3 46x46 annotation JSON")
+            self.document.update(schema_version=3, mask_shape=list(DEFAULT_MASK_SHAPE), coordinate_system="target image pixels (column, row)")
+        if self.document.get("schema_version") != 3:
+            raise ValueError("use a self-contained schema-3 annotation JSON")
+        self.mask_shape = tuple(self.document.get("mask_shape", ()))
+        if len(self.mask_shape) != 2 or any(int(value) < 1 for value in self.mask_shape):
+            raise ValueError("annotation mask_shape must contain two positive dimensions")
         self.seeds = load_good_segment_seeds(segment_file)
         self.orbits = discover_orbits(
             self.overview_directory,
@@ -746,9 +749,9 @@ class PartialImageAnnotator:
         self.n_frames = len(self.times)
         self.record = native_orbit_record(self.document, self.orbit, self.times, source_wic, self.seeds.get(self.orbit))
         self._resume_legacy_cursor = False
-        self.footprint = decode_mask(self.record["target_annotated_runs"], shape=MASK_SHAPE)
+        self.footprint = decode_mask(self.record["target_annotated_runs"], shape=self.mask_shape)
         self.document["frame_index_space"] = "per-orbit source_times_utc"
-        self.document["outside_source_grid"] = "Frame classes and drawn geometry apply across the entire native 46x46 grid"
+        self.document["outside_source_grid"] = f"Frame classes and drawn geometry apply across the entire native {self.mask_shape[0]}x{self.mask_shape[1]} grid"
         if hasattr(self, "channel_button"):
             self.channel_button.label.set_text(f"Channel: {self.channel_names[self.channel_index]}")
         self.selected_frame = min(max(0, self.selected_frame), self.n_frames - 1)
@@ -1082,11 +1085,11 @@ class PartialImageAnnotator:
 
     def review_entire_grid(self, _event: object = None) -> None:
         def expand():
-            self.record["target_annotated_runs"] = encode_mask(np.ones(MASK_SHAPE, dtype=bool))
+            self.record["target_annotated_runs"] = encode_mask(np.ones(self.mask_shape, dtype=bool))
             self.record["review_status"] = "in_progress"
-            self.footprint = np.ones(MASK_SHAPE, dtype=bool)
+            self.footprint = np.ones(self.mask_shape, dtype=bool)
         self._close_editors()
-        self._mutate(expand, "Entire 46x46 grid selected for review. Recheck full frames and partial masks before marking complete.")
+        self._mutate(expand, f"Entire {self.mask_shape[0]}x{self.mask_shape[1]} grid selected for review. Recheck full frames and partial masks before marking complete.")
 
     def complete_orbit(self, _event: object = None) -> None:
         def complete() -> None:
@@ -1122,7 +1125,7 @@ class PartialImageAnnotator:
             self.refresh("There is nothing to undo for this orbit.")
             return
         restore_record(self.record, self.undo_stack.pop())
-        self.footprint = decode_mask(self.record["target_annotated_runs"], shape=MASK_SHAPE)
+        self.footprint = decode_mask(self.record["target_annotated_runs"], shape=self.mask_shape)
         self.save()
         self.refresh("Restored the previous annotation state.")
 
