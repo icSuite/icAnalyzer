@@ -73,6 +73,9 @@ def run(arguments):
         or metadata.get("input_product_type") != "precipitation_cs"
     ):
         raise ValueError("expected a supported WIC or paired WIC/SI12 cache")
+    image_shape = tuple(metadata.get("image_shape", (46, 46)))
+    if len(image_shape) != 2 or any(int(value) < 1 for value in image_shape):
+        raise ValueError("cache image_shape must contain two positive dimensions")
     proton_corrected = paired or field_names[0] == "wic_corrected"
     seed = metadata["seed"] if arguments.seed is None else arguments.seed
     hole_device = resolve_hole_device(arguments.hole_device, device)
@@ -164,6 +167,7 @@ def run(arguments):
     )}
     configuration.update({
         "seed": seed, "device": device, "input_product_type": "precipitation_cs",
+        "image_shape": list(image_shape),
         "field_names": field_names, "field_units": metadata["field_units"],
         "wic_field": metadata.get("wic_field"),
         "dataset_backend": metadata["cache_format"],
@@ -201,7 +205,9 @@ def run(arguments):
         )
     })
     support = np.load(cache / "training_support.npy", allow_pickle=False)
-    expected_support_shape = (2, 46, 46) if paired else (46, 46)
+    expected_support_shape = (
+        (2, *image_shape) if paired else image_shape
+    )
     if support.shape != expected_support_shape or not support.any():
         raise ValueError("training support does not match the modeled fields")
     provenance = {
@@ -238,7 +244,7 @@ def run(arguments):
 
     set_random_seed(seed)
     model = SplineConditionalVAE(
-        image_shape=(46, 46), latent_dim=arguments.latent_dim,
+        image_shape=image_shape, latent_dim=arguments.latent_dim,
         spline_control_points=arguments.spline_control_points,
         spline_degree=arguments.spline_degree, kp_conditioning=kp_conditioning,
         conditioning=named_conditioning,

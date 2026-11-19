@@ -27,7 +27,6 @@ from icanalyzer.cvae.conditioning import (
 )
 
 
-GRID_ID = "image_apex_130km_46x46_v1"
 DEFAULT_SOURCE = Path.home() / "Dropbox/work/data/IMAGE_FUV_new/precipitation_cs/image_apex_130km_46x46_v1/IR_hardy_smoothed_wic1_si121_si131"
 
 
@@ -63,11 +62,24 @@ def load_image_frame_times(source, start, stop, maximum_offset_seconds, orbits=N
     orbit_values, frame_values, wic_values, time_values = [], [], [], []
     input_frames = 0
     product_evidence = set()
+    grid_id = None
+    image_shape = None
     progress = tqdm(files, desc="Read IMAGE frame times", unit="orbit", dynamic_ncols=True)
     for filename in progress:
         with product_loader(filename) as product:
-            if product.product_type != "precipitation_cs" or product.grid_id != GRID_ID:
-                raise ValueError(f"{filename}: expected precipitation_cs on {GRID_ID}")
+            if product.product_type != "precipitation_cs":
+                raise ValueError(f"{filename}: expected precipitation_cs")
+            current_grid_id = str(product.grid_id)
+            current_shape = tuple(product.shape[1:])
+            if len(current_shape) != 2 or any(value < 1 for value in current_shape):
+                raise ValueError(f"{filename}: invalid Product-2 image shape")
+            if grid_id is None:
+                grid_id = current_grid_id
+                image_shape = current_shape
+            elif current_grid_id != grid_id or current_shape != image_shape:
+                raise ValueError(
+                    f"{filename}: Product-2 grid differs from earlier input files"
+                )
             times = np.asarray(product.time, dtype="datetime64[us]")
             source_wic = np.asarray(product.source_indices["wic"], dtype=np.int32)
             if times.ndim != 1 or source_wic.shape != times.shape or np.isnat(times).any():
@@ -95,6 +107,7 @@ def load_image_frame_times(source, start, stop, maximum_offset_seconds, orbits=N
     }, {
         "source_directory": str(source), "orbit_files_scanned": len(files),
         "input_frames": input_frames, "overlapping_frames": int(sum(map(len, time_values))),
+        "grid_id": grid_id, "image_shape": list(image_shape),
         "product_generations": [
             {"schema_version": schema, "software_version": software}
             for schema, software in sorted(product_evidence)

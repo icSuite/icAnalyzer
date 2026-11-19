@@ -26,7 +26,6 @@ from icanalyzer.cvae.cache import (
 from icanalyzer.cvae.data import ChannelTransform, split_orbit_files
 from scripts.CVAE.prepare_wic_cvae_cache import (
     DEFAULT_SOURCE,
-    GRID_ID,
     _source_evidence,
 )
 from scripts.manual_masking.annotated_data import (
@@ -48,14 +47,11 @@ def _load_fields(filename, product_loader=load):
     """Load paired fields without applying the WIC selection mask."""
 
     with product_loader(filename) as product:
-        if (
-            product.product_type != "precipitation_cs"
-            or product.grid_id != GRID_ID
-            or tuple(product.shape[1:]) != (46, 46)
-        ):
-            raise ValueError(
-                f"{filename}: expected precipitation_cs on {GRID_ID}"
-            )
+        if product.product_type != "precipitation_cs":
+            raise ValueError(f"{filename}: expected precipitation_cs")
+        image_shape = tuple(product.shape[1:])
+        if len(image_shape) != 2 or any(value < 1 for value in image_shape):
+            raise ValueError(f"{filename}: invalid paired-field image shape")
         required = (
             "wic_corrected", "dwic_corrected", "si12", "dsi12",
             "method_valid", "method_quality_weight",
@@ -114,10 +110,14 @@ def _load_fields(filename, product_loader=load):
         }
 
     shape = arrays["wic_corrected"].shape
-    if shape[1:] != (46, 46):
-        raise ValueError(f"{filename}: paired fields use an unexpected grid")
+    if shape[1:] != image_shape:
+        raise ValueError(f"{filename}: paired fields do not match the product grid")
     if any(array.shape != shape for array in arrays.values()):
         raise ValueError(f"{filename}: paired fields do not share one shape")
+    if any(values.shape != image_shape for values in grid.values()):
+        raise ValueError(f"{filename}: coordinate grids do not match paired fields")
+    if shape[0] != len(time):
+        raise ValueError(f"{filename}: paired fields do not align with frame times")
     if kp.shape != (len(time),) or kp_interval_start.shape != kp.shape:
         raise ValueError(f"{filename}: Kp metadata does not align with frames")
     if wic_source_index.shape != kp.shape:
@@ -148,7 +148,9 @@ def _apply_selection(product, selection_mask, mask_evidence,
     shape = arrays["wic_corrected"].shape
     selection_mask = np.asarray(selection_mask, dtype=bool)
     if selection_mask.shape != shape:
-        raise ValueError("WIC selection mask must have shape (frame, 46, 46)")
+        raise ValueError(
+            f"WIC selection mask must have shape {shape}, got {selection_mask.shape}"
+        )
 
     wic = np.asarray(arrays["wic_corrected"], dtype=np.float32)
     si12 = np.asarray(arrays["si12"], dtype=np.float32)
@@ -217,11 +219,14 @@ def load_masked_wic_si12(filename, mask_directory, mask_record,
     with np.load(mask_file, allow_pickle=False) as stored:
         mask_time = stored["time"].astype("datetime64[us]")
         selection_mask = stored["mask"]
-    if selection_mask.dtype != bool or selection_mask.shape != (
-        mask_record["frames"], 46, 46
-    ):
-        raise ValueError(f"{mask_file}: expected Boolean frame masks")
     product = _load_fields(filename, product_loader)
+    expected_mask_shape = (
+        mask_record["frames"], *product["arrays"]["wic_corrected"].shape[1:]
+    )
+    if selection_mask.dtype != bool or selection_mask.shape != expected_mask_shape:
+        raise ValueError(
+            f"{mask_file}: expected Boolean masks with shape {expected_mask_shape}"
+        )
     if not np.array_equal(product["time"], mask_time):
         raise ValueError(f"{filename}: automatic masks use different timestamps")
     evidence = {
@@ -300,6 +305,10 @@ def prepare(arguments, product_loader=load):
             "mask_meaning": mask_summary.get("mask_meaning"),
         }
         estimated_frames = sum(records[path.stem]["frames"] for path in files)
+        image_shape = tuple(mask_summary.get("image_shape", (46, 46)))
+        declared_grid_id = mask_summary.get(
+            "grid_id", "image_apex_130km_46x46_v1"
+        )
     else:
         annotations = load_annotations(arguments.annotations)
         completed = set(annotations["records"])
@@ -326,12 +335,30 @@ def prepare(arguments, product_loader=load):
             annotations["records"][int(path.stem[3:])]["n_frames"]
             for path in files
         )
+        image_shape = tuple(annotations["image_shape"])
+        declared_grid_id = annotations.get("grid_id")
+
+    with product_loader(files[0]) as first_product:
+        actual_shape = tuple(first_product.shape[1:])
+        actual_grid_id = str(first_product.grid_id)
+        if first_product.product_type != "precipitation_cs":
+            raise ValueError(f"{files[0]}: expected precipitation_cs")
+    if actual_shape != image_shape:
+        raise ValueError(
+            f"selection artifacts use image shape {image_shape}, but Product-2 "
+            f"uses {actual_shape}"
+        )
+    if declared_grid_id is not None and actual_grid_id != declared_grid_id:
+        raise ValueError(
+            f"selection artifacts use grid {declared_grid_id}, but Product-2 "
+            f"uses {actual_grid_id}"
+        )
 
     split = split_orbit_files(
         files, arguments.validation_fraction, arguments.test_fraction,
         arguments.seed
     )
-    upper_bytes = estimated_frames * 46 * 46 * 26
+    upper_bytes = estimated_frames * int(np.prod(image_shape)) * 26
     ancestor = output.parent
     while not ancestor.exists():
         ancestor = ancestor.parent
@@ -348,7 +375,7 @@ def prepare(arguments, product_loader=load):
     counts = np.zeros(2, dtype=np.int64)
     totals = np.zeros(2, dtype=np.float64)
     squared_totals = np.zeros(2, dtype=np.float64)
-    training_support = np.zeros((2, 46, 46), dtype=bool)
+    training_support = np.zeros((2, *image_shape), dtype=bool)
     used_counts = {name: 0 for name in split}
     overlap_counts = {
         "selected_cells": 0, "wic_only": 0, "si12_only": 0,
@@ -505,6 +532,7 @@ def prepare(arguments, product_loader=load):
     metadata = {
         "cache_format": WIC_SI12_CACHE_FORMAT,
         "input_product_type": "precipitation_cs",
+        "image_shape": list(image_shape),
         "field_names": list(FIELD_NAMES), "field_units": ["counts", "counts"],
         "quality_channel_count": 2, "valid_channel_count": 2,
         "physical_layout": {

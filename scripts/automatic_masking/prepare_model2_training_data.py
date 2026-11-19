@@ -63,6 +63,19 @@ def main():
     args.output.mkdir(parents=True, exist_ok=False)
     contents = args.annotations.read_bytes()
     document = json.loads(contents)
+    if document.get("schema_version") != 3:
+        raise ValueError("Model2 preparation requires schema-3 annotations")
+    image_shape = tuple(document.get("mask_shape", ()))
+    if len(image_shape) != 2 or any(int(value) < 1 for value in image_shape):
+        raise ValueError("annotation mask_shape must contain two positive dimensions")
+    annotation_grid = {
+        name: np.asarray(document["target_grid"][name], dtype=float)
+        for name in ("mlat", "mlt")
+    }
+    if any(values.shape != image_shape for values in annotation_grid.values()):
+        raise ValueError("annotation target grid does not match mask_shape")
+    expected_grid_id = document.get("grid_transfer", {}).get("target_grid_id")
+    product_grid_id = None
     (args.output / "annotations_snapshot.json").write_bytes(contents)
     rows, images, masks, domains, sources, empty_rows = [], [], [], [], [], []
     excluded = dict(missing_files=[], unmatched_frames=0, no_observed_pixels=0, no_active_keyframe=0)
@@ -82,6 +95,28 @@ def main():
             raise ValueError(f"Completed orbit{key} has unreviewed frames")
         segments = frame_segments(record, classes)
         with load(filename) as product:
+            current_shape = tuple(product.shape[1:])
+            current_grid_id = str(product.grid_id)
+            if current_shape != image_shape:
+                raise ValueError(
+                    f"{filename}: product shape {current_shape} differs from "
+                    f"annotation shape {image_shape}"
+                )
+            if expected_grid_id is not None and current_grid_id != expected_grid_id:
+                raise ValueError(
+                    f"{filename}: expected grid {expected_grid_id}, got {current_grid_id}"
+                )
+            if product_grid_id is None:
+                product_grid_id = current_grid_id
+            elif current_grid_id != product_grid_id:
+                raise ValueError("Model2 source contains more than one grid ID")
+            for name in ("mlat", "mlt"):
+                current = np.asarray(getattr(product, name), dtype=float)
+                difference = current - annotation_grid[name]
+                if name == "mlt":
+                    difference = (difference + 12) % 24 - 12
+                if not np.allclose(difference, 0, rtol=0, atol=1e-6):
+                    raise ValueError(f"{filename}: product and annotation {name} grids differ")
             times = np.asarray(product.time, dtype="datetime64[us]")
             channels = np.stack([np.asarray(product.read(field), dtype=np.float32) for field in FIELDS], axis=1)
         distance = np.abs(times[:, None] - review_times[None, :])
@@ -91,7 +126,7 @@ def main():
         selected = np.flatnonzero(matched)
         if len(set(nearest[selected])) != len(selected):
             raise ValueError(f"Nonunique source/review exposure matches in orbit{key}")
-        footprint = decode_mask(record["target_annotated_runs"], shape=(46, 46))
+        footprint = decode_mask(record["target_annotated_runs"], shape=image_shape)
         human_frames = {f for f in map(int, record["keyframes"]) if human_keyframe(record, f)}
         kept = 0
         for frame in selected:
@@ -107,7 +142,7 @@ def main():
                 excluded["no_observed_pixels"] += 1
                 empty_rows.append(row)
                 continue
-            target = propagated_mask(record, reviewed_frame, shape=(46, 46)) & footprint
+            target = propagated_mask(record, reviewed_frame, shape=image_shape) & footprint
             if np.any(target & ~footprint):
                 raise ValueError("Target outside reviewed footprint")
             images.append(channels[frame])
@@ -146,9 +181,9 @@ def main():
     classes = ("full", "bad", "partial")
     counts = {label: sum(r["label"] == label for r in rows) for label in classes}
     empty_counts = {label: sum(r["label"] == label for r in empty_rows) for label in classes}
-    metadata = dict(annotation_sha256=hashlib.sha256(contents).hexdigest(), annotations=str(args.annotations), source=str(args.source), fields=FIELDS, samples=len(rows), class_counts=counts, empty_class_counts=empty_counts, human_keyframe_samples=sum(r["human_keyframe"] for r in rows), propagated_partial_samples=sum(r["label"] == "partial" and not r["human_keyframe"] for r in rows), orbits=len({r["orbit"] for r in rows}), segments=len({r["segment"] for r in rows}), split={name: {"frames": len(indices), "orbits": sorted(map(int, orbit_sets[name]))} for name, indices in split.items()}, split_policy={"validation_days": sorted(validation_days), "test_start": args.test_start}, sources=sources, excluded=excluded, supervision="finite corrected WIC intersect reviewed footprint; full all-keep, bad all-reject, partial held-forward keyframe", caveat="CS input support inherits upstream retrieval validity; empty frames archived separately because no pixels can supervise a mask")
+    metadata = dict(annotation_sha256=hashlib.sha256(contents).hexdigest(), annotations=str(args.annotations), source=str(args.source), fields=FIELDS, image_shape=list(image_shape), grid_id=product_grid_id, samples=len(rows), class_counts=counts, empty_class_counts=empty_counts, human_keyframe_samples=sum(r["human_keyframe"] for r in rows), propagated_partial_samples=sum(r["label"] == "partial" and not r["human_keyframe"] for r in rows), orbits=len({r["orbit"] for r in rows}), segments=len({r["segment"] for r in rows}), split={name: {"frames": len(indices), "orbits": sorted(map(int, orbit_sets[name]))} for name, indices in split.items()}, split_policy={"validation_days": sorted(validation_days), "test_start": args.test_start}, sources=sources, excluded=excluded, supervision="finite corrected WIC intersect reviewed footprint; full all-keep, bad all-reject, partial held-forward keyframe", caveat="CS input support inherits upstream retrieval validity; empty frames archived separately because no pixels can supervise a mask")
     if all(not row["restricted_footprint"] for row in rows):
-        metadata["supervision"] = "all finite corrected WIC pixels across the entire native 46x46 grid; full all-keep, bad all-reject, partial held-forward drawn mask; no old-grid restriction"
+        metadata["supervision"] = f"all finite corrected WIC pixels across the entire native {image_shape[0]}x{image_shape[1]} grid; full all-keep, bad all-reject, partial held-forward drawn mask; no old-grid restriction"
     (args.output / "dataset_provenance.json").write_text(json.dumps(metadata, indent=2) + "\n")
     print(json.dumps({k: v for k, v in metadata.items() if k not in ("sources", "fields")}), flush=True)
 

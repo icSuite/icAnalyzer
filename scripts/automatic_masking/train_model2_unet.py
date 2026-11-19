@@ -39,6 +39,9 @@ def run(arguments):
         raise FileExistsError("choose a fresh Model2 output directory")
 
     provenance = json.loads((prepared / "dataset_provenance.json").read_text())
+    image_shape = tuple(provenance.get("image_shape", (46, 46)))
+    if len(image_shape) != 2 or any(int(value) < 1 for value in image_shape):
+        raise ValueError("prepared Model2 image_shape is invalid")
     if file_sha256(prepared / "annotations_snapshot.json") != provenance["annotation_sha256"]:
         raise ValueError("prepared annotation snapshot differs from its provenance")
     for source in provenance["sources"]:
@@ -56,6 +59,8 @@ def run(arguments):
         images = archive["images"]
         targets = archive["targets"]
         domains = archive["domains"]
+    if images.shape[-2:] != image_shape or targets.shape[-2:] != image_shape or domains.shape[-2:] != image_shape:
+        raise ValueError("prepared Model2 arrays do not match image_shape")
     images = images[:, [provenance["fields"].index(name) for name in FIELDS]]
     orbits = np.asarray([int(row["orbit"]) for row in rows])
     labels = np.asarray([row["label"] for row in rows])
@@ -149,6 +154,7 @@ def run(arguments):
     configuration = {
         "prepared": str(prepared), "prepared_provenance_sha256": file_sha256(prepared / "dataset_provenance.json"),
         "annotation_sha256": provenance["annotation_sha256"], "fields": FIELDS,
+        "image_shape": list(image_shape), "grid_id": provenance.get("grid_id"),
         "split": provenance["split"], "split_policy": provenance["split_policy"],
         "seed": arguments.seed, "epochs": arguments.epochs, "best_epoch": best_epoch,
         "batch_size": arguments.batch_size, "learning_rate": arguments.learning_rate,
@@ -160,6 +166,7 @@ def run(arguments):
         "input_fields": FIELDS, "threshold": threshold,
         "topology_weight": TOPOLOGY_WEIGHT,
         "manual_annotation_sha256": provenance["annotation_sha256"],
+        "image_shape": list(image_shape), "grid_id": provenance.get("grid_id"),
         "configuration": configuration
     }, checkpoint)
     metrics = {

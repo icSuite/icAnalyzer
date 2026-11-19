@@ -102,7 +102,9 @@ def run(arguments):
 
     accept_model, accept_record = train_acceptance(
         ACCEPT_SEED, output, prepared_inputs, channels, effective_labels,
-        corrected_rows, split, normalization, "cpu"
+        corrected_rows, split, normalization, "cpu",
+        image_shape=tuple(reference.get("image_shape", (46, 46))),
+        grid_id=reference.get("grid_id", "image_apex_130km_46x46_v1")
     )
 
     validation = split["validation"]

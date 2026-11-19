@@ -63,6 +63,12 @@ def run(args):
     accept_saved = torch.load(accept_file, map_location="cpu", weights_only=False)
     normal = accept_saved["normalization"]
     assert normal["fields"] == CORE
+    image_shape = tuple(source_manifest.get("image_shape", (46, 46)))
+    grid_id = source_manifest.get("grid_id", "image_apex_130km_46x46_v1")
+    if tuple(accept_saved.get("image_shape", (46, 46))) != image_shape:
+        raise ValueError("Model1 and Model2 image shapes differ")
+    if accept_saved.get("grid_id", "image_apex_130km_46x46_v1") != grid_id:
+        raise ValueError("Model1 and Model2 grid IDs differ")
     accept_model = FullFrameClassifier(8).eval()
     accept_model.load_state_dict(accept_saved["state_dict"])
     accept_cutoff = selection["full_cutoff"]
@@ -85,7 +91,7 @@ def run(args):
     write_json(output / "policy.json", policy)
     policy_sha = sha(output / "policy.json")
     rows, grid = [], None
-    available_map = np.zeros((46, 46), dtype=np.int64)
+    available_map = np.zeros(image_shape, dtype=np.int64)
     baseline_map, combined_map = available_map.copy(), available_map.copy()
     started = time.monotonic()
 
@@ -96,10 +102,14 @@ def run(args):
         stat = filename.stat()
         assert stat.st_size == record["source_bytes"] and stat.st_mtime_ns == record["source_mtime_ns"]
         with load(filename) as product:
+            if tuple(product.shape[1:]) != image_shape or str(product.grid_id) != grid_id:
+                raise ValueError(
+                    f"{filename}: expected {grid_id} with shape {image_shape}"
+                )
             times = np.asarray(product.time, dtype="datetime64[us]")
             images = np.stack([np.asarray(product.read(field), dtype=np.float32) for field in CORE], axis=1)
             native_grid = dict(mlat=np.asarray(product.mlat), mlt=np.asarray(product.mlt))
-        assert len(times) == record["frames"] and images.shape == (len(times), 4, 46, 46)
+        assert len(times) == record["frames"] and images.shape == (len(times), 4, *image_shape)
         assert not np.isnat(times).any() and np.all(np.diff(times) > np.timedelta64(0, "us"))
         if grid is None:
             grid = native_grid
@@ -109,7 +119,7 @@ def run(args):
         with np.load(baseline_file) as saved:
             np.testing.assert_array_equal(saved["time"].astype("datetime64[us]"), times)
             current = saved["mask"]
-        assert current.shape == (len(times), 46, 46) and current.dtype == bool
+        assert current.shape == (len(times), *image_shape) and current.dtype == bool
         observed = np.isfinite(images[:, 0])
         inputs = normalized_core(images, normal)
         accept_scores = predict_acceptance(accept_model, inputs)
@@ -139,6 +149,7 @@ def run(args):
         noon=(grid["mlt"] >= 10) & (grid["mlt"] < 14) & (grid["mlat"] >= 60) & (grid["mlat"] < 75))
     summary = dict(model=str(output / "policy.json"), model_sha256=policy_sha,
         source_directory=source_manifest["source_directory"], threshold=model2_threshold,
+        image_shape=list(image_shape), grid_id=grid_id,
         model2_sha256=source_manifest["model_sha256"], frame_gate=policy,
         mask_meaning="True means keep; Model1 releases whole frame, otherwise frozen Model2 prediction. Intersect with intrinsic product validity; never fill missing observations.",
         alignment=source_manifest["alignment"], orbit_files=len(rows), frames=sum(row["frames"] for row in rows),

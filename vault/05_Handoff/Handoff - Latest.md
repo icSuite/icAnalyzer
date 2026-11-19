@@ -1,10 +1,93 @@
 # Handoff - Latest
 
-Last updated: 2026-11-13
-Last reviewed: 2026-11-13 (causal SML-history conditioning)
-Repository snapshot: `vae/wic-si12` at `043f9da` plus the uncommitted event and SML-history implementation, with user annotation and generated-output changes preserved; `main` remains at `7c71591`
+Last updated: 2026-11-19
+Last reviewed: 2026-11-19 (184x184 prerequisite implementation)
+Repository snapshot: `vae/wic-si12` at `fb2f728`, with generated-output changes preserved; `main` remains at `7c71591`
 
-## Causal SML-history profile implemented; user run is next (2026-11-13)
+## 184x184 transition prerequisites started (2026-11-19)
+
+The reference plan is
+`vault/02_Algorithm/184x184 WIC-SI12 CVAE Transition Plan.md`. It records the
+proposed five-stage masked encoder, global plus spatial latent,92x92 spline-
+coefficient decoder candidate, controlled ablations and an explicit gate before
+architecture changes.
+
+The canonical184x184 annotation now rasterizes382 transferred line-set
+keyframes on the native grid and uses conservative source-cell expansion for55
+geometry-free keyframes. This changes82,675 boundary cells relative to pure4x4
+replication. The source lines reproduce all original46x46 raster masks exactly;
+all orbit/time/review metadata and footprints remain unchanged. The GUI opens
+the real184x184 orbit85 and presents184x184 editable masks.
+
+Active masking, conditioning and paired-cache code now reads image shape and
+grid identity from artifacts while retaining legacy46x46 fallbacks. Model1 and
+Model2 checkpoints/manifests carry the contract; conditioning preparation
+infers one consistent Product-2 grid; the paired cache and generic memmap loader
+use manifest dimensions; the current trainer instantiates the declared shape.
+
+Verified on real `or_0085.nc`:122 conditioning timestamps;122 random-weight
+mechanical Model2 masks;119 eligible manual-cache paired frames;107,568,159
+cache bytes; finite184x184 current-model forward/backward. This validates
+mechanics only. No scientific model was trained or sampled.
+
+Next, after the full Product-2 generation is available: retrain Model2 and
+Model1, export two-stage masks, regenerate full conditioning, and run a small
+multi-orbit automatic-cache smoke. Before a full cache or architecture run,
+choose storage for the approximately220-GiB current layout, make loss/hole
+scaling grid-comparable, and implement out-of-core50000-draw summaries. Source,
+tests, generated annotation and vault changes are uncommitted.
+
+Portfolio impact: Central update needed: No.
+
+## Rebuilt paired models complete; sample and plot next (2026-11-17)
+
+The user reports completion on Dynamit of the scalar-Kp and `hybrid4` paired
+corrected-WIC/SI12 CVAEs built after the FAST-driven product regeneration and
+mask retraining. The new summaries/artifacts are not local yet, so first verify
+on the server that both record the same cache-manifest hash and paired field
+contract, with scalar Kp versus the four named hybrid inputs.
+
+Sample the scalar model at Kp0--6 with50000 draws per value. Sample hybrid4 in
+the established12 controlled groups: four IMF directions crossed with quiet,
+normal and disturbed SML bands. Use seed12104 and `--no-plots`, then run
+`plot_wic_at_kp.py` on each complete sample root. The products include paired
+WIC/SI12 summaries and corrected-WIC-derived electron conductance. No sampling
+was launched by the agent.
+
+Portfolio impact: Central update needed: No.
+
+## Rebuild paired baselines from the corrected FAST-era products (2026-11-16)
+
+The user reports that Product2, Product3 and CS were recreated after problems
+were found in the FAST comparison. Treat all prior paired WIC/SI12 caches and
+models as historical generations. The next two models are a scalar-Kp baseline
+followed by `hybrid4`, both using one newly prepared paired cache with the same
+seed, split policy, architecture and optimization settings.
+
+The training cache reads the regenerated `IR_hardy...` precipitation CS; it
+does not read Product3. Re-export automatic masks before cache preparation.
+Old mask manifests freeze source size/mtime and the cache loader intentionally
+rejects them after a product rebuild. The user explicitly chose to retrain both
+mask models on Dynamit using the latest committed annotation file at `fb2f728`,
+which the user copied to the cleared `~/IMAGE_CVAE`. Run the full
+prepare/train/apply Model2 and prepare/train/apply Model1 sequence on the new
+CS. Build a new paired cache at a new path, copy it once to `/dev/shm`, and use
+that exact staged cache for Kp and hybrid4. Regenerate the SuperMAG alignment
+against the new CS frame table before hybrid4; Kp does not need it.
+
+The local precipitation-CS mirror still shows November9 file modification
+times, so no live validation of the server rebuild or resulting counts has
+been made. The annotation contains109 orbit records:46 complete,17 no-usable
+and46 in-progress at commit `fb2f728`. The latest uncommitted edit has113
+records:86 complete,24 no-usable and3 in-progress (orbits215,334 and1777), all
+three without boundaries or keyframes. Finish those three and commit/push the
+annotation before mask preparation. This is the current blocker. No mask,
+cache or model run was launched by the agent. Preserve the November artifacts
+for provenance rather than overwriting them.
+
+Portfolio impact: Central update needed: No.
+
+## Causal SML-history model complete; orbit-261 rerun next (2026-11-13)
 
 The next controlled comparison is `hybrid4` versus
 `hybrid6_sml_history`, holding the paired cache, architecture, split, seed and
@@ -26,13 +109,20 @@ pre-event minutes before selecting the requested event. It preserves the old
 hybrid4 event format for resume compatibility and uses a versioned named format
 for new history outputs. The2x3 plotter reads either.
 
-Verification:24 focused tests pass. Reading the actual year2000 SuperMAG file
-and constructing orbit-261 conditions gave293 finite rows x6 columns, retained
-the one explicitly allowed IMF interpolation at11:42, and did not sample the
-CVAE. No preparation, training or event run was started. The user's next steps
-are to create the external version-2 conditioning table, inspect coverage and
-retained split counts, then launch matched training. IMF circular averaging is
-not part of this first test.
+The user completed and transferred
+`wic_si12_hybrid6_sml_history_20261113`. Its artifact has the expected paired
+fields and ordered six-feature contract. It retained187,419/38,854/41,978
+train/validation/test frames, exactly matching hybrid4. The selected validation
+objective is2.936060 at epoch193 versus2.934168 at epoch246 for hybrid4, only
+about0.06% higher. Treat this as no aggregate validation gain; orbit261 tests
+whether event morphology changes.
+
+Actual year2000 condition construction gives293 finite event rows x6 columns
+and one allowed IMF interpolation at11:42. Run50000 draws with
+`--add-medoids` from the start so median and separate WIC/SI12 medoids share one
+decoding pass. Then use the existing2x3 plotter for the same frames42--185. No
+event sampling was started by the agent. IMF circular averaging remains outside
+this test.
 
 Portfolio impact: Central update needed: No.
 

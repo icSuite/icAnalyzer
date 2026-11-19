@@ -57,6 +57,7 @@ def run(arguments):
         raise FileExistsError("choose a fresh Model1 preparation directory")
 
     provenance = json.loads((prepared_model2 / "dataset_provenance.json").read_text())
+    image_shape = tuple(provenance.get("image_shape", (46, 46)))
     annotation_snapshot = prepared_model2 / "annotations_snapshot.json"
     if sha(annotation_snapshot) != provenance["annotation_sha256"]:
         raise ValueError("Model2 annotation snapshot differs from its provenance")
@@ -65,6 +66,12 @@ def run(arguments):
         raise ValueError("Model2 checkpoint does not use the adopted four input fields")
     if model2["manual_annotation_sha256"] != provenance["annotation_sha256"]:
         raise ValueError("Model2 checkpoint and prepared annotations differ")
+    if tuple(model2.get("image_shape", (46, 46))) != image_shape:
+        raise ValueError("Model2 checkpoint and prepared image shapes differ")
+    if model2.get("grid_id", "image_apex_130km_46x46_v1") != provenance.get(
+        "grid_id", "image_apex_130km_46x46_v1"
+    ):
+        raise ValueError("Model2 checkpoint and prepared grid IDs differ")
 
     rows = list(csv.DictReader((prepared_model2 / "frames.csv").open()))
     split = {
@@ -75,6 +82,8 @@ def run(arguments):
         images = archive["images"]
         targets = archive["targets"]
         domains = archive["domains"]
+    if images.shape[-2:] != image_shape or targets.shape[-2:] != image_shape or domains.shape[-2:] != image_shape:
+        raise ValueError("prepared Model1 arrays do not match image_shape")
     images = images[:, [provenance["fields"].index(name) for name in CORE]]
     inputs, normalization = prepare_inputs(images, split["train"], CORE)
     normalization["parent_fields"] = list(CORE)
@@ -110,6 +119,7 @@ def run(arguments):
         "split_sha256": sha(output / "split_ids.json"),
         "frame_counts": {name: len(indices) for name, indices in split.items()},
         "orbit_counts": {name: len(orbits) for name, orbits in orbit_sets.items()},
+        "image_shape": list(image_shape), "grid_id": provenance.get("grid_id"),
         "fields": CORE,
         "model": "Small single-frame whole-frame acceptance CNN"
     }

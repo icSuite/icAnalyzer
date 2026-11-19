@@ -46,6 +46,12 @@ class AutomaticFieldDataset(Dataset):
     ):
         self.directory = Path(cache_directory).expanduser().resolve()
         self.metadata = read_cache(self.directory, expected_cache_format)
+        self.image_shape = tuple(self.metadata.get("image_shape", (46, 46)))
+        if (
+            len(self.image_shape) != 2
+            or any(not isinstance(value, int) or value < 1 for value in self.image_shape)
+        ):
+            raise ValueError("cache image_shape must contain two positive integers")
         self.transform = ChannelTransform.from_dict(self.metadata["transform"])
         field_names = self.metadata.get("field_names")
         if field_names is None and expected_cache_format == AUTOMATIC_CONDUCTANCE_CACHE_FORMAT:
@@ -147,7 +153,8 @@ class AutomaticFieldDataset(Dataset):
             return self.open_shards[number]
         path = self.directory / self.rows[number]["shard"]
         count = self.rows[number]["prepared_frames"]
-        bytes_per_frame = 46 * 46 * (
+        pixel_count = int(np.prod(self.image_shape))
+        bytes_per_frame = pixel_count * (
             self.physical_channels * np.dtype(np.float32).itemsize
             + self.valid_channel_count * np.dtype(bool).itemsize
         )
@@ -169,11 +176,11 @@ class AutomaticFieldDataset(Dataset):
                 path / "physical.npy", mmap_mode="r", allow_pickle=False
             )
             valid = np.load(path / "valid.npy", mmap_mode="r", allow_pickle=False)
-            expected = (count, self.physical_channels, 46, 46)
+            expected = (count, self.physical_channels, *self.image_shape)
             valid_expected = (
-                (count, 46, 46)
+                (count, *self.image_shape)
                 if self.valid_channel_count == 1
-                else (count, self.valid_channel_count, 46, 46)
+                else (count, self.valid_channel_count, *self.image_shape)
             )
             if (
                 physical.dtype != np.float32 or physical.shape != expected
@@ -190,15 +197,15 @@ class AutomaticFieldDataset(Dataset):
             physical_layout, valid_layout = self.array_layouts[number]
             physical = np.memmap(
                 path / "physical.npy", mode="r", dtype=np.float32,
-                shape=(count, self.physical_channels, 46, 46),
+                shape=(count, self.physical_channels, *self.image_shape),
                 offset=physical_layout[0], order=physical_layout[1]
             )
             valid = np.memmap(
                 path / "valid.npy", mode="r", dtype=bool,
                 shape=(
-                    (count, 46, 46)
+                    (count, *self.image_shape)
                     if self.valid_channel_count == 1
-                    else (count, self.valid_channel_count, 46, 46)
+                    else (count, self.valid_channel_count, *self.image_shape)
                 ), offset=valid_layout[0],
                 order=valid_layout[1]
             )

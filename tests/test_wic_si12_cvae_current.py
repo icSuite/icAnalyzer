@@ -28,17 +28,18 @@ from scripts.CVAE.prepare_wic_si12_cvae_cache import (
 
 
 class FakePairedProduct:
-    def __init__(self, arrays):
+    def __init__(self, arrays, grid_id="image_apex_130km_46x46_v1"):
+        image_shape = tuple(arrays["wic_corrected"].shape[1:])
         self.product_type = "precipitation_cs"
-        self.grid_id = "image_apex_130km_46x46_v1"
+        self.grid_id = grid_id
         self.schema_version = 1
         self.software_version = "test"
-        self.shape = (2, 46, 46)
+        self.shape = (len(arrays["wic_corrected"]), *image_shape)
         self.time = np.arange(2).astype("datetime64[us]")
         self.Kp_interval_start = self.time.copy()
         self.source_indices = {"wic": np.asarray([4, 5])}
-        self.mlat = np.zeros((46, 46))
-        self.mlt = np.zeros((46, 46))
+        self.mlat = np.zeros(image_shape)
+        self.mlt = np.zeros(image_shape)
         self.attrs = {
             "method_quality_weight_method": (
                 "WIC auroral-quality field defined as 1 minus dgweight"
@@ -112,19 +113,19 @@ def test_wic_mask_keeps_separate_sensor_validity_and_quality(tmp_path):
     assert loaded["values"][1, 1, 4, 4] == 0
 
 
-def make_joint_cache(directory):
+def make_joint_cache(directory, image_shape=(46, 46)):
     rows = []
     for orbit, split in enumerate(("train", "validation", "test"), start=1):
         shard = directory / f"or_{orbit:04d}"
         shard.mkdir(parents=True)
-        physical = np.ones((2, 6, 46, 46), dtype=np.float32)
+        physical = np.ones((2, 6, *image_shape), dtype=np.float32)
         physical[:, 0] = 10
         physical[:, 1] = 4
         physical[:, 2] = 2
         physical[:, 3] = 0.5
         physical[:, 4] = 0.7
         physical[:, 5] = 0.4
-        valid = np.ones((2, 2, 46, 46), dtype=bool)
+        valid = np.ones((2, 2, *image_shape), dtype=bool)
         valid[:, 0, 0, 0] = False
         valid[:, 1, 1, 1] = False
         np.save(shard / "physical.npy", physical)
@@ -145,15 +146,17 @@ def make_joint_cache(directory):
     transform = ChannelTransform(
         [1, 1], [0, 0], [1, 1], kind=ChannelTransform.LOG10_KIND
     )
+    height, width = image_shape
     mlat = np.broadcast_to(
-        np.linspace(50, 90, 46)[:, None], (46, 46)
+        np.linspace(50, 90, height)[:, None], image_shape
     ).copy()
     mlt = np.broadcast_to(
-        np.linspace(0, 24, 46, endpoint=False)[None], (46, 46)
+        np.linspace(0, 24, width, endpoint=False)[None], image_shape
     ).copy()
     metadata = {
         "cache_format": WIC_SI12_CACHE_FORMAT,
         "input_product_type": "precipitation_cs",
+        "image_shape": list(image_shape),
         "field_names": ["wic_corrected", "si12"],
         "field_units": ["counts", "counts"],
         "quality_channel_count": 2, "valid_channel_count": 2,
@@ -174,7 +177,7 @@ def make_joint_cache(directory):
     (directory / "manifest.json").write_text(json.dumps(metadata))
     np.save(
         directory / "training_support.npy",
-        np.ones((2, 46, 46), dtype=bool)
+        np.ones((2, *image_shape), dtype=bool)
     )
     return directory
 
@@ -283,6 +286,22 @@ def test_joint_cache_dataset_and_union_encoder(tmp_path):
     )
     assert np.all(decoded[:, 0, 23:] == 0)
     assert np.all(decoded[:, 1, :23] == 0)
+
+
+def test_joint_cache_dataset_uses_declared_184_shape(tmp_path):
+    cache = make_joint_cache(tmp_path / "cache184", image_shape=(184, 184))
+    dataset = AutomaticFieldDataset(
+        cache, "train", include_uncertainty=False,
+        expected_cache_format=WIC_SI12_CACHE_FORMAT
+    )
+    try:
+        batch = dataset[0]
+        assert dataset.image_shape == (184, 184)
+        assert batch["target"].shape == (2, 184, 184)
+        assert batch["mask"].shape == (2, 184, 184)
+        assert batch["encoder_input"].shape == (4, 184, 184)
+    finally:
+        dataset.close()
 
 
 def test_channel_balanced_loss_normalizes_each_sensor_support():

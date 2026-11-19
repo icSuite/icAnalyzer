@@ -103,7 +103,10 @@ def classifier_scores(model, inputs, channels, indices, device="cpu"):
     return result
 
 
-def train_acceptance(seed, output, inputs, channels, labels, rows, split, normalization, device="cpu"):
+def train_acceptance(
+    seed, output, inputs, channels, labels, rows, split, normalization,
+    device="cpu", image_shape=(46, 46), grid_id="image_apex_130km_46x46_v1"
+):
     """Fit the single-frame acceptance CNN and save its best validation state."""
 
     directory = output / f"seed{seed}"
@@ -148,7 +151,12 @@ def train_acceptance(seed, output, inputs, channels, labels, rows, split, normal
     model.load_state_dict(best_state)
     record = dict(seed=seed, best_epoch=best_epoch, epochs=len(history), validation_loss=best_loss, parameters=sum(parameter.numel() for parameter in model.parameters()), seconds=time.monotonic() - started)
     state = {name: value.cpu() for name, value in best_state.items()}
-    torch.save(dict(state_dict=state, input_fields=CORE, normalization=normalization, architecture="8/16/32-channel encoder,2x2 tile pooling,binary linear output", summary=record), directory / "frame_classifier.pt")
+    torch.save(dict(
+        state_dict=state, input_fields=CORE, normalization=normalization,
+        image_shape=list(image_shape), grid_id=grid_id,
+        architecture="8/16/32-channel encoder,2x2 tile pooling,binary linear output",
+        summary=record
+    ), directory / "frame_classifier.pt")
     write_json(directory / "summary.json", record)
     return model, record
 

@@ -3,7 +3,7 @@
 Run from any directory with the tConductance environment:
     python scripts/automatic_masking/apply_model2_unet.py
 
-Each orbit gets one NPZ with the original frame times and raw 46x46 binary
+Each orbit gets one NPZ with the original frame times and native-grid binary
 model masks. Manual annotations are never read or mixed into these outputs.
 The source, trained checkpoint and fresh output directory are explicit.
 """
@@ -36,11 +36,13 @@ def main():
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--orbits", type=int, nargs="+")
     parser.add_argument("--threads", type=int, default=4)
+    parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     arguments = parser.parse_args()
-    if arguments.threads < 1:
-        parser.error("--threads must be positive")
+    if arguments.threads < 1 or arguments.batch_size < 1:
+        parser.error("--threads and --batch-size must be positive")
 
     torch.set_num_threads(arguments.threads)
     device = torch.device("cuda" if arguments.device == "auto" and torch.cuda.is_available() else "cpu" if arguments.device == "auto" else arguments.device)
@@ -53,6 +55,10 @@ def main():
         raise ValueError("This script expects the four-field single-frame WIC model")
     if checkpoint["topology_weight"] != 0.1:
         raise ValueError("The saved checkpoint is not the requested weight 0.1 model")
+    image_shape = tuple(checkpoint.get("image_shape", (46, 46)))
+    grid_id = checkpoint.get("grid_id", "image_apex_130km_46x46_v1")
+    if len(image_shape) != 2 or any(int(value) < 1 for value in image_shape):
+        raise ValueError("checkpoint image_shape is invalid")
     model = SmallUNet(input_channels=8)
     model.load_state_dict(checkpoint["state_dict"])
     model.to(device).eval()
@@ -78,6 +84,16 @@ def main():
 
 
     files = sorted(source.glob("or_*.nc"))
+    if arguments.orbits is not None:
+        requested = set(arguments.orbits)
+        files = [
+            path for path in files if int(path.stem[3:]) in requested
+        ]
+        found = {int(path.stem[3:]) for path in files}
+        if found != requested:
+            raise FileNotFoundError(
+                f"source is missing requested orbits {sorted(requested - found)}"
+            )
     if not files:
         raise FileNotFoundError(f"No orbit files found in {source}")
     output.mkdir(parents=True, exist_ok=False)
@@ -90,15 +106,20 @@ def main():
     rng = np.random.default_rng(12026)
     for number, filename in enumerate(files, start=1):
         with load(filename) as product:
-            if tuple(product.shape[1:]) != (46, 46):
-                raise ValueError(f"Unexpected grid in {filename}: {product.shape}")
+            if product.product_type != "precipitation_cs":
+                raise ValueError(f"{filename}: expected precipitation_cs")
+            if tuple(product.shape[1:]) != image_shape or str(product.grid_id) != grid_id:
+                raise ValueError(
+                    f"{filename}: expected {grid_id} with shape {image_shape}, "
+                    f"got {product.grid_id} with shape {tuple(product.shape[1:])}"
+                )
             times = np.asarray(product.time, dtype="datetime64[us]")
             masks = []
             nonempty = 0
             accepted = 0
             observed = 0
-            for start in range(0, len(times), 128):
-                stop = min(start + 128, len(times))
+            for start in range(0, len(times), arguments.batch_size):
+                stop = min(start + arguments.batch_size, len(times))
                 channels = np.stack([np.asarray(product.read(field, slice(start, stop)), dtype=np.float32) for field in FIELDS], axis=1)
                 finite_wic = np.isfinite(channels[:, 0])
                 values = model_inputs(channels)
@@ -117,7 +138,7 @@ def main():
                     if pick < 12:
                         examples[pick:pick + 1] = [(filename.stem, start + int(local), channels[local, 0].copy(), raw_mask[local].copy())]
 
-        masks = np.concatenate(masks) if masks else np.zeros((0, 46, 46), dtype=bool)
+        masks = np.concatenate(masks) if masks else np.zeros((0, *image_shape), dtype=bool)
         if len(masks) != len(times):
             raise ValueError(f"Frame count mismatch for {filename}")
         np.savez_compressed(output / f"{filename.stem}.npz", time=times, mask=masks)
@@ -130,8 +151,9 @@ def main():
     summary = {
         "model": str(model_file), "model_sha256": model_sha,
         "source_directory": str(source), "threshold": threshold,
-        "mask_meaning": "Raw thresholded model prediction over the full 46x46 grid; true means keep. No hole filling, component filtering, or manual override. Combine with intrinsic product validity in the VAE.",
-        "alignment": "One NPZ per source orbit, same stem and source frame order; time is datetime64[us] and mask has shape (frames, 46, 46)",
+        "image_shape": list(image_shape), "grid_id": grid_id,
+        "mask_meaning": f"Raw thresholded model prediction over the full {image_shape[0]}x{image_shape[1]} grid; true means keep. No hole filling, component filtering, or manual override. Combine with intrinsic product validity in the VAE.",
+        "alignment": f"One NPZ per source orbit, same stem and source frame order; time is datetime64[us] and mask has shape (frames, {image_shape[0]}, {image_shape[1]})",
         "orbit_files": len(orbit_rows), "frames": sum(row["frames"] for row in orbit_rows),
         "frames_with_finite_wic": sum(row["frames_with_wic"] for row in orbit_rows),
         "orbits": orbit_rows
