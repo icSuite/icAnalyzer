@@ -2,7 +2,7 @@
 
 Last updated: 2026-11-19
 Last reviewed: 2026-11-19 (184x184 prerequisite implementation)
-Repository snapshot: `vae/wic-si12` at `fb2f728`, with generated-output changes preserved; `main` remains at `7c71591`
+Repository snapshot: `vae/wic-si12` at `369789d`, with generated-output changes preserved; `main` remains at `7c71591`
 
 ## 184x184 transition prerequisites started (2026-11-19)
 
@@ -34,8 +34,9 @@ Next, after the full Product-2 generation is available: retrain Model2 and
 Model1, export two-stage masks, regenerate full conditioning, and run a small
 multi-orbit automatic-cache smoke. Before a full cache or architecture run,
 choose storage for the approximately220-GiB current layout, make loss/hole
-scaling grid-comparable, and implement out-of-core50000-draw summaries. Source,
-tests, generated annotation and vault changes are uncommitted.
+scaling grid-comparable, and implement out-of-core50000-draw summaries. The
+annotation prerequisite is commit `518981d`; grid-aware pipeline prerequisites
+and the reference plan are commit `369789d`.
 
 Portfolio impact: Central update needed: No.
 

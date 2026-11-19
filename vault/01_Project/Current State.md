@@ -1,7 +1,7 @@
 # Current State
 
 Last reviewed: 2026-11-19 (184x184 prerequisite implementation)
-Repository snapshot: `vae/wic-si12` at `fb2f728`; `main` remains at `7c71591`
+Repository snapshot: `vae/wic-si12` at `369789d`; `main` remains at `7c71591`
 Worktree: user annotation and generated-output changes preserved
 
 ## 184x184 prerequisites partially implemented (2026-11-19)
@@ -40,7 +40,9 @@ No scientific training was launched. Remaining prerequisites are real184x184
 Model2/Model1 retraining and two-stage export, full conditioning regeneration,
 a multi-orbit automatic-mask cache smoke, an explicit approximately220-GiB
 full-cache storage policy, grid-comparable loss and hole scaling, and
-out-of-core50000-draw summaries. Changes remain uncommitted.
+out-of-core50000-draw summaries. The annotation prerequisite is commit
+`518981d`; grid-aware pipeline prerequisites and this plan are commit
+`369789d`.
 
 ## Rebuilt Kp and hybrid4 paired CVAEs complete; sampling next (2026-11-17)
 

@@ -48,7 +48,8 @@ their historical shape inferred as 46x46.
 
 ## Implementation checkpoint: 2026-11-19
 
-The first prerequisite slice is implemented but not committed. The canonical
+The first prerequisite slice is implemented in commits `518981d` and
+`369789d`. The canonical
 184x184 annotation now rasterizes all 382 line-set keyframes on the target
 grid, retains source-cell expansion for 55 geometry-free keyframes and records
 82,675 changed boundary cells relative to block replication. A real GUI/editor
