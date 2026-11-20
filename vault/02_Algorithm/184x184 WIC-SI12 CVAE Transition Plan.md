@@ -1,6 +1,6 @@
 # 184x184 WIC/SI12 CVAE Transition Plan
 
-Last reviewed: 2026-11-19
+Last reviewed: 2026-11-20
 Status: Proposed architecture; prerequisite implementation in progress
 
 ## Purpose
@@ -68,6 +68,11 @@ dimensions. A manual-mask orbit85 cache retained 119 eligible paired frames,
 occupied 107,568,159 bytes, loaded through the generic dataset, and completed a
 finite current-model forward/backward smoke at 184x184. No scientific model
 training was run.
+
+On 2026-11-20 the user reported that the complete 184x184 Product-2 CS
+generation is available on the server. This has not yet been independently
+inspected, but it removes the source-generation wait and makes native Model2
+and Model1 retraining the next executable stage.
 
 ## Prerequisites before architecture experiments
 

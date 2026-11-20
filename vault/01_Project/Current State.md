@@ -1,10 +1,18 @@
 # Current State
 
-Last reviewed: 2026-11-19 (184x184 prerequisite implementation)
-Repository snapshot: `vae/wic-si12` at `369789d`; `main` remains at `7c71591`
+Last reviewed: 2026-11-20 (completed 184x184 Product-2 generation reported)
+Repository snapshot: `vae/wic-si12` at `1ff9c1a`; `main` remains at `7c71591`
 Worktree: user annotation and generated-output changes preserved
 
 ## 184x184 prerequisites partially implemented (2026-11-19)
+
+The user reports that the complete 184x184 Product-2 CS generation is now
+available on the server. Its path, orbit/frame counts and grid contract have
+not yet been inspected from this repository, but the report clears the data-
+generation blocker. The immediate next stage is real Model2 and Model1
+retraining at 184x184, followed by a bounded two-stage mask export and visual
+validation. Full conditioning regeneration can then use the same completed
+Product-2 frame table.
 
 The durable transition and proposed hierarchical encoder/decoder are recorded
 in `vault/02_Algorithm/184x184 WIC-SI12 CVAE Transition Plan.md`. Architecture

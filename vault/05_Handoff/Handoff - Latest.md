@@ -1,10 +1,16 @@
 # Handoff - Latest
 
-Last updated: 2026-11-19
-Last reviewed: 2026-11-19 (184x184 prerequisite implementation)
-Repository snapshot: `vae/wic-si12` at `369789d`, with generated-output changes preserved; `main` remains at `7c71591`
+Last updated: 2026-11-20
+Last reviewed: 2026-11-20 (completed 184x184 Product-2 generation reported)
+Repository snapshot: `vae/wic-si12` at `1ff9c1a`, with generated-output changes preserved; `main` remains at `7c71591`
 
 ## 184x184 transition prerequisites started (2026-11-19)
+
+The user reports that the full 184x184 Product-2 CS collection has completed
+on the server. The server path and resulting orbit/frame counts have not yet
+been inspected here. This clears the wait for source generation: next retrain
+Model2 and Model1 at 184x184, then validate a bounded two-stage mask export
+before applying the models to the complete collection.
 
 The reference plan is
 `vault/02_Algorithm/184x184 WIC-SI12 CVAE Transition Plan.md`. It records the
@@ -30,8 +36,8 @@ mechanical Model2 masks;119 eligible manual-cache paired frames;107,568,159
 cache bytes; finite184x184 current-model forward/backward. This validates
 mechanics only. No scientific model was trained or sampled.
 
-Next, after the full Product-2 generation is available: retrain Model2 and
-Model1, export two-stage masks, regenerate full conditioning, and run a small
+Next: retrain Model2 and Model1, export and validate two-stage masks, regenerate
+full conditioning, and run a small
 multi-orbit automatic-cache smoke. Before a full cache or architecture run,
 choose storage for the approximately220-GiB current layout, make loss/hole
 scaling grid-comparable, and implement out-of-core50000-draw summaries. The
