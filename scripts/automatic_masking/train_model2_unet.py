@@ -32,11 +32,30 @@ def file_sha256(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def atomic_torch_save(payload, filename):
+    filename = Path(filename)
+    temporary = filename.with_name(filename.name + ".tmp")
+    torch.save(payload, temporary)
+    temporary.replace(filename)
+
+
+def atomic_json_save(payload, filename):
+    filename = Path(filename)
+    temporary = filename.with_name(filename.name + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2) + "\n")
+    temporary.replace(filename)
+
+
 def run(arguments):
     prepared = arguments.prepared.expanduser().resolve()
     output = arguments.output.expanduser().resolve()
-    if output.exists():
+    progress_file = output / "training_state.pt"
+    if output.exists() and not arguments.resume:
         raise FileExistsError("choose a fresh Model2 output directory")
+    if arguments.resume and not progress_file.is_file():
+        raise FileNotFoundError(
+            f"cannot resume without the saved training state: {progress_file}"
+        )
 
     provenance = json.loads((prepared / "dataset_provenance.json").read_text())
     image_shape = tuple(provenance.get("image_shape", (46, 46)))
@@ -74,6 +93,29 @@ def run(arguments):
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA requested but unavailable")
 
+    topology_shape = tuple(
+        min(arguments.topology_resolution, size) for size in image_shape
+    )
+    training_configuration = {
+        "prepared": str(prepared),
+        "prepared_provenance_sha256": file_sha256(
+            prepared / "dataset_provenance.json"
+        ),
+        "annotation_sha256": provenance["annotation_sha256"],
+        "image_shape": list(image_shape),
+        "grid_id": provenance.get("grid_id"),
+        "seed": arguments.seed,
+        "epochs": arguments.epochs,
+        "batch_size": arguments.batch_size,
+        "learning_rate": arguments.learning_rate,
+        "weight_decay": arguments.weight_decay,
+        "patience": arguments.patience,
+        "minimum_improvement": arguments.minimum_improvement,
+        "topology_weight": TOPOLOGY_WEIGHT,
+        "topology_resolution": arguments.topology_resolution,
+        "topology_shape": list(topology_shape)
+    }
+
     inputs, normalization = prepare_inputs(images, split["train"], FIELDS)
     windows = np.arange(len(rows))[:, None]
     train_weights = sample_weights(rows, split["train"])
@@ -84,22 +126,61 @@ def run(arguments):
     )
     model = SmallUNet(inputs.shape[1]).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=arguments.learning_rate, weight_decay=arguments.weight_decay)
-    print(f"Training {len(split['train'])} frames; validation {len(split['validation'])}; test {len(split['test'])}; device {device}", flush=True)
-
-    #%% Fit on training orbits and select the checkpoint on validation loss
+    output.mkdir(parents=True, exist_ok=arguments.resume)
 
     history = []
     best_loss = float("inf")
     best_epoch = 0
     best_state = None
-    for epoch in range(arguments.epochs):
+    start_epoch = 0
+    resumes = 0
+    if arguments.resume:
+        saved = torch.load(progress_file, map_location=device, weights_only=False)
+        if saved.get("training_configuration") != training_configuration:
+            raise ValueError(
+                "resume arguments or prepared data differ from training_state.pt"
+            )
+        model.load_state_dict(saved["state_dict"])
+        optimizer.load_state_dict(saved["optimizer_state_dict"])
+        history = saved["history"]
+        best_loss = float(saved["best_loss"])
+        best_epoch = int(saved["best_epoch"])
+        best_state = saved["best_state_dict"]
+        start_epoch = int(saved["completed_epoch"])
+        resumes = int(saved.get("resumes", 0)) + 1
+        torch.set_rng_state(saved["torch_rng_state"].cpu())
+        np.random.set_state(saved["numpy_rng_state"])
+        if device.type == "cuda" and saved.get("cuda_rng_state") is not None:
+            torch.cuda.set_rng_state_all([
+                state.cpu() for state in saved["cuda_rng_state"]
+            ])
+        print(
+            f"Resuming after epoch {start_epoch}; best epoch {best_epoch}",
+            flush=True
+        )
+
+    print(
+        f"Training {len(split['train'])} frames; validation "
+        f"{len(split['validation'])}; test {len(split['test'])}; device {device}; "
+        f"topology grid {topology_shape}",
+        flush=True
+    )
+
+    #%% Fit on training orbits and select the checkpoint on validation loss
+
+    epoch_numbers = range(start_epoch, arguments.epochs)
+    if start_epoch - best_epoch >= arguments.patience:
+        epoch_numbers = ()
+    for epoch in epoch_numbers:
         model.train()
         training_total = 0.0
         for values, target, domain, _, weight in loader:
             optimizer.zero_grad()
             logits = model(values.to(device))
             losses = masked_loss(logits, target.to(device), domain.to(device))
-            losses = losses + TOPOLOGY_WEIGHT * topology_loss(logits)
+            losses = losses + TOPOLOGY_WEIGHT * topology_loss(
+                logits, resolution=arguments.topology_resolution
+            )
             loss = (losses * weight.to(device)).mean()
             loss.backward()
             optimizer.step()
@@ -120,7 +201,11 @@ def run(arguments):
                     torch.from_numpy(targets[batch].astype(np.float32)).to(device),
                     torch.from_numpy(domains[batch].astype(np.float32)).to(device)
                 )
-                validation_losses.extend((losses + TOPOLOGY_WEIGHT * topology_loss(logits)).cpu().numpy())
+                validation_losses.extend((
+                    losses + TOPOLOGY_WEIGHT * topology_loss(
+                        logits, resolution=arguments.topology_resolution
+                    )
+                ).cpu().numpy())
         validation_loss = float(np.average(validation_losses, weights=validation_weights))
         history.append({"epoch": epoch + 1, "train": training_total / len(split["train"]), "validation": validation_loss})
         if validation_loss < best_loss - arguments.minimum_improvement:
@@ -128,6 +213,33 @@ def run(arguments):
             best_epoch = epoch + 1
             best_state = copy.deepcopy(model.state_dict())
         print(f"epoch {epoch + 1}: train {history[-1]['train']:.4f}, validation {validation_loss:.4f}, best {best_epoch}", flush=True)
+
+        progress = {
+            "format": "model2_training_state_v1",
+            "training_configuration": training_configuration,
+            "completed_epoch": epoch + 1,
+            "state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "history": history,
+            "best_loss": best_loss,
+            "best_epoch": best_epoch,
+            "best_state_dict": best_state,
+            "torch_rng_state": torch.get_rng_state(),
+            "numpy_rng_state": np.random.get_state(),
+            "cuda_rng_state": (
+                torch.cuda.get_rng_state_all() if device.type == "cuda" else None
+            ),
+            "resumes": resumes
+        }
+        atomic_json_save(history, output / "history.json")
+        atomic_torch_save(progress, progress_file)
+        atomic_torch_save({
+            "format": "model2_best_state_v1",
+            "training_configuration": training_configuration,
+            "best_epoch": best_epoch,
+            "best_loss": best_loss,
+            "state_dict": best_state
+        }, output / "best_state.pt")
         if epoch + 1 - best_epoch >= arguments.patience:
             break
 
@@ -158,19 +270,16 @@ def run(arguments):
     )
     shape = shape_scores(test_mask, domains[split["test"]])
 
-    output.mkdir(parents=True)
     checkpoint = output / "model2_unet.pt"
     configuration = {
-        "prepared": str(prepared), "prepared_provenance_sha256": file_sha256(prepared / "dataset_provenance.json"),
+        **training_configuration,
         "annotation_sha256": provenance["annotation_sha256"], "fields": FIELDS,
         "image_shape": list(image_shape), "grid_id": provenance.get("grid_id"),
         "split": provenance["split"], "split_policy": provenance["split_policy"],
-        "seed": arguments.seed, "epochs": arguments.epochs, "best_epoch": best_epoch,
-        "batch_size": arguments.batch_size, "learning_rate": arguments.learning_rate,
-        "weight_decay": arguments.weight_decay, "patience": arguments.patience,
-        "topology_weight": TOPOLOGY_WEIGHT, "threshold": threshold
+        "best_epoch": best_epoch, "completed_epochs": len(history),
+        "training_resumes": resumes, "threshold": threshold
     }
-    torch.save({
+    atomic_torch_save({
         "state_dict": best_state, "normalization": normalization,
         "input_fields": FIELDS, "threshold": threshold,
         "topology_weight": TOPOLOGY_WEIGHT,
@@ -186,8 +295,8 @@ def run(arguments):
         "checkpoint": checkpoint.name,
         "checkpoint_sha256": file_sha256(checkpoint)
     }
-    (output / "history.json").write_text(json.dumps(history, indent=2) + "\n")
-    (output / "summary.json").write_text(json.dumps(metrics, indent=2) + "\n")
+    atomic_json_save(history, output / "history.json")
+    atomic_json_save(metrics, output / "summary.json")
 
     figure, axis = plt.subplots(figsize=(6, 4))
     axis.plot([row["epoch"] for row in history], [row["train"] for row in history], label="Train")
@@ -212,11 +321,25 @@ def parse_arguments(argv=None):
     parser.add_argument("--weight-decay", type=float, default=0.0001)
     parser.add_argument("--patience", type=int, default=8)
     parser.add_argument("--minimum-improvement", type=float, default=0.0001)
+    parser.add_argument(
+        "--topology-resolution", type=int, default=46,
+        help="maximum topology-loss grid dimension; BCE and Dice remain native"
+    )
     parser.add_argument("--seed", type=int, default=12026)
     parser.add_argument("--threads", type=int, default=4)
+    parser.add_argument(
+        "--resume", action="store_true",
+        help="resume this output directory from training_state.pt"
+    )
     arguments = parser.parse_args(argv)
-    if min(arguments.epochs, arguments.batch_size, arguments.patience, arguments.threads) < 1:
-        parser.error("epochs, batch size, patience and threads must be positive")
+    if min(
+        arguments.epochs, arguments.batch_size, arguments.patience,
+        arguments.topology_resolution, arguments.threads
+    ) < 1:
+        parser.error(
+            "epochs, batch size, patience, topology resolution and threads "
+            "must be positive"
+        )
     return arguments
 
 

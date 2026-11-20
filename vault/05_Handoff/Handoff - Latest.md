@@ -12,6 +12,15 @@ been inspected here. This clears the wait for source generation: next retrain
 Model2 and Model1 at 184x184, then validate a bounded two-stage mask export
 before applying the models to the complete collection.
 
+The initial Model2 server run reached epoch17 in roughly three hours and was
+lost on SSH disconnect. The trainer now leaves native184x184 BCE/Dice
+unchanged but average-pools probabilities to46x46 for the topology term,
+preserving the old physical topology scale. A local two-image topology
+microbenchmark was14.46x faster. It atomically saves history, current and best
+states after every epoch; `--resume` requires the identical prepared data and
+scientific settings. A simulated epoch2 interruption resumed from epoch1 and
+completed successfully.
+
 The reference plan is
 `vault/02_Algorithm/184x184 WIC-SI12 CVAE Transition Plan.md`. It records the
 proposed five-stage masked encoder, global plus spatial latent,92x92 spline-

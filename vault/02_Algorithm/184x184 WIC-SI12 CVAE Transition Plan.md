@@ -74,6 +74,12 @@ generation is available on the server. This has not yet been independently
 inspected, but it removes the source-generation wait and makes native Model2
 and Model1 retraining the next executable stage.
 
+The native Model2 run keeps BCE and Dice at184x184 but evaluates persistent-
+homology regularization on an average-pooled46x46 probability grid. This
+preserves the approximate physical topology scale of the adopted46x46 mask
+model and avoids a16-fold cell-count penalty. Per-epoch atomic recovery and
+exact resume support protect the multi-hour server run.
+
 ## Prerequisites before architecture experiments
 
 ### 1. Native-resolution annotations and masking

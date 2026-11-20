@@ -32,7 +32,8 @@ PYTHONPATH=. python scripts/automatic_masking/prepare_model2_training_data.py \
   --source "$SOURCE" --output "$MASK_RUN/model2_training_data"
 
 PYTHONPATH=. python scripts/automatic_masking/train_model2_unet.py \
-  "$MASK_RUN/model2_training_data" --output "$MASK_RUN/model2_run" --device cuda
+  "$MASK_RUN/model2_training_data" --output "$MASK_RUN/model2_run" \
+  --device cuda --topology-resolution 46
 
 PYTHONPATH=. python scripts/automatic_masking/apply_model2_unet.py \
   --source "$SOURCE" --checkpoint "$MASK_RUN/model2_run/model2_unet.pt" \
@@ -57,3 +58,15 @@ The preparation step freezes the established held-out policy: validation days
 are selected before `2000-07-09`, and all reviewed frames on or after that date
 form the test split. The exact frame and orbit memberships are written into the
 prepared dataset and reused unchanged by both models.
+
+Model2 always evaluates BCE and Dice on the native image grid. Its persistent-
+homology penalty defaults to an average-pooled grid with maximum dimension46;
+this retains the physical topology scale used by the original46x46 model and
+avoids treating isolated50-km defects as large-scale topology. Pass
+`--topology-resolution 184` only for an explicit full-resolution experiment.
+
+Training atomically writes `history.json`, `best_state.pt` and
+`training_state.pt` after every completed epoch. If a job is interrupted, rerun
+the identical command with the same output directory and `--resume`. Scientific
+settings and prepared-data identity must match the saved state. The final
+`model2_unet.pt` is written only after validation-threshold and test evaluation.

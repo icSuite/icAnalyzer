@@ -14,6 +14,15 @@ retraining at 184x184, followed by a bounded two-stage mask export and visual
 validation. Full conditioning regeneration can then use the same completed
 Product-2 frame table.
 
+The first server Model2 attempt reached epoch17 in about three hours but was
+lost after an SSH disconnection because the trainer previously saved only at
+completion. Model2 now keeps BCE/Dice on184x184 while evaluating its topology
+penalty on an average-pooled46x46 probability grid by default. A local two-
+image microbenchmark reduced topology forward/backward time from0.1144 to
+0.0079 seconds (14.46x for that component). Atomic per-epoch history, current
+state, best state and exact `--resume` support are implemented and covered by
+a simulated interruption during epoch2.
+
 The durable transition and proposed hierarchical encoder/decoder are recorded
 in `vault/02_Algorithm/184x184 WIC-SI12 CVAE Transition Plan.md`. Architecture
 work is gated behind annotation/masking, conditioning, cache, resource and

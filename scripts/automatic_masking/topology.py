@@ -4,6 +4,7 @@
 
 import numpy as np
 import torch
+from torch.nn import functional as F
 from scipy.ndimage import binary_dilation, label
 
 FOREGROUND = np.ones((3, 3), dtype=bool)
@@ -19,15 +20,30 @@ def persistence_pairs(probability):
     return [regular[dimension] if dimension < len(regular) else np.empty((0, 2), dtype=np.int64) for dimension in (0, 1)]
 
 
-def topology_loss(logits):
+def topology_loss(logits, resolution=None):
     """Per-image sum of squared finite H0/H1 persistence, with useful gradients.
 
     PH identifies critical cells on detached probabilities; PyTorch differentiates
     their persistence values. The pairs are piecewise constant. Compute on the
     full mask, never probability * finite-WIC domain: data gaps are not rejection.
     Empty masks are permitted because essential H0 is never forced to persist.
+
+    ``resolution`` bounds each spatial dimension before persistence is computed.
+    The probability field is average pooled, so gradients still reach the full-
+    resolution logits. Pixelwise reconstruction losses remain unchanged.
     """
     probability = logits.sigmoid()
+    if resolution is not None:
+        resolution = int(resolution)
+        if resolution < 1:
+            raise ValueError("topology resolution must be positive")
+        target_shape = tuple(
+            min(resolution, size) for size in probability.shape[-2:]
+        )
+        if target_shape != probability.shape[-2:]:
+            probability = F.adaptive_avg_pool2d(
+                probability[:, None], target_shape
+            )[:, 0]
     losses = []
     for image in probability:
         pairs = persistence_pairs(image.detach().cpu().numpy())

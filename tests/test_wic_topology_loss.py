@@ -6,6 +6,7 @@ import torch
 
 pytest.importorskip("gudhi")
 
+from scripts.automatic_masking import topology
 from scripts.automatic_masking.topology import persistence_pairs, shape_counts, topology_loss
 from scripts.automatic_masking.model2_unet import joint_loss, masked_loss
 
@@ -62,6 +63,23 @@ def test_ring_penalizes_the_hole_with_a_useful_gradient():
     assert loss.item() > 0
     loss.backward()
     assert topology_loss((logits - .5 * logits.grad).detach()).item() < loss.item()
+
+
+def test_topology_resolution_pools_probabilities_and_retains_gradient(monkeypatch):
+    inspected = []
+
+    def empty_pairs(probability):
+        inspected.append(probability.shape)
+        return [np.empty((0, 2), dtype=np.int64) for _ in range(2)]
+
+    monkeypatch.setattr(topology, "persistence_pairs", empty_pairs)
+    logits = torch.zeros((2, 12, 10), requires_grad=True)
+    loss = topology_loss(logits, resolution=4).sum()
+    loss.backward()
+
+    assert inspected == [(4, 4), (4, 4)]
+    assert logits.grad is not None
+    assert logits.grad.shape == logits.shape
 
 
 def test_geometric_prior_never_turns_a_missing_observation_into_a_rejected_hole():
