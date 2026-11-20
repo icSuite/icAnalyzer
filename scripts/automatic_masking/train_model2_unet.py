@@ -108,7 +108,10 @@ def run(arguments):
         model.eval()
         validation_losses = []
         with torch.no_grad():
-            batches = np.array_split(split["validation"], max(1, int(np.ceil(len(split["validation"]) / 128))))
+            batches = np.array_split(
+                split["validation"],
+                max(1, int(np.ceil(len(split["validation"]) / arguments.batch_size)))
+            )
             for batch in batches:
                 values = window_inputs(inputs, windows, batch)
                 logits = model(torch.from_numpy(values).to(device))
@@ -131,7 +134,10 @@ def run(arguments):
     #%% Freeze the validation threshold and inspect the held-out test orbits once
 
     model.load_state_dict(best_state)
-    validation_probability, _ = predict(model, inputs, split["validation"], device)
+    validation_probability, _ = predict(
+        model, inputs, split["validation"], device,
+        batch_size=arguments.batch_size
+    )
     thresholds = np.linspace(0.1, 0.9, 33)
     validation_errors = [
         validation_correction(
@@ -141,7 +147,10 @@ def run(arguments):
         for threshold in thresholds
     ]
     threshold = float(thresholds[np.argmin(validation_errors)])
-    test_probability, _ = predict(model, inputs, split["test"], device)
+    test_probability, _ = predict(
+        model, inputs, split["test"], device,
+        batch_size=arguments.batch_size
+    )
     test_mask = test_probability >= threshold
     by_class = class_scores(
         pixel_scores(test_mask, targets[split["test"]], domains[split["test"]]),

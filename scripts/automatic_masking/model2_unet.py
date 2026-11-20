@@ -196,13 +196,20 @@ def joint_loss(mask_logits, class_logits, target, domain, classes, class_weight=
     return loss
 
 
-def predict(model, inputs, indices, device, windows=None, lag_seconds=None):
+def predict(
+    model, inputs, indices, device, windows=None, lag_seconds=None,
+    batch_size=128
+):
+    if batch_size < 1:
+        raise ValueError("prediction batch size must be positive")
     predictions, class_predictions = [], []
     if windows is None:
         windows = np.arange(len(inputs))[:, None]
     model.eval()
     with torch.no_grad():
-        for batch in np.array_split(indices, max(1, int(np.ceil(len(indices) / 128)))):
+        for batch in np.array_split(
+            indices, max(1, int(np.ceil(len(indices) / batch_size)))
+        ):
             values = window_inputs(inputs, windows, batch, lag_seconds)
             mask_logits, class_logits = model(torch.from_numpy(values).to(device), return_class=True)
             predictions.append(mask_logits.sigmoid().cpu().numpy())
