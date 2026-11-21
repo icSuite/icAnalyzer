@@ -45,6 +45,14 @@ Default holes scale from12/46 to48/184, while an explicit `--hole-size` remains
 literal. Effective-batch KL balance remains unresolved and is the next
 training-semantics decision after cache preparation.
 
+The user now reports that full cache preparation completed on the server and
+that the hierarchical architecture commit was pulled there. The cache
+manifest, split counts and disk contents have not been independently inspected
+locally. Validate that contract first, then test whether batch264 fits the
+hierarchical92-control-point model on the RTX6000 Ada. If it fits, the scalar-
+Kp pilot needs no separate conditioning table and retains the historical
+effective batch.
+
 The reference and implementation checkpoint is
 `vault/02_Algorithm/184x184 WIC-SI12 CVAE Transition Plan.md`. It records the
 five-stage masked encoder, global plus spatial latent,92x92 spline-coefficient
@@ -68,10 +76,10 @@ mechanical Model2 masks;119 eligible manual-cache paired frames;107,568,159
 cache bytes; finite184x184 current-model forward/backward. This validates
 mechanics only. No scientific model was trained or sampled.
 
-Next: finish and validate the paired cache on `/disk/CVAE_cache`, regenerate
-full conditioning, then measure a memory-safe batch on the RTX6000 Ada. Decide
-whether gradient accumulation is needed before launching the three controlled
-architecture pilots. Out-of-core50000-draw summaries remain required before
+Next: validate the completed paired cache on `/disk/CVAE_cache`, then measure
+batch264 on the RTX6000 Ada. If it fits, launch the scalar-Kp hierarchical
+pilot without named conditioning. Regenerate full conditioning before the
+later hybrid model. Out-of-core50000-draw summaries remain required before
 sampling.
 
 Portfolio impact: Central update needed: No.

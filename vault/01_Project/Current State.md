@@ -29,9 +29,10 @@ Model1 completed, and both the full-corpus Model2 application and full two-stage
 Model1+Model2 export completed. No run artifacts have been transferred or
 independently inspected locally.
 
-The high-resolution cache will use the existing uncompressed orbit-sharded
-layout at `/disk/CVAE_cache`; the user verified write access to `/disk`, which
-has2.6TiB free. It will not be compressed or copied into `/dev/shm`. New paired
+The high-resolution cache uses the existing uncompressed orbit-sharded layout
+at `/disk/CVAE_cache`; the user reports that full preparation completed on the
+server. Its manifest and counts have not yet been inspected locally. It is not
+compressed or copied into `/dev/shm`. New paired
 training uses a version-2 channel-balanced loss with a fixed2,116-pixel
 reconstruction reference, preserving grid scale while leaving old version-1
 artifacts readable. The default training hole now scales from12 pixels at46x46
@@ -49,9 +50,9 @@ separately. Deterministic linear KL warm-up is optional.
 
 A synthetic Kp-conditioned native-grid forward/backward smoke completed
 with428,290 parameters, finite loss and output shape `1 x 2 x 184 x 184`. No
-scientific training was launched. Full conditioning regeneration,
-completion/validation of the cache on `/disk`, effective-batch selection and
-out-of-core sampling remain before production-scale comparisons.
+scientific training was launched. Server-side cache-contract validation,
+effective-batch selection, full conditioning regeneration for hybrid models
+and out-of-core sampling remain before production-scale comparisons.
 
 The canonical `data/partial_image_annotations_184x184.json` now rasterizes all
 382 affinely transferred line-set keyframes at native target-cell centres. All
@@ -78,9 +79,10 @@ one broad-order GUI test encountered the pre-existing Matplotlib/LaTeX Unicode
 star failure, while the same GUI test and a real184x184 GUI smoke pass in
 isolation. Syntax and diff checks pass.
 
-No CVAE scientific training was launched. Remaining prerequisites are full
-conditioning regeneration, full cache preparation on `/disk`, memory-safe
-effective-batch selection and out-of-core50000-draw summaries.
+No CVAE scientific training was launched. Remaining prerequisites are a
+server-side check of the completed cache manifest, memory-safe effective-batch
+selection, full conditioning regeneration for hybrid models and out-of-core
+50000-draw summaries.
 
 ## Rebuilt Kp and hybrid4 paired CVAEs complete; sampling next (2026-11-17)
 

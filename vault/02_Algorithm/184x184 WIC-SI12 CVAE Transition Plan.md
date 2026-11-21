@@ -153,7 +153,8 @@ quality. No training or sampling run was started.
   copy it to `/dev/shm` and do not add compression. The user verified write
   access to `/disk`, which has ample free ZFS capacity.
 - [x] Complete a one-orbit manual-mask cache smoke using `or_0085.nc`.
-- [ ] Complete a small multi-orbit automatic-mask cache smoke.
+- [x] Prepare the full automatic-mask cache on `/disk/CVAE_cache` (reported
+  complete by the user; manifest and counts not inspected locally).
 
 ### 4. Training and sampling semantics
 
