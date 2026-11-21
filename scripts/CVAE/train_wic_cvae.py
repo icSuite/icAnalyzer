@@ -45,6 +45,7 @@ from scripts.CVAE.prepare_wic_si12_cvae_cache import (
 
 REFERENCE_HOLE_SHAPE = (46, 46)
 REFERENCE_HOLE_SIZE = 12
+TRAINING_STATE_FORMAT = "wic_cvae_training_state_v1"
 
 
 def resolve_training_hole_size(requested_size, image_shape):
@@ -66,8 +67,13 @@ def run(arguments):
     cache = arguments.cache.expanduser().resolve()
     output = arguments.output.expanduser().resolve()
     device = training_device(arguments.device)
-    if output.exists():
+    progress_file = output / "training_state.pt"
+    if output.exists() and not arguments.resume:
         raise FileExistsError("choose a new WIC-CVAE run directory; existing runs are never overwritten")
+    if arguments.resume and not progress_file.is_file():
+        raise FileNotFoundError(
+            f"cannot resume without the saved training state: {progress_file}"
+        )
     cache_format = json.loads((cache / "manifest.json").read_text()).get(
         "cache_format"
     )
@@ -298,13 +304,96 @@ def run(arguments):
         model = SplineConditionalVAE(
             latent_dim=arguments.latent_dim, **model_arguments
         )
-    output.mkdir(parents=True)
-    (output / "cache_manifest.json").write_bytes((cache / "manifest.json").read_bytes())
-    if arguments.conditioning is not None:
-        (output / "conditioning_manifest.json").write_bytes(
-            (arguments.conditioning.expanduser().resolve() / "manifest.json").read_bytes()
+    output.mkdir(parents=True, exist_ok=arguments.resume)
+    if not arguments.resume:
+        (output / "cache_manifest.json").write_bytes(
+            (cache / "manifest.json").read_bytes()
         )
+        if arguments.conditioning is not None:
+            (output / "conditioning_manifest.json").write_bytes(
+                (arguments.conditioning.expanduser().resolve() / "manifest.json").read_bytes()
+            )
+    resume_state = None
+    training_resumes = 0
+    if arguments.resume:
+        saved = torch.load(progress_file, map_location="cpu", weights_only=False)
+        if saved.get("format") != TRAINING_STATE_FORMAT:
+            raise ValueError("unsupported CVAE training-state format")
+        if (
+            saved.get("cache_manifest_sha256") != metadata["manifest_sha256"]
+            or saved.get("training_configuration") != configuration
+            or saved.get("model_configuration") != model.configuration()
+        ):
+            raise ValueError(
+                "resume arguments, cache or model differ from training_state.pt"
+            )
+        resume_state = saved["training_state"]
+        training_resumes = int(saved.get("training_resumes", 0)) + 1
+
+    def save_training_state(training_state):
+        temporary = progress_file.with_suffix(".pt.tmp")
+        torch.save({
+            "format": TRAINING_STATE_FORMAT,
+            "cache_manifest_sha256": metadata["manifest_sha256"],
+            "training_configuration": configuration,
+            "model_configuration": model.configuration(),
+            "training_resumes": training_resumes,
+            "training_state": training_state,
+        }, temporary)
+        temporary.replace(progress_file)
+
     try:
+        if arguments.batch_probe_batches:
+            set_random_seed(seed)
+            model = model.to(device)
+            optimizer = torch.optim.Adam(
+                model.parameters(), lr=arguments.learning_rate
+            )
+            probe_holes = {}
+            if arguments.training_holes:
+                probe_holes = {
+                    "hole_probability": arguments.hole_probability,
+                    "hole_size": hole_size,
+                    "hole_device": hole_device,
+                    "hole_generator": torch.Generator(
+                        device=hole_device
+                    ).manual_seed(int(seed) + 3),
+                }
+            if device == "cuda":
+                torch.cuda.reset_peak_memory_stats()
+            metrics = _run_epoch(
+                model, loaders["train"], optimizer=optimizer,
+                device=torch.device(device), beta=arguments.beta,
+                training=True, loss_configuration=loss_configuration,
+                latent_samples=arguments.latent_samples,
+                progress_description="GPU batch probe",
+                maximum_batches=arguments.batch_probe_batches,
+                **probe_holes,
+            )
+            if device == "cuda":
+                torch.cuda.synchronize()
+            probe = {
+                "cache_manifest_sha256": metadata["manifest_sha256"],
+                "image_shape": list(image_shape),
+                "architecture": arguments.architecture,
+                "batch_size": arguments.batch_size,
+                "batches": arguments.batch_probe_batches,
+                "metrics": metrics,
+                "cuda_peak_allocated_gib": (
+                    torch.cuda.max_memory_allocated() / 1024**3
+                    if device == "cuda" else None
+                ),
+                "cuda_peak_reserved_gib": (
+                    torch.cuda.max_memory_reserved() / 1024**3
+                    if device == "cuda" else None
+                ),
+            }
+            (output / "batch_probe.json").write_text(
+                json.dumps(probe, indent=2) + "\n"
+            )
+            print(json.dumps(probe, indent=2), flush=True)
+            return probe
+
         model, history = train_vae(
             model, loaders["train"], validation_loader=loaders["validation"],
             epochs=arguments.epochs, learning_rate=arguments.learning_rate,
@@ -316,8 +405,11 @@ def run(arguments):
             hole_probability=arguments.hole_probability if arguments.training_holes else 0.0,
             hole_size=hole_size, hole_device=arguments.hole_device,
             latent_samples=arguments.latent_samples,
-            kl_warmup_epochs=arguments.kl_warmup_epochs
+            kl_warmup_epochs=arguments.kl_warmup_epochs,
+            resume_state=resume_state,
+            checkpoint_callback=save_training_state,
         )
+        configuration["training_resumes"] = training_resumes
         configuration["selected_epoch"] = model.best_validation_epoch or arguments.epochs
         configuration["selected_validation_total"] = model.best_validation_total
         artifact = output / "wic_cvae.pt"
@@ -406,6 +498,14 @@ def parse_arguments(argv=None):
                           ("scheduler-minimum-learning-rate", 0.0), ("cache-mib", 512)):
         parser.add_argument("--" + name, type=float, default=default)
     parser.add_argument("--training-holes", action="store_true")
+    parser.add_argument(
+        "--resume", action="store_true",
+        help="resume this output directory from training_state.pt"
+    )
+    parser.add_argument(
+        "--batch-probe-batches", type=int, default=0,
+        help="run only this many training batches and report peak GPU memory"
+    )
     parser.add_argument("--hole-probability", type=float, default=0.5)
     parser.add_argument(
         "--hole-size", type=int,
@@ -430,6 +530,10 @@ def parse_arguments(argv=None):
         parser.error("--spatial-latent-channels must be nonnegative")
     if arguments.kl_warmup_epochs < 0:
         parser.error("--kl-warmup-epochs must be nonnegative")
+    if arguments.batch_probe_batches < 0:
+        parser.error("--batch-probe-batches must be nonnegative")
+    if arguments.resume and arguments.batch_probe_batches:
+        parser.error("--resume cannot be combined with --batch-probe-batches")
     if arguments.hole_size is not None and arguments.hole_size < 1:
         parser.error("--hole-size must be positive")
     if arguments.conditioning is None and arguments.conditioning_profile != "all11":

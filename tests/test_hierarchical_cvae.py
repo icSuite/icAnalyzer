@@ -1,14 +1,16 @@
 """Native-grid hierarchical encoder, latent groups and spline decoder."""
 
 import numpy as np
+import pytest
 import torch
+from torch import nn
 
 from icanalyzer.cvae.artifacts import load_run_artifact, save_run_artifact
 from icanalyzer.cvae.data import ChannelTransform
 from icanalyzer.cvae.hierarchical import HierarchicalSplineConditionalVAE
 from icanalyzer.cvae.ensemble import sample_decoded_ensemble
 from icanalyzer.cvae.loss import vae_loss
-from icanalyzer.cvae.training import kl_beta_for_epoch
+from icanalyzer.cvae.training import kl_beta_for_epoch, train_vae
 
 
 KP_CONDITION = {
@@ -120,6 +122,52 @@ def test_kl_warmup_is_deterministic_and_reaches_configured_beta():
     assert kl_beta_for_epoch(0.048, 50, 50) == 0.048
     assert kl_beta_for_epoch(0.048, 80, 50) == 0.048
     assert kl_beta_for_epoch(0.048, 1, 0) == 0.048
+
+
+def test_training_resumes_from_last_completed_epoch(monkeypatch):
+    import icanalyzer.cvae.training as training
+
+    class TinyModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = nn.Parameter(torch.zeros(()))
+
+    fail_once = {"enabled": True}
+
+    def run_epoch(model, loader, optimizer, device, beta, training, **kwargs):
+        if training:
+            with torch.no_grad():
+                model.weight.add_(1)
+            if fail_once["enabled"] and model.weight.item() == 2:
+                fail_once["enabled"] = False
+                raise RuntimeError("simulated interruption")
+        value = float(10 - model.weight.item())
+        return {"total": value, "reconstruction": value, "kl": 0.0}
+
+    monkeypatch.setattr(training, "_run_epoch", run_epoch)
+    checkpoints = []
+    arguments = dict(
+        train_loader=[None], validation_loader=[None], epochs=3,
+        loss_configuration={
+            "kind": "legacy_weighted_mse_v1",
+            "reconstruction_reduction": "global_weight_sum_times_state_size",
+            "kl_reduction": "sum_batch_and_latent",
+            "measurement_uncertainty_in_loss": False,
+        },
+        checkpoint_callback=checkpoints.append,
+    )
+
+    with pytest.raises(RuntimeError, match="simulated interruption"):
+        train_vae(TinyModel(), **arguments)
+
+    assert checkpoints[-1]["completed_epoch"] == 1
+    resumed, history = train_vae(
+        TinyModel(), resume_state=checkpoints[-1], **arguments
+    )
+
+    assert [row["epoch"] for row in history] == [1, 2, 3]
+    assert resumed.weight.item() == 3
+    assert resumed.best_validation_epoch == 3
 
 
 def test_hierarchical_artifact_roundtrip_preserves_coordinates(tmp_path):

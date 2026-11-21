@@ -2,6 +2,8 @@
 
 #%% Imports
 
+import copy
+import itertools
 import random
 
 import numpy as np
@@ -28,6 +30,32 @@ def set_random_seed(seed):
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+
+
+def random_state(include_cuda=False):
+    """Capture the main-process random streams needed for exact epoch resume."""
+
+    return {
+        "python": random.getstate(),
+        "numpy": np.random.get_state(),
+        "torch": torch.random.get_rng_state(),
+        "cuda": torch.cuda.get_rng_state_all() if include_cuda else None,
+    }
+
+
+def restore_random_state(state):
+    """Restore random streams saved at a completed epoch boundary."""
+
+    required = {"python", "numpy", "torch", "cuda"}
+    if not isinstance(state, dict) or set(state) != required:
+        raise ValueError("saved random state is incomplete")
+    random.setstate(state["python"])
+    np.random.set_state(state["numpy"])
+    torch.random.set_rng_state(state["torch"])
+    if state["cuda"] is not None:
+        if not torch.cuda.is_available():
+            raise ValueError("cannot restore CUDA training state without CUDA")
+        torch.cuda.set_rng_state_all(state["cuda"])
 
 
 def kl_beta_for_epoch(beta, epoch, warmup_epochs):
@@ -161,6 +189,7 @@ def _run_epoch(
     hole_device="cpu",
     latent_samples=1,
     progress_description=None,
+    maximum_batches=None,
 ):
     device = torch.device(device)
     loss_configuration = validate_loss_configuration(loss_configuration)
@@ -180,9 +209,20 @@ def _run_epoch(
         coverage_maps = torch.as_tensor(coverage["factors"], dtype=torch.float32, device=device)
         coverage_edges = torch.as_tensor(coverage["kp_bin_edges"][1:-1], dtype=torch.float64, device=device)
 
-    batches = loader
+    if maximum_batches is not None:
+        if not isinstance(maximum_batches, (int, np.integer)) or maximum_batches < 1:
+            raise ValueError("maximum_batches must be a positive integer")
+        batches = itertools.islice(loader, int(maximum_batches))
+    else:
+        batches = loader
     if progress_description is not None:
-        batches = tqdm(loader, desc=progress_description, unit="batch", leave=False, position=1, dynamic_ncols=True)
+        total = len(loader)
+        if maximum_batches is not None:
+            total = min(total, int(maximum_batches))
+        batches = tqdm(
+            batches, total=total, desc=progress_description, unit="batch",
+            leave=False, position=1, dynamic_ncols=True
+        )
     for batch in batches:
         encoder_input = batch["encoder_input"]
         input_mask = batch["mask"]
@@ -325,6 +365,8 @@ def train_vae(
     hole_device="auto",
     latent_samples=1,
     kl_warmup_epochs=0,
+    resume_state=None,
+    checkpoint_callback=None,
 ):
     """Train with separate, consistently reduced reconstruction and KL logs."""
 
@@ -378,12 +420,46 @@ def train_vae(
     best_validation_total = np.inf
     best_validation_epoch = None
     best_state = None
+    start_epoch = 1
+
+    if resume_state is not None:
+        required = {
+            "completed_epoch", "model_state", "optimizer_state",
+            "scheduler_state", "history", "best_validation_total",
+            "best_validation_epoch", "best_model_state", "random_state",
+            "hole_generator_state",
+        }
+        if not isinstance(resume_state, dict) or set(resume_state) != required:
+            raise ValueError("saved CVAE training state is incomplete")
+        completed_epoch = int(resume_state["completed_epoch"])
+        history = copy.deepcopy(resume_state["history"])
+        if (
+            completed_epoch < 1 or completed_epoch > epochs
+            or len(history) != completed_epoch
+            or int(history[-1].get("epoch", -1)) != completed_epoch
+        ):
+            raise ValueError("saved CVAE epoch history is inconsistent")
+        model.load_state_dict(resume_state["model_state"])
+        optimizer.load_state_dict(resume_state["optimizer_state"])
+        scheduler.load_state_dict(resume_state["scheduler_state"])
+        best_validation_total = float(resume_state["best_validation_total"])
+        best_validation_epoch = resume_state["best_validation_epoch"]
+        best_state = resume_state["best_model_state"]
+        saved_hole_state = resume_state["hole_generator_state"]
+        if (hole_generator is None) != (saved_hole_state is None):
+            raise ValueError("saved CVAE training-hole state is incompatible")
+        if hole_generator is not None:
+            hole_generator.set_state(saved_hole_state)
+        restore_random_state(resume_state["random_state"])
+        start_epoch = completed_epoch + 1
 
     print(f"Training VAE on {device}: {epochs} epochs, {len(train_loader)} training batches per epoch; {latent_samples} latent sample(s) per image.", flush=True)
+    if start_epoch > 1:
+        print(f"Resuming after completed epoch {start_epoch - 1}.", flush=True)
     if hole_probability > 0:
         print(f"Training-hole generation: {resolved_hole_device}.", flush=True)
-    with tqdm(total=epochs, desc="VAE epochs", unit="epoch", position=0, dynamic_ncols=True) as progress:
-        for epoch in range(1, epochs + 1):
+    with tqdm(total=epochs, initial=start_epoch - 1, desc="VAE epochs", unit="epoch", position=0, dynamic_ncols=True) as progress:
+        for epoch in range(start_epoch, epochs + 1):
             epoch_beta = kl_beta_for_epoch(beta, epoch, kl_warmup_epochs)
             train_metrics = _run_epoch(
                 model,
@@ -421,6 +497,26 @@ def train_vae(
             scheduler.step(record["train"]["total"])
             record["learning_rate"] = float(optimizer.param_groups[0]["lr"])
             history.append(record)
+
+            if checkpoint_callback is not None:
+                checkpoint_callback({
+                    "completed_epoch": epoch,
+                    "model_state": {
+                        name: value.detach().cpu().clone()
+                        for name, value in model.state_dict().items()
+                    },
+                    "optimizer_state": copy.deepcopy(optimizer.state_dict()),
+                    "scheduler_state": copy.deepcopy(scheduler.state_dict()),
+                    "history": copy.deepcopy(history),
+                    "best_validation_total": best_validation_total,
+                    "best_validation_epoch": best_validation_epoch,
+                    "best_model_state": copy.deepcopy(best_state),
+                    "random_state": random_state(include_cuda=device.type == "cuda"),
+                    "hole_generator_state": (
+                        None if hole_generator is None
+                        else hole_generator.get_state()
+                    ),
+                })
 
             # Reporting only: preserve loss, scheduler and checkpoint behavior.
             status = {"train_loss": f"{train_metrics['total']:.3f}", "lr": f"{record['learning_rate']:.2e}"}

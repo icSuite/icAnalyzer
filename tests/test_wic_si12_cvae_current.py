@@ -479,6 +479,86 @@ def test_joint_trainer_selects_hierarchical_architecture(tmp_path, monkeypatch):
     assert summary["held_out_evaluation"]["test"]["kl_spatial"] == 0.1
 
 
+def test_joint_trainer_batch_probe_is_bounded(tmp_path, monkeypatch):
+    import scripts.CVAE.train_wic_cvae as trainer
+
+    cache = make_joint_cache(tmp_path / "cache")
+
+    def bounded_epoch(model, loader, **kwargs):
+        assert isinstance(model, HierarchicalSplineConditionalVAE)
+        assert kwargs["maximum_batches"] == 1
+        return {
+            "total": 1.0, "reconstruction": 0.8, "kl": 0.2,
+            "kl_global": 0.1, "kl_spatial": 0.1,
+            "channel_reconstruction": [0.7, 0.9],
+        }
+
+    monkeypatch.setattr(trainer, "_run_epoch", bounded_epoch)
+    monkeypatch.setattr(
+        trainer, "train_vae",
+        lambda *args, **kwargs: pytest.fail("batch probe started full training")
+    )
+    output = tmp_path / "probe"
+    arguments = trainer.parse_arguments([
+        str(cache), "--output", str(output), "--device", "cpu",
+        "--num-workers", "0", "--batch-size", "2",
+        "--architecture", "hierarchical", "--spatial-latent-channels", "2",
+        "--latent-dim", "3", "--spline-control-points", "5",
+        "--batch-probe-batches", "1",
+    ])
+    summary = trainer.run(arguments)
+
+    assert summary["batch_size"] == 2
+    assert summary["batches"] == 1
+    assert json.loads((output / "batch_probe.json").read_text()) == summary
+    assert not (output / "wic_cvae.pt").exists()
+
+
+def test_joint_trainer_saves_and_loads_resume_envelope(tmp_path, monkeypatch):
+    import scripts.CVAE.train_wic_cvae as trainer
+
+    cache = make_joint_cache(tmp_path / "cache")
+    output = tmp_path / "run"
+    command = [
+        str(cache), "--output", str(output), "--device", "cpu",
+        "--num-workers", "0", "--epochs", "3", "--latent-dim", "2",
+        "--spline-control-points", "5",
+    ]
+    saved_state = {"completed_epoch": 1, "test_marker": "saved"}
+
+    def interrupted(model, *args, **kwargs):
+        kwargs["checkpoint_callback"](saved_state)
+        raise RuntimeError("simulated interruption")
+
+    monkeypatch.setattr(trainer, "train_vae", interrupted)
+    with pytest.raises(RuntimeError, match="simulated interruption"):
+        trainer.run(trainer.parse_arguments(command))
+
+    envelope = torch.load(
+        output / "training_state.pt", map_location="cpu", weights_only=False
+    )
+    assert envelope["format"] == trainer.TRAINING_STATE_FORMAT
+    assert envelope["training_state"] == saved_state
+
+    def resumed(model, *args, **kwargs):
+        assert kwargs["resume_state"] == saved_state
+        model.best_validation_epoch = 3
+        model.best_validation_total = 0.5
+        return model, [{"epoch": 1}, {"epoch": 2}, {"epoch": 3}]
+
+    monkeypatch.setattr(trainer, "train_vae", resumed)
+    monkeypatch.setattr(
+        trainer, "_run_epoch",
+        lambda *args, **kwargs: {
+            "total": 1.0, "reconstruction": 0.8, "kl": 0.2,
+            "channel_reconstruction": [0.7, 0.9],
+        }
+    )
+    summary = trainer.run(trainer.parse_arguments([*command, "--resume"]))
+
+    assert summary["training_configuration"]["training_resumes"] == 1
+
+
 def test_joint_sampler_and_plotter_preserve_paired_members(tmp_path, monkeypatch):
     import scripts.CVAE.train_wic_cvae as trainer
     import scripts.CVAE.sample_wic_at_kp as sampler

@@ -53,6 +53,14 @@ hierarchical92-control-point model on the RTX6000 Ada. If it fits, the scalar-
 Kp pilot needs no separate conditioning table and retains the historical
 effective batch.
 
+The trainer now supports `--batch-probe-batches N`, which performs only N real
+training steps and writes peak CUDA memory to `batch_probe.json`. Long runs
+atomically save `training_state.pt` after every completed epoch and accept
+`--resume` only with the same cache hash, model and training configuration.
+Resume restores the current and best model states, optimizer, scheduler,
+history, random streams and training-hole generator. Focused resume and
+compatibility tests pass; no server probe or scientific training was started.
+
 The reference and implementation checkpoint is
 `vault/02_Algorithm/184x184 WIC-SI12 CVAE Transition Plan.md`. It records the
 five-stage masked encoder, global plus spatial latent,92x92 spline-coefficient

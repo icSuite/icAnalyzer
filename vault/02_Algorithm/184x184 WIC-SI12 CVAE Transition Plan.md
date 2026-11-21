@@ -168,6 +168,8 @@ quality. No training or sampling run was started.
   literal native-pixel override.
 - [ ] Establish a memory-safe batch size and use gradient accumulation if a
   comparable optimizer batch is required.
+- [x] Add bounded real-batch GPU probing and atomic per-epoch CVAE
+  checkpoint/resume before starting long native-grid training.
 - [ ] Make ensemble summaries out-of-core. A 50,000-member paired 184x184
   float32 ensemble is about 12.6 GiB before median work.
 - [ ] Remove fixed 46x46 assertions from active comparison plots and validate

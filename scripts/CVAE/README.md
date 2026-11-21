@@ -219,6 +219,20 @@ This command is the scalar-Kp baseline because no named conditioning table is
 supplied. Add the matched `--conditioning` and `--conditioning-profile` options
 only for the later hybrid comparison.
 
+Before the full native-grid run, execute the same scientific configuration
+with `--batch-probe-batches 2` and a disposable output directory. The probe
+performs two real optimizer steps, writes `batch_probe.json`, reports peak CUDA
+allocated/reserved memory and does not create a trained artifact. Start with
+the historical batch264 so the summed-KL balance remains comparable.
+
+Full training atomically writes `training_state.pt` after every completed
+epoch. After an interruption, repeat the identical command with the same
+output directory and add `--resume`. The cache hash, model configuration and
+training configuration must match; continuation restores the current model,
+optimizer, scheduler, best-validation model, history, random streams and
+training-hole generator. A failure during the first epoch has no completed
+epoch from which to resume.
+
 For the controlled SML-history test, keep the paired image cache, architecture,
 split, seed and optimization settings fixed and change only the conditioning
 table/profile and output directory. No image cache regeneration is needed:

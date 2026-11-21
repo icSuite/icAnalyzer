@@ -54,6 +54,15 @@ scientific training was launched. Server-side cache-contract validation,
 effective-batch selection, full conditioning regeneration for hybrid models
 and out-of-core sampling remain before production-scale comparisons.
 
+The generic trainer now has a bounded `--batch-probe-batches` mode that runs
+real optimizer steps and records peak CUDA memory without producing a trained
+artifact. Full runs atomically save `training_state.pt` after every completed
+epoch; `--resume` requires an identical cache, model and training configuration
+and restores model/optimizer/scheduler, best validation state, history and all
+training random streams. A simulated interruption after epoch1 resumed exactly
+and completed epochs2--3. The server must pull this implementation before the
+batch264 probe.
+
 The canonical `data/partial_image_annotations_184x184.json` now rasterizes all
 382 affinely transferred line-set keyframes at native target-cell centres. All
 382 line sets exactly reproduced their original46x46 masks, so this carries
