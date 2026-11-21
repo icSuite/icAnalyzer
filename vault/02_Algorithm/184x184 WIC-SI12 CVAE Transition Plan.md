@@ -120,22 +120,23 @@ exact resume support protect the multi-hour server run.
 - [x] Record `image_shape` in the cache manifest and use it for support arrays,
   disk estimates, shard validation and memory mapping.
 - [x] Preserve backward reading of version-1 46x46 paired caches.
-- [ ] Decide the high-resolution storage policy before a full build. The
-  present float32 physical/error/quality layout is approximately 220 GiB for
-  the previous frame population and should not automatically be copied to
-  `/dev/shm`.
+- [x] Decide the high-resolution storage policy before a full build. Keep the
+  existing uncompressed orbit-sharded layout on `/disk/CVAE_cache`; do not
+  copy it to `/dev/shm` and do not add compression. The user verified write
+  access to `/disk`, which has ample free ZFS capacity.
 - [x] Complete a one-orbit manual-mask cache smoke using `or_0085.nc`.
 - [ ] Complete a small multi-orbit automatic-mask cache smoke.
-  by a small multi-orbit automatic-mask cache smoke.
 
 ### 4. Training and sampling semantics
 
 - [x] Construct the model from the cache-declared image shape.
-- [ ] Make reconstruction/KL scaling comparable across grid sizes. The current
-  reconstruction term scales with pixel count, so unchanged `beta=0.048`
-  would make KL about 16 times weaker relative to reconstruction at 184x184.
-- [ ] Scale artificial holes by physical size: the historical 12-pixel hole is
-  approximately 48 pixels on the new grid.
+- [x] Make reconstruction/KL scaling comparable across grid sizes. New paired
+  runs use a fixed2,116-pixel (46x46) reconstruction reference; legacy
+  version-1 artifacts retain native-pixel behavior. Batch-size-dependent KL
+  scaling remains separate.
+- [x] Scale artificial holes by physical size. An omitted `--hole-size`
+  resolves from12 pixels at46x46 to48 at184x184; an explicit value remains a
+  literal native-pixel override.
 - [ ] Establish a memory-safe batch size and use gradient accumulation if a
   comparable optimizer batch is required.
 - [ ] Make ensemble summaries out-of-core. A 50,000-member paired 184x184

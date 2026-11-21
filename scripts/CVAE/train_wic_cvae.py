@@ -42,6 +42,22 @@ from scripts.CVAE.prepare_wic_si12_cvae_cache import (
     read_wic_si12_cache,
 )
 
+REFERENCE_HOLE_SHAPE = (46, 46)
+REFERENCE_HOLE_SIZE = 12
+
+
+def resolve_training_hole_size(requested_size, image_shape):
+    """Preserve the old hole's physical scale unless native pixels are explicit."""
+
+    if requested_size is not None:
+        if not isinstance(requested_size, (int, np.integer)) or requested_size < 1:
+            raise ValueError("hole size must be a positive integer")
+        return int(requested_size)
+    linear_scale = np.sqrt(
+        np.prod(image_shape) / np.prod(REFERENCE_HOLE_SHAPE)
+    )
+    return max(1, int(round(REFERENCE_HOLE_SIZE * linear_scale)))
+
 
 #%% Training
 
@@ -79,6 +95,9 @@ def run(arguments):
     proton_corrected = paired or field_names[0] == "wic_corrected"
     seed = metadata["seed"] if arguments.seed is None else arguments.seed
     hole_device = resolve_hole_device(arguments.hole_device, device)
+    hole_size = resolve_training_hole_size(arguments.hole_size, image_shape)
+    if hole_size >= min(image_shape):
+        raise ValueError("resolved training hole must be smaller than the image")
 
     datasets = {}
     for name in ("train", "validation", "test"):
@@ -187,7 +206,10 @@ def run(arguments):
         ),
         "uncertainty_arrays_loaded": False,
         "training_holes": {
-            "probability": arguments.hole_probability, "size": arguments.hole_size,
+            "probability": arguments.hole_probability, "size": hole_size,
+            "requested_native_pixel_size": arguments.hole_size,
+            "default_reference_size": REFERENCE_HOLE_SIZE,
+            "default_reference_shape": list(REFERENCE_HOLE_SHAPE),
             "seed": seed + 3, "device": hole_device,
             "target_policy": "original observed cells retained"
         } if arguments.training_holes else None,
@@ -268,7 +290,7 @@ def run(arguments):
             scheduler_patience=arguments.scheduler_patience,
             scheduler_minimum_learning_rate=arguments.scheduler_minimum_learning_rate,
             hole_probability=arguments.hole_probability if arguments.training_holes else 0.0,
-            hole_size=arguments.hole_size, hole_device=arguments.hole_device,
+            hole_size=hole_size, hole_device=arguments.hole_device,
             latent_samples=arguments.latent_samples
         )
         configuration["selected_epoch"] = model.best_validation_epoch or arguments.epochs
@@ -351,7 +373,13 @@ def parse_arguments(argv=None):
         parser.add_argument("--" + name, type=float, default=default)
     parser.add_argument("--training-holes", action="store_true")
     parser.add_argument("--hole-probability", type=float, default=0.5)
-    parser.add_argument("--hole-size", type=int, default=12)
+    parser.add_argument(
+        "--hole-size", type=int,
+        help=(
+            "native-grid pixels; default preserves the historical 12/46 "
+            "linear scale (48 pixels on a 184x184 grid)"
+        )
+    )
     parser.add_argument("--hole-device", choices=("auto", "cpu", "cuda"), default="auto")
     arguments = parser.parse_args(argv)
     if (arguments.epochs < 1 or arguments.batch_size < 1 or
@@ -364,6 +392,8 @@ def parse_arguments(argv=None):
         parser.error("beta must be finite and nonnegative")
     if arguments.num_workers < 0 or arguments.prefetch_factor < 1:
         parser.error("worker count must be nonnegative and prefetch factor positive")
+    if arguments.hole_size is not None and arguments.hole_size < 1:
+        parser.error("--hole-size must be positive")
     if arguments.conditioning is None and arguments.conditioning_profile != "all11":
         parser.error("--conditioning-profile requires --conditioning")
     return arguments

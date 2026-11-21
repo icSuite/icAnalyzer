@@ -169,6 +169,11 @@ paired cache supplies two validity masks and two quality maps. The encoder uses
 their union while receiving both quality maps, and the reconstruction loss is
 the equal mean of independently normalized WIC and SI12 errors. Formal sensor
 uncertainties are stored but deliberately do not enter this baseline loss.
+New paired runs multiply those errors by the fixed46x46 reference area of2,116
+pixels rather than by the native grid area. This keeps the reconstruction/KL
+scale grid-comparable; historical version-1 artifacts retain their native-
+pixel reduction. Batch-size dependence of the summed KL term is separate and
+still requires a matched effective batch or beta.
 Training artifacts and held-out evaluation report the two channel
 reconstruction contributions separately. The same sampler accepts the paired
 artifact: every latent draw produces one aligned corrected-WIC/SI12 member.
@@ -396,6 +401,9 @@ CVAE above.
 Both trainers accept `--hole-device auto|cpu|cuda`. The default `auto` retains
 the historical CPU implementation for CPU training and uses vectorized CUDA
 hole generation for CUDA training. Run artifacts record the resolved backend.
+For `train_wic_cvae.py`, omitting `--hole-size` preserves the historical
+physical scale:12 pixels at46x46,24 at92x92 and48 at184x184. Supplying
+`--hole-size` explicitly continues to mean literal native-grid pixels.
 
 Both trainers also accept `--latent-samples K` (default `1`). For `K>1`, the
 encoder runs once per image and the decoder evaluates all K reparameterized

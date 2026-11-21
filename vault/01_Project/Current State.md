@@ -1,7 +1,7 @@
 # Current State
 
-Last reviewed: 2026-11-20 (completed 184x184 Product-2 generation reported)
-Repository snapshot: `vae/wic-si12` at `1ff9c1a`; `main` remains at `7c71591`
+Last reviewed: 2026-11-21 (184x184 masks and training semantics)
+Repository snapshot: `vae/wic-si12` at `333b888`; `main` remains at `7c71591`
 Worktree: user annotation and generated-output changes preserved
 
 ## 184x184 prerequisites partially implemented (2026-11-19)
@@ -22,6 +22,20 @@ image microbenchmark reduced topology forward/backward time from0.1144 to
 0.0079 seconds (14.46x for that component). Atomic per-epoch history, current
 state, best state and exact `--resume` support are implemented and covered by
 a simulated interruption during epoch2.
+
+The user reports that the accelerated184x184 Model2 completed and looked good,
+Model1 completed, and full-corpus Model2 masks completed. The full two-stage
+Model1+Model2 export is currently running on the server. No run artifacts have
+been transferred or independently inspected locally.
+
+The high-resolution cache will use the existing uncompressed orbit-sharded
+layout at `/disk/CVAE_cache`; the user verified write access to `/disk`, which
+has2.6TiB free. It will not be compressed or copied into `/dev/shm`. New paired
+training uses a version-2 channel-balanced loss with a fixed2,116-pixel
+reconstruction reference, preserving grid scale while leaving old version-1
+artifacts readable. The default training hole now scales from12 pixels at46x46
+to48 at184x184; explicit `--hole-size` values remain native pixels. Batch-size
+KL scaling still requires a matched effective batch or explicit adjustment.
 
 The durable transition and proposed hierarchical encoder/decoder are recorded
 in `vault/02_Algorithm/184x184 WIC-SI12 CVAE Transition Plan.md`. Architecture
@@ -53,13 +67,10 @@ one broad-order GUI test encountered the pre-existing Matplotlib/LaTeX Unicode
 star failure, while the same GUI test and a real184x184 GUI smoke pass in
 isolation. Syntax and diff checks pass.
 
-No scientific training was launched. Remaining prerequisites are real184x184
-Model2/Model1 retraining and two-stage export, full conditioning regeneration,
-a multi-orbit automatic-mask cache smoke, an explicit approximately220-GiB
-full-cache storage policy, grid-comparable loss and hole scaling, and
-out-of-core50000-draw summaries. The annotation prerequisite is commit
-`518981d`; grid-aware pipeline prerequisites and this plan are commit
-`369789d`.
+No CVAE scientific training was launched. Remaining prerequisites are
+completion of the running two-stage mask export, full conditioning
+regeneration, full cache preparation on `/disk`, memory-safe effective-batch
+selection, architecture work and out-of-core50000-draw summaries.
 
 ## Rebuilt Kp and hybrid4 paired CVAEs complete; sampling next (2026-11-17)
 

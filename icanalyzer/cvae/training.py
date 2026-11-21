@@ -10,6 +10,7 @@ from tqdm.auto import tqdm
 
 from .loss import (
     CHANNEL_BALANCED_LOSS_KIND,
+    CHANNEL_BALANCED_LOSS_KINDS,
     GAUSSIAN_UNCERTAINTY_LOSS_KIND,
     LEGACY_LOSS_CONFIGURATION,
     MEASUREMENT_UNCERTAINTY_LOSS_KIND,
@@ -250,7 +251,12 @@ def _run_epoch(
                 logvar,
                 beta=beta,
                 channel_balanced=(
-                    loss_configuration["kind"] == CHANNEL_BALANCED_LOSS_KIND
+                    loss_configuration["kind"] in CHANNEL_BALANCED_LOSS_KINDS
+                ),
+                reconstruction_reference_pixels=(
+                    loss_configuration.get("reconstruction_reference_pixels")
+                    if loss_configuration["kind"] == CHANNEL_BALANCED_LOSS_KIND
+                    else None
                 ),
                 **uncertainty_arguments,
             )

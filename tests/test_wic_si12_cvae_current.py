@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 import torch
 
 from icanalyzer.cvae.artifacts import load_run_artifact
@@ -13,7 +14,10 @@ from icanalyzer.cvae.data import ChannelTransform
 from icanalyzer.cvae.ensemble import sample_decoded_ensemble
 from icanalyzer.cvae.loss import (
     CHANNEL_BALANCED_LOSS_CONFIGURATION,
+    LEGACY_CHANNEL_BALANCED_LOSS_KIND,
+    REFERENCE_PIXEL_COUNT,
     vae_loss,
+    validate_loss_configuration,
 )
 from icanalyzer.cvae.model import SplineConditionalVAE
 from icanalyzer.cvae.training import (
@@ -320,6 +324,51 @@ def test_channel_balanced_loss_normalizes_each_sensor_support():
         losses["channel_reconstruction"], torch.tensor([4.0, 4.0])
     )
     torch.testing.assert_close(losses["reconstruction"], torch.tensor(4.0))
+
+
+def test_grid_reference_keeps_channel_loss_scale_across_image_shapes():
+    results = []
+    for image_shape in ((46, 46), (184, 184)):
+        target = torch.zeros(1, 2, *image_shape)
+        reconstructed = torch.ones_like(target)
+        mask = torch.ones_like(target, dtype=torch.bool)
+        weight = torch.ones_like(target)
+        latent = torch.zeros(1, 1)
+        losses = vae_loss(
+            reconstructed, target, mask, weight, latent, latent, beta=0,
+            channel_balanced=True,
+            reconstruction_reference_pixels=REFERENCE_PIXEL_COUNT
+        )
+        results.append(losses["reconstruction"])
+
+    torch.testing.assert_close(results[0], torch.tensor(float(46 * 46)))
+    torch.testing.assert_close(results[1], results[0])
+
+
+def test_legacy_channel_balanced_configuration_remains_readable():
+    configuration = validate_loss_configuration({
+        "kind": LEGACY_CHANNEL_BALANCED_LOSS_KIND,
+        "reconstruction_reduction": (
+            "equal_mean_of_per_channel_quality_weighted_mse_times_pixel_count"
+        ),
+        "kl_reduction": "sum_batch_and_latent",
+        "measurement_uncertainty_in_loss": False,
+    })
+    assert configuration["kind"] == LEGACY_CHANNEL_BALANCED_LOSS_KIND
+
+    inconsistent = dict(CHANNEL_BALANCED_LOSS_CONFIGURATION)
+    inconsistent["reconstruction_reference_shape"] = [92, 92]
+    with pytest.raises(ValueError, match="matching"):
+        validate_loss_configuration(inconsistent)
+
+
+def test_default_training_hole_preserves_physical_scale():
+    from scripts.CVAE.train_wic_cvae import resolve_training_hole_size
+
+    assert resolve_training_hole_size(None, (46, 46)) == 12
+    assert resolve_training_hole_size(None, (92, 92)) == 24
+    assert resolve_training_hole_size(None, (184, 184)) == 48
+    assert resolve_training_hole_size(17, (184, 184)) == 17
 
 
 def test_joint_holes_remove_same_region_and_keep_each_sensor():

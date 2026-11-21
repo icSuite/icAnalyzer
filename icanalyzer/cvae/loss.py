@@ -86,12 +86,21 @@ LEGACY_LOSS_CONFIGURATION = {
     "measurement_uncertainty_in_loss": False
 }
 
-CHANNEL_BALANCED_LOSS_KIND = "channel_balanced_weighted_mse_v1"
+LEGACY_CHANNEL_BALANCED_LOSS_KIND = "channel_balanced_weighted_mse_v1"
+CHANNEL_BALANCED_LOSS_KIND = "channel_balanced_weighted_mse_grid_reference_v2"
+CHANNEL_BALANCED_LOSS_KINDS = (
+    LEGACY_CHANNEL_BALANCED_LOSS_KIND,
+    CHANNEL_BALANCED_LOSS_KIND,
+)
+REFERENCE_IMAGE_SHAPE = (46, 46)
+REFERENCE_PIXEL_COUNT = int(np.prod(REFERENCE_IMAGE_SHAPE))
 CHANNEL_BALANCED_LOSS_CONFIGURATION = {
     "kind": CHANNEL_BALANCED_LOSS_KIND,
     "reconstruction_reduction": (
-        "equal_mean_of_per_channel_quality_weighted_mse_times_pixel_count"
+        "equal_mean_of_per_channel_quality_weighted_mse_times_reference_pixel_count"
     ),
+    "reconstruction_reference_shape": list(REFERENCE_IMAGE_SHAPE),
+    "reconstruction_reference_pixels": REFERENCE_PIXEL_COUNT,
     "kl_reduction": "sum_batch_and_latent",
     "measurement_uncertainty_in_loss": False,
 }
@@ -122,13 +131,37 @@ def validate_loss_configuration(configuration):
         raise ValueError("loss_configuration is required so loss semantics are explicit")
     kind = configuration.get("kind")
     supported = (
-        "legacy_weighted_mse_v1", CHANNEL_BALANCED_LOSS_KIND,
+        "legacy_weighted_mse_v1", *CHANNEL_BALANCED_LOSS_KINDS,
         MEASUREMENT_UNCERTAINTY_LOSS_KIND, GAUSSIAN_UNCERTAINTY_LOSS_KIND
     )
     if kind not in supported:
         raise ValueError(f"unsupported current CVAE loss configuration {kind!r}")
     if configuration.get("coverage_weighting") is not None:
         validate_coverage_weighting(configuration["coverage_weighting"])
+    if kind == CHANNEL_BALANCED_LOSS_KIND:
+        reference_pixels = configuration.get("reconstruction_reference_pixels")
+        if (
+            not isinstance(reference_pixels, (int, np.integer))
+            or reference_pixels < 1
+        ):
+            raise ValueError(
+                "grid-reference channel-balanced loss requires a positive "
+                "integer reconstruction_reference_pixels"
+            )
+        reference_shape = configuration.get("reconstruction_reference_shape")
+        if (
+            not isinstance(reference_shape, list)
+            or len(reference_shape) != 2
+            or any(
+                not isinstance(value, (int, np.integer)) or value < 1
+                for value in reference_shape
+            )
+            or int(np.prod(reference_shape)) != reference_pixels
+        ):
+            raise ValueError(
+                "reconstruction_reference_shape must contain two positive "
+                "dimensions matching reconstruction_reference_pixels"
+            )
     if kind == GAUSSIAN_UNCERTAINTY_LOSS_KIND:
         error_std = np.asarray(configuration.get("model_error_std"), dtype=float)
         if error_std.ndim != 1 or not len(error_std) or np.any(~np.isfinite(error_std)) or np.any(error_std <= 0):
@@ -164,6 +197,7 @@ def vae_loss(
     maximum_relative_precision=100.0,
     model_error_std=None,
     channel_balanced=False,
+    reconstruction_reference_pixels=None,
 ):
     """Return the legacy-scaled reconstruction loss and summed KL term.
 
@@ -226,7 +260,17 @@ def vae_loss(
         channel_mse = torch.sum(
             weight * squared_error, dim=(0, 2, 3)
         ) / channel_weight
-        pixel_count = int(np.prod(target.shape[-2:]))
+        if reconstruction_reference_pixels is None:
+            pixel_count = int(np.prod(target.shape[-2:]))
+        elif (
+            not isinstance(reconstruction_reference_pixels, (int, np.integer))
+            or reconstruction_reference_pixels < 1
+        ):
+            raise ValueError(
+                "reconstruction_reference_pixels must be a positive integer"
+            )
+        else:
+            pixel_count = int(reconstruction_reference_pixels)
         channel_reconstruction = channel_mse * pixel_count
         reconstruction_loss = torch.mean(channel_reconstruction)
         kl_loss = -0.5 * torch.sum(

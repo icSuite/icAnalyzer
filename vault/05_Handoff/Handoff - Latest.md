@@ -1,8 +1,8 @@
 # Handoff - Latest
 
-Last updated: 2026-11-20
-Last reviewed: 2026-11-20 (completed 184x184 Product-2 generation reported)
-Repository snapshot: `vae/wic-si12` at `1ff9c1a`, with generated-output changes preserved; `main` remains at `7c71591`
+Last updated: 2026-11-21
+Last reviewed: 2026-11-21 (184x184 masks and training semantics)
+Repository snapshot: `vae/wic-si12` at `333b888`, with generated-output changes preserved; `main` remains at `7c71591`
 
 ## 184x184 transition prerequisites started (2026-11-19)
 
@@ -20,6 +20,20 @@ microbenchmark was14.46x faster. It atomically saves history, current and best
 states after every epoch; `--resume` requires the identical prepared data and
 scientific settings. A simulated epoch2 interruption resumed from epoch1 and
 completed successfully.
+
+The user reports that the accelerated Model2 completed and looked good,
+Model1 completed, and the full Model2 application completed. The full
+two-stage Model1+Model2 mask export is running. The final artifacts and counts
+have not been transferred or independently inspected locally.
+
+The user verified write access to `/disk`; use `/disk/CVAE_cache` for the
+approximately220-GiB uncompressed orbit-sharded cache. Do not compress it or
+copy it to `/dev/shm`. New paired runs now use a version-2 channel-balanced
+loss with fixed2,116-pixel reconstruction scale, so grid resolution alone no
+longer changes beta balance. Historical version-1 artifacts remain readable.
+Default holes scale from12/46 to48/184, while an explicit `--hole-size` remains
+literal. Effective-batch KL balance remains unresolved and is the next
+training-semantics decision after cache preparation.
 
 The reference plan is
 `vault/02_Algorithm/184x184 WIC-SI12 CVAE Transition Plan.md`. It records the
@@ -45,13 +59,10 @@ mechanical Model2 masks;119 eligible manual-cache paired frames;107,568,159
 cache bytes; finite184x184 current-model forward/backward. This validates
 mechanics only. No scientific model was trained or sampled.
 
-Next: retrain Model2 and Model1, export and validate two-stage masks, regenerate
-full conditioning, and run a small
-multi-orbit automatic-cache smoke. Before a full cache or architecture run,
-choose storage for the approximately220-GiB current layout, make loss/hole
-scaling grid-comparable, and implement out-of-core50000-draw summaries. The
-annotation prerequisite is commit `518981d`; grid-aware pipeline prerequisites
-and the reference plan are commit `369789d`.
+Next: let the full two-stage mask export finish, regenerate full conditioning,
+build the paired cache on `/disk/CVAE_cache`, establish a memory-safe effective
+batch, then begin the controlled architecture work. Out-of-core50000-draw
+summaries remain required before sampling.
 
 Portfolio impact: Central update needed: No.
 
