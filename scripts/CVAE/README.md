@@ -225,6 +225,13 @@ performs two real optimizer steps, writes `batch_probe.json`, reports peak CUDA
 allocated/reserved memory and does not create a trained artifact. Start with
 the historical batch264 so the summed-KL balance remains comparable.
 
+For the orbit-sharded184x184 cache, also use `--batch-order orbit`. It shuffles
+orbit order and frames within every orbit on each epoch, then packs nearby
+orbit frames into optimizer batches. This avoids opening hundreds of random
+orbit mappings per batch. The historical `frame` order remains the default for
+old commands, but it causes severe mapping churn on the large native-grid
+cache. Worker count and prefetching do not correct that access pattern.
+
 Full training atomically writes `training_state.pt` after every completed
 epoch. After an interruption, repeat the identical command with the same
 output directory and add `--resume`. The cache hash, model configuration and

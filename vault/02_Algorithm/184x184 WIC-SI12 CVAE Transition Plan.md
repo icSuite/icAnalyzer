@@ -171,6 +171,8 @@ quality. No training or sampling run was started.
   the historical effective batch fits without gradient accumulation.
 - [x] Add bounded real-batch GPU probing and atomic per-epoch CVAE
   checkpoint/resume before starting long native-grid training.
+- [x] Add deterministic orbit-local batch shuffling for the disk-backed cache;
+  frame-level random batches caused four-worker mapping-thrash bursts.
 - [ ] Make ensemble summaries out-of-core. A 50,000-member paired 184x184
   float32 ensemble is about 12.6 GiB before median work.
 - [ ] Remove fixed 46x46 assertions from active comparison plots and validate

@@ -36,6 +36,70 @@ def read_cache(cache_directory, expected_format=AUTOMATIC_CONDUCTANCE_CACHE_FORM
 
 #%% Memory-mapped batches with bounded open-orbit mappings
 
+class OrbitBatchSampler:
+    """Shuffle epochs while keeping each optimizer batch orbit-local."""
+
+    def __init__(self, dataset, batch_size, seed=0, drop_last=False):
+        if not isinstance(batch_size, (int, np.integer)) or batch_size < 1:
+            raise ValueError("batch size must be a positive integer")
+        self.dataset = dataset
+        self.batch_size = int(batch_size)
+        self.seed = int(seed)
+        self.drop_last = bool(drop_last)
+        self.epoch = 0
+        self._groups()
+
+    def _groups(self):
+        """Resolve current groups after any conditioning rows were removed."""
+
+        dataset = self.dataset
+        shard_ids = np.asarray(dataset.shard_ids)
+        if shard_ids.ndim != 1 or len(shard_ids) != len(dataset):
+            raise ValueError("dataset shard IDs do not align with its frames")
+        boundaries = np.r_[
+            0, np.flatnonzero(np.diff(shard_ids) != 0) + 1, len(shard_ids)
+        ]
+        groups = [
+            np.arange(start, stop, dtype=np.int64)
+            for start, stop in zip(boundaries[:-1], boundaries[1:])
+        ]
+        if len(groups) != len(np.unique(shard_ids)):
+            raise ValueError("dataset frames for each orbit must be contiguous")
+        return groups
+
+    def set_epoch(self, epoch):
+        epoch = int(epoch)
+        if epoch < 1:
+            raise ValueError("batch-sampler epoch must be positive")
+        self.epoch = epoch
+
+    def __len__(self):
+        if self.drop_last:
+            return len(self.dataset) // self.batch_size
+        return (len(self.dataset) + self.batch_size - 1) // self.batch_size
+
+    def __iter__(self):
+        generator = torch.Generator().manual_seed(
+            self.seed + 1_000_003 * self.epoch
+        )
+        groups = self._groups()
+        orbit_order = torch.randperm(
+            len(groups), generator=generator
+        ).tolist()
+        pending = []
+        for orbit_index in orbit_order:
+            group = groups[orbit_index]
+            frame_order = torch.randperm(
+                len(group), generator=generator
+            ).numpy()
+            pending.extend(group[frame_order].tolist())
+            while len(pending) >= self.batch_size:
+                yield pending[:self.batch_size]
+                pending = pending[self.batch_size:]
+        if pending and not self.drop_last:
+            yield pending
+
+
 class AutomaticFieldDataset(Dataset):
     """Read eligible field frames from bounded orbit-level memory maps."""
 

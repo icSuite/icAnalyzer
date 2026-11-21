@@ -16,7 +16,11 @@ import torch
 from torch.utils.data import DataLoader
 
 from icanalyzer.cvae.artifacts import WIC_CVAE_ARTIFACT_TYPE, save_run_artifact
-from icanalyzer.cvae.cache import AutomaticFieldDataset, WIC_SI12_CACHE_FORMAT
+from icanalyzer.cvae.cache import (
+    AutomaticFieldDataset,
+    OrbitBatchSampler,
+    WIC_SI12_CACHE_FORMAT,
+)
 from icanalyzer.cvae.conditioning import (
     CONDITIONING_PROFILES,
     align_conditioning_features,
@@ -132,7 +136,18 @@ def run(arguments):
                 prefetch_factor=arguments.prefetch_factor,
                 persistent_workers=True
             )
-        loaders[name] = DataLoader(dataset, batch_size=arguments.batch_size, shuffle=name == "train", **options)
+        if name == "train" and arguments.batch_order == "orbit":
+            batch_sampler = OrbitBatchSampler(
+                dataset, arguments.batch_size, seed=seed
+            )
+            loaders[name] = DataLoader(
+                dataset, batch_sampler=batch_sampler, **options
+            )
+        else:
+            loaders[name] = DataLoader(
+                dataset, batch_size=arguments.batch_size,
+                shuffle=name == "train", **options
+            )
 
     transform = datasets["train"].transform
     kp_conditioning = None
@@ -190,7 +205,7 @@ def run(arguments):
         "latent_samples", "conditioning_embedding_dim", "conditioning_profile",
         "spline_control_points", "spline_degree", "scheduler_factor",
         "scheduler_patience", "scheduler_minimum_learning_rate",
-        "architecture", "kl_warmup_epochs"
+        "architecture", "kl_warmup_epochs", "batch_order"
     )}
     configuration.update({
         "seed": seed, "device": device, "input_product_type": "precipitation_cs",
@@ -361,6 +376,9 @@ def run(arguments):
                 }
             if device == "cuda":
                 torch.cuda.reset_peak_memory_stats()
+            batch_sampler = getattr(loaders["train"], "batch_sampler", None)
+            if hasattr(batch_sampler, "set_epoch"):
+                batch_sampler.set_epoch(1)
             metrics = _run_epoch(
                 model, loaders["train"], optimizer=optimizer,
                 device=torch.device(device), beta=arguments.beta,
@@ -376,6 +394,7 @@ def run(arguments):
                 "cache_manifest_sha256": metadata["manifest_sha256"],
                 "image_shape": list(image_shape),
                 "architecture": arguments.architecture,
+                "batch_order": arguments.batch_order,
                 "batch_size": arguments.batch_size,
                 "batches": arguments.batch_probe_batches,
                 "metrics": metrics,
@@ -479,6 +498,10 @@ def parse_arguments(argv=None):
     parser.add_argument(
         "--architecture", choices=("legacy", "hierarchical"), default="legacy",
         help="decoder/latent architecture; legacy remains the compatibility default"
+    )
+    parser.add_argument(
+        "--batch-order", choices=("frame", "orbit"), default="frame",
+        help="shuffle individual frames or orbit-local batches (default: frame)"
     )
     parser.add_argument(
         "--spatial-latent-channels", type=int, default=8,

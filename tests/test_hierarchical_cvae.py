@@ -6,6 +6,7 @@ import torch
 from torch import nn
 
 from icanalyzer.cvae.artifacts import load_run_artifact, save_run_artifact
+from icanalyzer.cvae.cache import OrbitBatchSampler
 from icanalyzer.cvae.data import ChannelTransform
 from icanalyzer.cvae.hierarchical import HierarchicalSplineConditionalVAE
 from icanalyzer.cvae.ensemble import sample_decoded_ensemble
@@ -168,6 +169,30 @@ def test_training_resumes_from_last_completed_epoch(monkeypatch):
     assert [row["epoch"] for row in history] == [1, 2, 3]
     assert resumed.weight.item() == 3
     assert resumed.best_validation_epoch == 3
+
+
+def test_orbit_batch_sampler_is_complete_local_and_epoch_deterministic():
+    class ShardedDataset:
+        shard_ids = np.repeat([0, 1, 2], [3, 5, 4])
+
+        def __len__(self):
+            return len(self.shard_ids)
+
+    dataset = ShardedDataset()
+    sampler = OrbitBatchSampler(dataset, batch_size=4, seed=7)
+
+    sampler.set_epoch(1)
+    first = list(sampler)
+    sampler.set_epoch(1)
+    repeated = list(sampler)
+    sampler.set_epoch(2)
+    second = list(sampler)
+
+    assert first == repeated
+    assert first != second
+    assert sorted(index for batch in first for index in batch) == list(range(12))
+    assert all(len(batch) == 4 for batch in first)
+    assert all(len(set(dataset.shard_ids[batch])) <= 2 for batch in first)
 
 
 def test_hierarchical_artifact_roundtrip_preserves_coordinates(tmp_path):

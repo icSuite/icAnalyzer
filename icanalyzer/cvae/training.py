@@ -460,6 +460,9 @@ def train_vae(
         print(f"Training-hole generation: {resolved_hole_device}.", flush=True)
     with tqdm(total=epochs, initial=start_epoch - 1, desc="VAE epochs", unit="epoch", position=0, dynamic_ncols=True) as progress:
         for epoch in range(start_epoch, epochs + 1):
+            batch_sampler = getattr(train_loader, "batch_sampler", None)
+            if hasattr(batch_sampler, "set_epoch"):
+                batch_sampler.set_epoch(epoch)
             epoch_beta = kl_beta_for_epoch(beta, epoch, kl_warmup_epochs)
             train_metrics = _run_epoch(
                 model,

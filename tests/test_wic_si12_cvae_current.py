@@ -9,7 +9,11 @@ import pytest
 import torch
 
 from icanalyzer.cvae.artifacts import load_run_artifact
-from icanalyzer.cvae.cache import AutomaticFieldDataset, WIC_SI12_CACHE_FORMAT
+from icanalyzer.cvae.cache import (
+    AutomaticFieldDataset,
+    OrbitBatchSampler,
+    WIC_SI12_CACHE_FORMAT,
+)
 from icanalyzer.cvae.data import ChannelTransform
 from icanalyzer.cvae.ensemble import sample_decoded_ensemble
 from icanalyzer.cvae.hierarchical import HierarchicalSplineConditionalVAE
@@ -486,6 +490,7 @@ def test_joint_trainer_batch_probe_is_bounded(tmp_path, monkeypatch):
 
     def bounded_epoch(model, loader, **kwargs):
         assert isinstance(model, HierarchicalSplineConditionalVAE)
+        assert isinstance(loader.batch_sampler, OrbitBatchSampler)
         assert kwargs["maximum_batches"] == 1
         return {
             "total": 1.0, "reconstruction": 0.8, "kl": 0.2,
@@ -504,11 +509,12 @@ def test_joint_trainer_batch_probe_is_bounded(tmp_path, monkeypatch):
         "--num-workers", "0", "--batch-size", "2",
         "--architecture", "hierarchical", "--spatial-latent-channels", "2",
         "--latent-dim", "3", "--spline-control-points", "5",
-        "--batch-probe-batches", "1",
+        "--batch-probe-batches", "1", "--batch-order", "orbit",
     ])
     summary = trainer.run(arguments)
 
     assert summary["batch_size"] == 2
+    assert summary["batch_order"] == "orbit"
     assert summary["batches"] == 1
     assert json.loads((output / "batch_probe.json").read_text()) == summary
     assert not (output / "wic_cvae.pt").exists()
