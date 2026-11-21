@@ -1,9 +1,9 @@
 """Prepare a paired corrected-WIC/SI12 CVAE cache.
 
 The scientific selection mask is always the existing manual or automatic WIC
-mask.  Each sensor then retains its own finite-value, uncertainty and coverage
-support.  The cache stores both formal standard deviations for later loss
-experiments, but cache preparation never trains a model.
+mask. Each sensor retains its own finite-value, uncertainty and coverage
+support during selection. The training cache stores only modeled values and
+quality weights; formal standard deviations remain in the source product.
 """
 
 #%% Imports and product contract
@@ -19,6 +19,7 @@ from tqdm.auto import tqdm
 from icreader import load
 
 from icanalyzer.cvae.cache import (
+    WIC_SI12_CACHE_FORMATS,
     WIC_SI12_CACHE_FORMAT,
     file_sha256,
     read_cache,
@@ -38,9 +39,13 @@ FIELD_NAMES = ("wic_corrected", "si12")
 
 
 def read_wic_si12_cache(cache_directory):
-    return read_cache(
-        Path(cache_directory), expected_format=WIC_SI12_CACHE_FORMAT
-    )
+    directory = Path(cache_directory)
+    cache_format = json.loads(
+        (directory / "manifest.json").read_text()
+    ).get("cache_format")
+    if cache_format not in WIC_SI12_CACHE_FORMATS:
+        raise ValueError(f"unsupported paired WIC/SI12 cache {cache_format!r}")
+    return read_cache(directory, expected_format=cache_format)
 
 
 def _load_fields(filename, product_loader=load):
@@ -358,7 +363,11 @@ def prepare(arguments, product_loader=load):
         files, arguments.validation_fraction, arguments.test_fraction,
         arguments.seed
     )
-    upper_bytes = estimated_frames * int(np.prod(image_shape)) * 26
+    bytes_per_pixel = (
+        4 * np.dtype(np.float32).itemsize
+        + 2 * np.dtype(bool).itemsize
+    )
+    upper_bytes = estimated_frames * int(np.prod(image_shape)) * bytes_per_pixel
     ancestor = output.parent
     while not ancestor.exists():
         ancestor = ancestor.parent
@@ -456,10 +465,9 @@ def prepare(arguments, product_loader=load):
                 shard = output / filename.stem
                 shard.mkdir()
                 values = product["values"][indices]
-                errors = product["standard_deviation"][indices]
                 quality = product["quality"][indices]
                 physical = np.concatenate(
-                    (values, errors, quality), axis=1
+                    (values, quality), axis=1
                 ).astype(np.float32)
                 np.save(shard / "physical.npy", physical, allow_pickle=False)
                 np.save(shard / "valid.npy", valid, allow_pickle=False)
@@ -490,7 +498,7 @@ def prepare(arguments, product_loader=load):
                         squared_totals[channel] += np.sum(logarithms**2)
                     if used:
                         training_support |= np.any(valid[eligible], axis=0)
-                del values, errors, quality, physical
+                del values, quality, physical
             used_counts[split_name] += used
             rows.append(row)
             progress.update(1)
@@ -536,10 +544,10 @@ def prepare(arguments, product_loader=load):
         "field_names": list(FIELD_NAMES), "field_units": ["counts", "counts"],
         "quality_channel_count": 2, "valid_channel_count": 2,
         "physical_layout": {
-            "values": [0, 1], "standard_deviation": [2, 3],
-            "quality": [4, 5]
+            "values": [0, 1], "quality": [2, 3]
         },
-        "uncertainty_arrays_cached": True,
+        "physical_channel_count": 4,
+        "uncertainty_arrays_cached": False,
         "source_directory": str(source), "mask_source": mask_source,
         "mask_policy": (
             "same WIC-derived selection for both sensors; separate intrinsic "

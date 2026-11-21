@@ -19,7 +19,7 @@ from icanalyzer.cvae.artifacts import WIC_CVAE_ARTIFACT_TYPE, save_run_artifact
 from icanalyzer.cvae.cache import (
     AutomaticFieldDataset,
     OrbitBatchSampler,
-    WIC_SI12_CACHE_FORMAT,
+    WIC_SI12_CACHE_FORMATS,
 )
 from icanalyzer.cvae.conditioning import (
     CONDITIONING_PROFILES,
@@ -83,7 +83,7 @@ def run(arguments):
     )
     metadata = (
         read_wic_si12_cache(cache)
-        if cache_format == WIC_SI12_CACHE_FORMAT
+        if cache_format in WIC_SI12_CACHE_FORMATS
         else read_wic_cache(cache)
     )
     supported_fields = {

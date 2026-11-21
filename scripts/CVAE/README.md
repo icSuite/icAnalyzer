@@ -41,8 +41,8 @@ Hall/Pedersen artifacts cannot silently inherit the old WIC/SI12 labels.
   background-subtracted, smoothed WIC before SI12 proton correction.
 - `prepare_wic_si12_cvae_cache.py`: apply the same manual or automatic WIC
   selection to corrected WIC and SI12 while retaining separate sensor-validity
-  and sensor-quality maps. It caches `dwic_corrected` and `dsi12` for future
-  uncertainty experiments.
+  and sensor-quality maps. Formal uncertainty remains in Product2 and is not
+  duplicated in the training cache.
 - `train_wic_cvae.py`: train either the one-channel WIC CVAE or the paired
   corrected-WIC/SI12 CVAE with historical scalar Kp conditioning, the full
   11-feature condition vector, the reduced `hybrid4` profile (SML, IMF By,
@@ -167,8 +167,10 @@ PYTHONPATH=. python scripts/CVAE/prepare_wic_si12_cvae_cache.py \
 Use that cache with the same trainer and hybrid4 options shown above. The
 paired cache supplies two validity masks and two quality maps. The encoder uses
 their union while receiving both quality maps, and the reconstruction loss is
-the equal mean of independently normalized WIC and SI12 errors. Formal sensor
-uncertainties are stored but deliberately do not enter this baseline loss.
+the equal mean of independently normalized WIC and SI12 errors. The version-2
+paired cache omits formal sensor-uncertainty arrays entirely; Product2
+remains their authoritative source. Historical version-1 paired caches that
+contain them remain readable.
 New paired runs multiply those errors by the fixed46x46 reference area of2,116
 pixels rather than by the native grid area. This keeps the reconstruction/KL
 scale grid-comparable; historical version-1 artifacts retain their native-

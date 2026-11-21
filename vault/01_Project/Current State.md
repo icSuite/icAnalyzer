@@ -80,6 +80,15 @@ large shard. Orbit order is now shuffled deterministically by epoch while
 source-frame order inside each orbit remains sequential; order within a batch
 does not change its gradient. Legacy frame shuffle remains available.
 
+Even with sequential orbit reads, the next run needed43 minutes to reach92%
+of the first training epoch. The user chose the simpler storage change: paired
+cache generation now omits the two formal-uncertainty channels because the
+active loss does not load them. The new version-2 cache stores corrected WIC,
+SI12, both quality maps and both validity masks; Product2 remains authoritative
+for uncertainty, and version-1 caches remain readable. Its logical estimate is
+about69% of the old layout, roughly155GiB, so rebuild it directly and stage it
+in the252GiB `/dev/shm` before restarting training.
+
 The canonical `data/partial_image_annotations_184x184.json` now rasterizes all
 382 affinely transferred line-set keyframes at native target-cell centres. All
 382 line sets exactly reproduced their original46x46 masks, so this carries

@@ -11,6 +11,7 @@ import torch
 from icanalyzer.cvae.artifacts import load_run_artifact
 from icanalyzer.cvae.cache import (
     AutomaticFieldDataset,
+    LEGACY_WIC_SI12_CACHE_FORMAT,
     OrbitBatchSampler,
     WIC_SI12_CACHE_FORMAT,
 )
@@ -122,18 +123,23 @@ def test_wic_mask_keeps_separate_sensor_validity_and_quality(tmp_path):
     assert loaded["values"][1, 1, 4, 4] == 0
 
 
-def make_joint_cache(directory, image_shape=(46, 46)):
+def make_joint_cache(directory, image_shape=(46, 46), cache_uncertainty=False):
     rows = []
     for orbit, split in enumerate(("train", "validation", "test"), start=1):
         shard = directory / f"or_{orbit:04d}"
         shard.mkdir(parents=True)
-        physical = np.ones((2, 6, *image_shape), dtype=np.float32)
+        channel_count = 6 if cache_uncertainty else 4
+        physical = np.ones((2, channel_count, *image_shape), dtype=np.float32)
         physical[:, 0] = 10
         physical[:, 1] = 4
-        physical[:, 2] = 2
-        physical[:, 3] = 0.5
-        physical[:, 4] = 0.7
-        physical[:, 5] = 0.4
+        if cache_uncertainty:
+            physical[:, 2] = 2
+            physical[:, 3] = 0.5
+            physical[:, 4] = 0.7
+            physical[:, 5] = 0.4
+        else:
+            physical[:, 2] = 0.7
+            physical[:, 3] = 0.4
         valid = np.ones((2, 2, *image_shape), dtype=bool)
         valid[:, 0, 0, 0] = False
         valid[:, 1, 1, 1] = False
@@ -163,12 +169,22 @@ def make_joint_cache(directory, image_shape=(46, 46)):
         np.linspace(0, 24, width, endpoint=False)[None], image_shape
     ).copy()
     metadata = {
-        "cache_format": WIC_SI12_CACHE_FORMAT,
+        "cache_format": (
+            LEGACY_WIC_SI12_CACHE_FORMAT
+            if cache_uncertainty else WIC_SI12_CACHE_FORMAT
+        ),
         "input_product_type": "precipitation_cs",
         "image_shape": list(image_shape),
         "field_names": ["wic_corrected", "si12"],
         "field_units": ["counts", "counts"],
         "quality_channel_count": 2, "valid_channel_count": 2,
+        "physical_layout": {
+            **({"standard_deviation": [2, 3]} if cache_uncertainty else {}),
+            "values": [0, 1],
+            "quality": [4, 5] if cache_uncertainty else [2, 3],
+        },
+        "physical_channel_count": channel_count,
+        "uncertainty_arrays_cached": cache_uncertainty,
         "transform": transform.to_dict(), "orbits": rows, "seed": 1,
         "used_frames": {name: 2 for name in ("train", "validation", "test")},
         "maximum_missing_fraction": 0.95,
@@ -191,7 +207,7 @@ def make_joint_cache(directory, image_shape=(46, 46)):
     return directory
 
 
-def test_full_joint_cache_preparation_retains_both_uncertainties(tmp_path):
+def test_full_joint_cache_preparation_omits_uncertainty_arrays(tmp_path):
     source_directory = tmp_path / "source"
     mask_directory = tmp_path / "masks"
     source_directory.mkdir()
@@ -242,23 +258,26 @@ def test_full_joint_cache_preparation_retains_both_uncertainties(tmp_path):
     }
     assert metadata["valid_channel_count"] == 2
     assert metadata["quality_channel_count"] == 2
+    assert metadata["uncertainty_arrays_cached"] is False
     dataset = AutomaticFieldDataset(
-        output, "train", include_uncertainty=True,
+        output, "train", include_uncertainty=False,
         expected_cache_format=WIC_SI12_CACHE_FORMAT
     )
     try:
-        np.testing.assert_allclose(
-            dataset[0]["physical_standard_deviation"],
-            np.stack((np.full((46, 46), 2.0), np.full((46, 46), 0.5)))
-        )
+        assert dataset[0]["encoder_input"].shape == (4, 46, 46)
     finally:
         dataset.close()
+    with pytest.raises(ValueError, match="does not contain measurement uncertainty"):
+        AutomaticFieldDataset(
+            output, "train", include_uncertainty=True,
+            expected_cache_format=WIC_SI12_CACHE_FORMAT
+        )
 
 
 def test_joint_cache_dataset_and_union_encoder(tmp_path):
     cache = make_joint_cache(tmp_path / "cache")
     dataset = AutomaticFieldDataset(
-        cache, "train", include_uncertainty=True,
+        cache, "train", include_uncertainty=False,
         expected_cache_format=WIC_SI12_CACHE_FORMAT
     )
     try:
@@ -267,7 +286,6 @@ def test_joint_cache_dataset_and_union_encoder(tmp_path):
         assert batch["mask"].shape == (2, 46, 46)
         assert batch["weight"].shape == (2, 46, 46)
         assert batch["encoder_input"].shape == (4, 46, 46)
-        assert batch["physical_standard_deviation"].shape == (2, 46, 46)
         assert batch["target"][0, 0, 0] == 0
         assert batch["target"][1, 0, 0] != 0
     finally:
@@ -295,6 +313,20 @@ def test_joint_cache_dataset_and_union_encoder(tmp_path):
     )
     assert np.all(decoded[:, 0, 23:] == 0)
     assert np.all(decoded[:, 1, :23] == 0)
+
+
+def test_legacy_joint_cache_with_uncertainty_remains_readable(tmp_path):
+    cache = make_joint_cache(
+        tmp_path / "legacy", cache_uncertainty=True
+    )
+    dataset = AutomaticFieldDataset(
+        cache, "train", include_uncertainty=True,
+        expected_cache_format=LEGACY_WIC_SI12_CACHE_FORMAT
+    )
+    try:
+        assert dataset[0]["physical_standard_deviation"].shape == (2, 46, 46)
+    finally:
+        dataset.close()
 
 
 def test_joint_cache_dataset_uses_declared_184_shape(tmp_path):

@@ -17,7 +17,12 @@ from .data import ChannelTransform
 #%% Completed-cache identity and evidence
 
 AUTOMATIC_CONDUCTANCE_CACHE_FORMAT = "automatic_conductance_cache_v1"
-WIC_SI12_CACHE_FORMAT = "wic_si12_cvae_cache_v1"
+LEGACY_WIC_SI12_CACHE_FORMAT = "wic_si12_cvae_cache_v1"
+WIC_SI12_CACHE_FORMAT = "wic_si12_cvae_cache_v2"
+WIC_SI12_CACHE_FORMATS = (
+    LEGACY_WIC_SI12_CACHE_FORMAT,
+    WIC_SI12_CACHE_FORMAT,
+)
 
 
 def file_sha256(path):
@@ -138,9 +143,58 @@ class AutomaticFieldDataset(Dataset):
             raise ValueError(
                 "cache validity channels must be one or match the field count"
             )
-        self.physical_channels = (
-            2 * self.field_count + self.quality_channel_count
+        historical_layout = {
+            "values": list(range(self.field_count)),
+            "standard_deviation": list(range(
+                self.field_count, 2 * self.field_count
+            )),
+            "quality": list(range(
+                2 * self.field_count,
+                2 * self.field_count + self.quality_channel_count
+            )),
+        }
+        physical_layout = self.metadata.get(
+            "physical_layout", historical_layout
         )
+
+        def channel_indices(name):
+            values = physical_layout.get(name, [])
+            if isinstance(values, (int, np.integer)):
+                values = [int(values)]
+            if not isinstance(values, list) or any(
+                not isinstance(value, (int, np.integer)) or value < 0
+                for value in values
+            ):
+                raise ValueError(f"cache physical layout {name} is invalid")
+            return tuple(int(value) for value in values)
+
+        self.value_indices = channel_indices("values")
+        self.quality_indices = channel_indices("quality")
+        self.uncertainty_indices = channel_indices("standard_deviation")
+        uncertainty_cached = bool(
+            self.metadata.get("uncertainty_arrays_cached", True)
+        )
+        if (
+            len(self.value_indices) != self.field_count
+            or len(self.quality_indices) != self.quality_channel_count
+            or len(self.uncertainty_indices)
+            != (self.field_count if uncertainty_cached else 0)
+        ):
+            raise ValueError("cache physical layout channel counts are inconsistent")
+        if include_uncertainty and not uncertainty_cached:
+            raise ValueError("cache does not contain measurement uncertainty arrays")
+        all_indices = (
+            self.value_indices + self.uncertainty_indices + self.quality_indices
+        )
+        if len(set(all_indices)) != len(all_indices):
+            raise ValueError("cache physical layout channels overlap")
+        self.physical_channels = int(
+            self.metadata.get(
+                "physical_channel_count", max(all_indices, default=-1) + 1
+            )
+        )
+        if sorted(all_indices) != list(range(self.physical_channels)):
+            raise ValueError("cache physical layout must cover every stored channel")
         if not np.isfinite(cache_mib) or cache_mib <= 0 or max_open_orbits < 1:
             raise ValueError("cache MiB and maximum open orbits must be positive")
         self.cache_limit = int(cache_mib * 1024**2)
@@ -280,15 +334,11 @@ class AutomaticFieldDataset(Dataset):
     def __getitem__(self, index):
         physical, valid = self._shard(int(self.shard_ids[index]))
         frame = int(self.frame_ids[index])
-        values = physical[frame, :self.field_count].copy()
+        values = physical[frame, self.value_indices].copy()
         mask = valid[frame].copy()
         if self.valid_channel_count == 1:
             mask = mask[None]
-        weight = physical[
-            frame,
-            2 * self.field_count:
-            2 * self.field_count + self.quality_channel_count
-        ].copy()
+        weight = physical[frame, self.quality_indices].copy()
         target = self.transform.transform(values[None])[0].astype(np.float32)
         target_mask = np.broadcast_to(mask, target.shape)
         target = np.where(target_mask, target, 0.0)
@@ -307,9 +357,7 @@ class AutomaticFieldDataset(Dataset):
                 self.conditioning[index].copy()
             )
         if self.include_uncertainty:
-            errors = physical[
-                frame, self.field_count:2 * self.field_count
-            ].copy()
+            errors = physical[frame, self.uncertainty_indices].copy()
             variance = self.transform.variance(
                 values[None], errors[None]
             )[0].astype(np.float32)
