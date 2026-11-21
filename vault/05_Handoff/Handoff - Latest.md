@@ -69,12 +69,13 @@ gradient accumulation. The next executable action is the full scalar-Kp run;
 no named conditioning table is required.
 
 The attempted full run then revealed four-batch bursts followed by storage
-stalls. This matches four workers fetching frame-random batches across1,541
-orbit shards; more workers or prefetching would not remove the random mapping
-churn. The trainer now offers `--batch-order orbit`, which deterministically
-shuffles orbit order and within-orbit frames each epoch but packs batches from
-nearby orbit groups. Pull the new commit and repeat a short probe with that
-flag before restarting the full run in a fresh output directory.
+stalls. Orbit-local batching removed cross-shard randomness, but shuffling
+frames inside each large shard still reached only33/714 batches in4:14
+(5.14s/batch). The sampler now shuffles orbit order deterministically each
+epoch while retaining sequential source-frame reads inside each orbit. Order
+inside a batch does not change its gradient. Pull the new commit and restart
+the full run in a fresh output directory; the user explicitly does not want
+another probe.
 
 The reference and implementation checkpoint is
 `vault/02_Algorithm/184x184 WIC-SI12 CVAE Transition Plan.md`. It records the

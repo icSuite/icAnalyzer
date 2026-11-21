@@ -89,10 +89,10 @@ class OrbitBatchSampler:
         pending = []
         for orbit_index in orbit_order:
             group = groups[orbit_index]
-            frame_order = torch.randperm(
-                len(group), generator=generator
-            ).numpy()
-            pending.extend(group[frame_order].tolist())
+            # Order within a batch does not change its gradient. Retaining the
+            # source-frame order turns each memory-mapped orbit into sequential
+            # reads instead of hundreds of random reads.
+            pending.extend(group.tolist())
             while len(pending) >= self.batch_size:
                 yield pending[:self.batch_size]
                 pending = pending[self.batch_size:]

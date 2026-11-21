@@ -73,12 +73,12 @@ These untrained two-batch values are mechanical diagnostics only.
 
 The first full run exposed storage stalls despite the safe GPU memory: with
 frame-level shuffle, four workers advanced in bursts of four batches because
-each random batch opened and evicted many of the1,541 orbit shards. Increasing
-workers or prefetch would increase competing random mappings rather than fix
-the access pattern. An explicit orbit-local batch order now shuffles orbits and
-frames within each orbit deterministically by epoch, while packing each batch
-from nearby orbit groups. Legacy frame shuffle remains available. Rerun a
-bounded probe with `--batch-order orbit` before restarting the full run.
+each random batch opened and evicted many of the1,541 orbit shards. The first
+orbit-local revision still shuffled frames inside each orbit and reached only
+33/714 batches in4:14, about5.14s/batch. This caused random reads within each
+large shard. Orbit order is now shuffled deterministically by epoch while
+source-frame order inside each orbit remains sequential; order within a batch
+does not change its gradient. Legacy frame shuffle remains available.
 
 The canonical `data/partial_image_annotations_184x184.json` now rasterizes all
 382 affinely transferred line-set keyframes at native target-cell centres. All

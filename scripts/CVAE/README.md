@@ -226,11 +226,12 @@ allocated/reserved memory and does not create a trained artifact. Start with
 the historical batch264 so the summed-KL balance remains comparable.
 
 For the orbit-sharded184x184 cache, also use `--batch-order orbit`. It shuffles
-orbit order and frames within every orbit on each epoch, then packs nearby
-orbit frames into optimizer batches. This avoids opening hundreds of random
-orbit mappings per batch. The historical `frame` order remains the default for
-old commands, but it causes severe mapping churn on the large native-grid
-cache. Worker count and prefetching do not correct that access pattern.
+orbit order every epoch, retains sequential source-frame reads inside each
+orbit and packs nearby orbit frames into optimizer batches. Order within a
+batch does not change its gradient. This avoids both hundreds of random orbit
+mappings and random reads within each shard. The historical `frame` order
+remains the default for old commands; workers and prefetching do not correct
+that access pattern.
 
 Full training atomically writes `training_state.pt` after every completed
 epoch. After an interruption, repeat the identical command with the same

@@ -190,9 +190,13 @@ def test_orbit_batch_sampler_is_complete_local_and_epoch_deterministic():
 
     assert first == repeated
     assert first != second
-    assert sorted(index for batch in first for index in batch) == list(range(12))
+    flattened = [index for batch in first for index in batch]
+    assert sorted(flattened) == list(range(12))
     assert all(len(batch) == 4 for batch in first)
     assert all(len(set(dataset.shard_ids[batch])) <= 2 for batch in first)
+    for shard in (0, 1, 2):
+        positions = [index for index in flattened if dataset.shard_ids[index] == shard]
+        assert positions == sorted(positions)
 
 
 def test_hierarchical_artifact_roundtrip_preserves_coordinates(tmp_path):
