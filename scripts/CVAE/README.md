@@ -191,6 +191,34 @@ threshold; override them with `--si12-vmax` and
 `--si12-exceedance-threshold`. Sampling and plotting use the same commands
 shown below; point `CVAE_RUN` at the paired run directory.
 
+For the native184x184 architecture experiments, select the hierarchical model
+explicitly. `--latent-dim` remains the global latent size; the spatial group is
+configured separately. The primary candidate is36 global values, eight6x6
+spatial channels and92x92 spline coefficients:
+
+```bash
+PYTHONPATH=. python scripts/CVAE/train_wic_cvae.py \
+  /disk/CVAE_cache \
+  --architecture hierarchical \
+  --latent-dim 36 --spatial-latent-channels 8 \
+  --spline-control-points 92 --spline-degree 3 \
+  --kl-warmup-epochs 50 \
+  --output /path/to/new/run \
+  --epochs 500 --batch-size BATCH_SIZE --beta 0.048 \
+  --learning-rate 0.0001 --seed 1 --training-holes \
+  --num-workers 4 --prefetch-factor 4 --device cuda
+```
+
+Choose `BATCH_SIZE` only after a GPU-memory pilot. Artifacts record global and
+spatial latent dimensions, and histories include `kl_global`, `kl_spatial` and
+the beta used each epoch. Omit `--kl-warmup-epochs` to preserve constant-beta
+legacy behavior. The legacy architecture remains the default for backward-
+compatible commands.
+
+This command is the scalar-Kp baseline because no named conditioning table is
+supplied. Add the matched `--conditioning` and `--conditioning-profile` options
+only for the later hybrid comparison.
+
 For the controlled SML-history test, keep the paired image cache, architecture,
 split, seed and optimization settings fixed and change only the conditioning
 table/profile and output directory. No image cache regeneration is needed:

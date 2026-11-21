@@ -30,6 +30,20 @@ def set_random_seed(seed):
         torch.cuda.manual_seed_all(seed)
 
 
+def kl_beta_for_epoch(beta, epoch, warmup_epochs):
+    """Linearly increase beta from zero at epoch1 to full beta at the endpoint."""
+
+    beta = float(beta)
+    epoch = int(epoch)
+    warmup_epochs = int(warmup_epochs)
+    if not np.isfinite(beta) or beta < 0 or epoch < 1 or warmup_epochs < 0:
+        raise ValueError("beta, epoch or KL warm-up configuration is invalid")
+    if warmup_epochs == 0 or warmup_epochs == 1:
+        return beta
+    fraction = min(1.0, (epoch - 1) / (warmup_epochs - 1))
+    return beta * fraction
+
+
 #%% Training
 
 def add_training_holes(encoder_input, mask, probability, hole_size, generator):
@@ -151,7 +165,11 @@ def _run_epoch(
     device = torch.device(device)
     loss_configuration = validate_loss_configuration(loss_configuration)
     model.train(training)
-    metric_names = ("total", "reconstruction", "kl")
+    latent_groups = getattr(model, "latent_groups", None)
+    metric_names = (
+        "total", "reconstruction", "kl",
+        *(f"kl_{name}" for name in (latent_groups or {}))
+    )
     # Match Python's float64 accumulation without synchronizing every GPU batch.
     totals = torch.zeros(len(metric_names), dtype=torch.float64, device=device)
     channel_totals = None
@@ -258,6 +276,7 @@ def _run_epoch(
                     if loss_configuration["kind"] == CHANNEL_BALANCED_LOSS_KIND
                     else None
                 ),
+                latent_groups=latent_groups,
                 **uncertainty_arguments,
             )
             if training:
@@ -305,6 +324,7 @@ def train_vae(
     hole_size=12,
     hole_device="auto",
     latent_samples=1,
+    kl_warmup_epochs=0,
 ):
     """Train with separate, consistently reduced reconstruction and KL logs."""
 
@@ -316,6 +336,8 @@ def train_vae(
         raise ValueError("hole_size must be a positive integer")
     if not isinstance(latent_samples, (int, np.integer)) or latent_samples < 1:
         raise ValueError("latent_samples must be a positive integer")
+    if not isinstance(kl_warmup_epochs, (int, np.integer)) or kl_warmup_epochs < 0:
+        raise ValueError("kl_warmup_epochs must be a nonnegative integer")
     if not np.isfinite(learning_rate) or learning_rate <= 0:
         raise ValueError("learning_rate must be finite and positive")
     if not np.isfinite(scheduler_factor) or not 0 < scheduler_factor < 1:
@@ -362,26 +384,27 @@ def train_vae(
         print(f"Training-hole generation: {resolved_hole_device}.", flush=True)
     with tqdm(total=epochs, desc="VAE epochs", unit="epoch", position=0, dynamic_ncols=True) as progress:
         for epoch in range(1, epochs + 1):
+            epoch_beta = kl_beta_for_epoch(beta, epoch, kl_warmup_epochs)
             train_metrics = _run_epoch(
                 model,
                 train_loader,
                 optimizer,
                 device,
-                beta,
+                epoch_beta,
                 training=True,
                 loss_configuration=loss_configuration,
                 latent_samples=latent_samples,
                 progress_description=f"Epoch {epoch}/{epochs} train",
                 **hole_arguments,
             )
-            record = {"epoch": epoch, "train": train_metrics}
+            record = {"epoch": epoch, "beta": epoch_beta, "train": train_metrics}
             if validation_loader is not None:
                 record["validation"] = _run_epoch(
                     model,
                     validation_loader,
                     optimizer=None,
                     device=device,
-                    beta=beta,
+                    beta=epoch_beta,
                     training=False,
                     loss_configuration=loss_configuration,
                     latent_samples=latent_samples,

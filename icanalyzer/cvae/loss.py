@@ -183,6 +183,30 @@ def validate_loss_configuration(configuration):
 
 #%% Reconstruction and KL loss
 
+def latent_kl_terms(mu, logvar, latent_groups=None):
+    """Return total KL and optional named latent-group diagnostics."""
+
+    element = -0.5 * (1.0 + logvar - mu.pow(2) - logvar.exp())
+    total = torch.sum(element)
+    diagnostics = {}
+    if latent_groups is None:
+        return total, diagnostics
+    covered = []
+    for name, bounds in latent_groups.items():
+        if (
+            not isinstance(name, str) or not name
+            or len(bounds) != 2
+        ):
+            raise ValueError("latent groups require named start/stop bounds")
+        start, stop = map(int, bounds)
+        if not 0 <= start < stop <= mu.shape[1]:
+            raise ValueError("latent group bounds are outside the latent vector")
+        covered.extend(range(start, stop))
+        diagnostics[f"kl_{name}"] = torch.sum(element[:, start:stop])
+    if sorted(covered) != list(range(mu.shape[1])):
+        raise ValueError("latent groups must partition the latent vector exactly")
+    return total, diagnostics
+
 def vae_loss(
     reconstructed,
     target,
@@ -198,6 +222,7 @@ def vae_loss(
     model_error_std=None,
     channel_balanced=False,
     reconstruction_reference_pixels=None,
+    latent_groups=None,
 ):
     """Return the legacy-scaled reconstruction loss and summed KL term.
 
@@ -273,14 +298,13 @@ def vae_loss(
             pixel_count = int(reconstruction_reference_pixels)
         channel_reconstruction = channel_mse * pixel_count
         reconstruction_loss = torch.mean(channel_reconstruction)
-        kl_loss = -0.5 * torch.sum(
-            1.0 + logvar - mu.pow(2) - logvar.exp()
-        )
+        kl_loss, group_kl = latent_kl_terms(mu, logvar, latent_groups)
         return {
             "total": reconstruction_loss + float(beta) * kl_loss,
             "reconstruction": reconstruction_loss,
             "kl": kl_loss,
             "channel_reconstruction": channel_reconstruction,
+            **group_kl,
         }
 
     likelihood_offset = reconstructed.new_zeros(())
@@ -364,12 +388,11 @@ def vae_loss(
         / (weight_sum + 1e-8)
         * state_size
     )
-    kl_loss = -0.5 * torch.sum(
-        1.0 + logvar - mu.pow(2) - logvar.exp()
-    )
+    kl_loss, group_kl = latent_kl_terms(mu, logvar, latent_groups)
     total = reconstruction_loss + float(beta) * kl_loss
     return {
         "total": total,
         "reconstruction": reconstruction_loss,
         "kl": kl_loss,
+        **group_kl,
     }

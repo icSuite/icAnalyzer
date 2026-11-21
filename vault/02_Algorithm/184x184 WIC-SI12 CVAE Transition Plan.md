@@ -1,7 +1,7 @@
 # 184x184 WIC/SI12 CVAE Transition Plan
 
-Last reviewed: 2026-11-20
-Status: Proposed architecture; prerequisite implementation in progress
+Last reviewed: 2026-11-21
+Status: Hierarchical architecture implemented; scientific pilots not started
 
 ## Purpose
 
@@ -80,7 +80,35 @@ preserves the approximate physical topology scale of the adopted46x46 mask
 model and avoids a16-fold cell-count penalty. Per-epoch atomic recovery and
 exact resume support protect the multi-hour server run.
 
-## Prerequisites before architecture experiments
+The user subsequently reported that native Model2 and Model1 training, full
+Model2 application and the full two-stage mask export all completed. The
+artifacts have not been transferred for independent local inspection.
+
+## Architecture implementation checkpoint: 2026-11-21
+
+The first hierarchical model is implemented as
+`HierarchicalSplineConditionalVAE` and selected with
+`train_wic_cvae.py --architecture hierarchical`. It follows the five encoder
+scales, GroupNorm/SiLU residual blocks, partial-convolution support propagation,
+conditioning FiLM and coordinate injection specified below. On the184x184
+grid its latent is36 global values plus `8 x 6 x 6` spatial values by default,
+for324 values total. The decoder uses the planned residual scales and separate
+WIC/SI12 spline-coefficient heads; `--spline-control-points 30` and `92` permit
+the controlled decoder-capacity comparison.
+
+Artifacts record the global, spatial and total latent dimensions and retain
+the grid-coordinate buffer. Training reports total, global and spatial KL
+terms separately. `--kl-warmup-epochs N` supplies a deterministic linear
+schedule from beta zero at epoch1 to the configured beta at epochN; the legacy
+default remains no warm-up. Existing artifacts and the legacy architecture
+remain readable.
+
+A native184x184 Kp-conditioned synthetic forward/backward smoke completed
+with428,290 model parameters, output shape `1 x 2 x 184 x 184`, spatial latent
+shape `8 x 6 x 6` and finite loss. This verifies mechanics, not scientific
+quality. No training or sampling run was started.
+
+## Prerequisites for scientific architecture experiments
 
 ### 1. Native-resolution annotations and masking
 
@@ -97,12 +125,12 @@ exact resume support protect the multi-hour server run.
   `image_shape`, `grid_id` and source-grid evidence in prepared data,
   checkpoints and mask manifests.
 - [x] Make Model1 preparation/application shape-aware.
-- [ ] Retrain both masking models on the new Product-2 generation; do not reuse
+- [x] Retrain both masking models on the new Product-2 generation; do not reuse
   46x46 checkpoints as production 184x184 models.
 - [x] Verify a one-orbit Model2 application on `or_0085.nc` before the full
   Product-2 collection is complete.
-- [ ] Verify a one-orbit two-stage Model1/Model2 mask export with newly trained
-  184x184 checkpoints.
+- [x] Complete the full two-stage Model1/Model2 mask export with newly trained
+  184x184 checkpoints (reported complete by the user; not inspected locally).
 
 ### 2. Conditioning preparation
 
@@ -144,9 +172,10 @@ exact resume support protect the multi-hour server run.
 - [ ] Remove fixed 46x46 assertions from active comparison plots and validate
   coordinates against the artifact/product grid.
 
-### 5. Gate for beginning architecture changes
+### 5. Gate for scientific architecture pilots
 
-Do not begin the encoder/decoder replacement until all of the following pass:
+Implementation can proceed while the full cache is built, but do not begin the
+controlled scientific pilots until all of the following pass:
 
 1. converted annotations load and reproduce the intended 184x184 targets;
 2. Model1/Model2 preparation and inference complete on the sample orbit;

@@ -24,6 +24,7 @@ from icanalyzer.cvae.conditioning import (
     resolve_conditioning_features,
 )
 from icanalyzer.cvae.data import fit_kp_conditioning
+from icanalyzer.cvae.hierarchical import HierarchicalSplineConditionalVAE
 from icanalyzer.cvae.loss import (
     CHANNEL_BALANCED_LOSS_CONFIGURATION,
     LEGACY_LOSS_CONFIGURATION,
@@ -182,7 +183,8 @@ def run(arguments):
         "epochs", "batch_size", "latent_dim", "learning_rate", "beta",
         "latent_samples", "conditioning_embedding_dim", "conditioning_profile",
         "spline_control_points", "spline_degree", "scheduler_factor",
-        "scheduler_patience", "scheduler_minimum_learning_rate"
+        "scheduler_patience", "scheduler_minimum_learning_rate",
+        "architecture", "kl_warmup_epochs"
     )}
     configuration.update({
         "seed": seed, "device": device, "input_product_type": "precipitation_cs",
@@ -194,7 +196,11 @@ def run(arguments):
         "kp_conditioning": kp_conditioning,
         "conditioning": named_conditioning,
         "loss_configuration": loss_configuration,
-        "optimizer": "Adam", "beta_schedule": "constant",
+        "optimizer": "Adam",
+        "beta_schedule": (
+            "constant" if arguments.kl_warmup_epochs == 0
+            else "linear_epoch_1_zero_to_configured_beta"
+        ),
         "learning_rate_scheduler": "ReduceLROnPlateau", "scheduler_monitor": "train_total",
         "cache_mib_per_split": arguments.cache_mib,
         "max_open_orbits_per_worker": arguments.max_open_orbits,
@@ -265,15 +271,33 @@ def run(arguments):
     )
 
     set_random_seed(seed)
-    model = SplineConditionalVAE(
-        image_shape=image_shape, latent_dim=arguments.latent_dim,
-        spline_control_points=arguments.spline_control_points,
-        spline_degree=arguments.spline_degree, kp_conditioning=kp_conditioning,
-        conditioning=named_conditioning,
-        quality_weight_channels=metadata.get("quality_channel_count", 1),
-        encoder_mask_policy="union" if paired else "intersection",
-        field_names=tuple(field_names)
-    )
+    model_arguments = {
+        "image_shape": image_shape,
+        "spline_control_points": arguments.spline_control_points,
+        "spline_degree": arguments.spline_degree,
+        "kp_conditioning": kp_conditioning,
+        "conditioning": named_conditioning,
+        "quality_weight_channels": metadata.get("quality_channel_count", 1),
+        "encoder_mask_policy": "union" if paired else "intersection",
+        "field_names": tuple(field_names)
+    }
+    if arguments.architecture == "hierarchical":
+        model = HierarchicalSplineConditionalVAE(
+            global_latent_dim=arguments.latent_dim,
+            spatial_latent_channels=arguments.spatial_latent_channels,
+            magnetic_latitude=np.asarray(metadata["grid"]["mlat"]),
+            **model_arguments
+        )
+        configuration.update({
+            "global_latent_dim": model.global_latent_dim,
+            "spatial_latent_channels": model.spatial_latent_channels,
+            "spatial_latent_shape": list(model.spatial_latent_shape),
+            "total_latent_dim": model.latent_dim,
+        })
+    else:
+        model = SplineConditionalVAE(
+            latent_dim=arguments.latent_dim, **model_arguments
+        )
     output.mkdir(parents=True)
     (output / "cache_manifest.json").write_bytes((cache / "manifest.json").read_bytes())
     if arguments.conditioning is not None:
@@ -291,7 +315,8 @@ def run(arguments):
             scheduler_minimum_learning_rate=arguments.scheduler_minimum_learning_rate,
             hole_probability=arguments.hole_probability if arguments.training_holes else 0.0,
             hole_size=hole_size, hole_device=arguments.hole_device,
-            latent_samples=arguments.latent_samples
+            latent_samples=arguments.latent_samples,
+            kl_warmup_epochs=arguments.kl_warmup_epochs
         )
         configuration["selected_epoch"] = model.best_validation_epoch or arguments.epochs
         configuration["selected_validation_total"] = model.best_validation_total
@@ -359,13 +384,22 @@ def parse_arguments(argv=None):
         help="named feature profile used with --conditioning (default: all11)"
     )
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
+    parser.add_argument(
+        "--architecture", choices=("legacy", "hierarchical"), default="legacy",
+        help="decoder/latent architecture; legacy remains the compatibility default"
+    )
+    parser.add_argument(
+        "--spatial-latent-channels", type=int, default=8,
+        help="6x6 spatial latent channels for the hierarchical architecture"
+    )
     parser.add_argument("--seed", type=int)
     for name, default in (("epochs", 500), ("batch-size", 264), ("latent-dim", 36),
                           ("latent-samples", 1),
                           ("conditioning-embedding-dim", 32),
                           ("spline-control-points", 30), ("spline-degree", 3),
                           ("scheduler-patience", 10), ("max-open-orbits", 64),
-                          ("num-workers", 2), ("prefetch-factor", 2)):
+                          ("num-workers", 2), ("prefetch-factor", 2),
+                          ("kl-warmup-epochs", 0)):
         parser.add_argument("--" + name, type=int, default=default)
     for name, default in (("learning-rate", 1e-4), ("beta", 0.048),
                           ("scheduler-factor", 0.5),
@@ -392,6 +426,10 @@ def parse_arguments(argv=None):
         parser.error("beta must be finite and nonnegative")
     if arguments.num_workers < 0 or arguments.prefetch_factor < 1:
         parser.error("worker count must be nonnegative and prefetch factor positive")
+    if arguments.spatial_latent_channels < 0:
+        parser.error("--spatial-latent-channels must be nonnegative")
+    if arguments.kl_warmup_epochs < 0:
+        parser.error("--kl-warmup-epochs must be nonnegative")
     if arguments.hole_size is not None and arguments.hole_size < 1:
         parser.error("--hole-size must be positive")
     if arguments.conditioning is None and arguments.conditioning_profile != "all11":

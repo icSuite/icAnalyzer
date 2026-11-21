@@ -12,6 +12,7 @@ from icanalyzer.cvae.artifacts import load_run_artifact
 from icanalyzer.cvae.cache import AutomaticFieldDataset, WIC_SI12_CACHE_FORMAT
 from icanalyzer.cvae.data import ChannelTransform
 from icanalyzer.cvae.ensemble import sample_decoded_ensemble
+from icanalyzer.cvae.hierarchical import HierarchicalSplineConditionalVAE
 from icanalyzer.cvae.loss import (
     CHANNEL_BALANCED_LOSS_CONFIGURATION,
     LEGACY_CHANNEL_BALANCED_LOSS_KIND,
@@ -433,6 +434,49 @@ def test_joint_trainer_uses_channel_balanced_configuration(tmp_path, monkeypatch
     assert summary["held_out_evaluation"]["test"][
         "channel_reconstruction"
     ] == [0.7, 0.9]
+
+
+def test_joint_trainer_selects_hierarchical_architecture(tmp_path, monkeypatch):
+    import scripts.CVAE.train_wic_cvae as trainer
+
+    cache = make_joint_cache(tmp_path / "cache")
+
+    def skip_training(model, *args, **kwargs):
+        assert isinstance(model, HierarchicalSplineConditionalVAE)
+        assert model.global_latent_dim == 3
+        assert model.spatial_latent_channels == 2
+        assert kwargs["kl_warmup_epochs"] == 5
+        model.best_validation_epoch = 1
+        model.best_validation_total = 0.5
+        return model, [{"epoch": 1}]
+
+    monkeypatch.setattr(trainer, "train_vae", skip_training)
+    monkeypatch.setattr(
+        trainer, "_run_epoch",
+        lambda *args, **kwargs: {
+            "total": 1.0, "reconstruction": 0.8, "kl": 0.2,
+            "kl_global": 0.1, "kl_spatial": 0.1,
+            "channel_reconstruction": [0.7, 0.9],
+        }
+    )
+    output = tmp_path / "run"
+    arguments = trainer.parse_arguments([
+        str(cache), "--output", str(output), "--device", "cpu",
+        "--num-workers", "0", "--epochs", "1", "--latent-dim", "3",
+        "--architecture", "hierarchical", "--spatial-latent-channels", "2",
+        "--spline-control-points", "5", "--kl-warmup-epochs", "5",
+    ])
+    summary = trainer.run(arguments)
+    model, _, artifact = load_run_artifact(output / "wic_cvae.pt")
+
+    assert isinstance(model, HierarchicalSplineConditionalVAE)
+    assert artifact["training_configuration"]["architecture"] == "hierarchical"
+    assert artifact["training_configuration"]["global_latent_dim"] == 3
+    assert artifact["training_configuration"]["total_latent_dim"] == model.latent_dim
+    assert artifact["training_configuration"]["beta_schedule"] == (
+        "linear_epoch_1_zero_to_configured_beta"
+    )
+    assert summary["held_out_evaluation"]["test"]["kl_spatial"] == 0.1
 
 
 def test_joint_sampler_and_plotter_preserve_paired_members(tmp_path, monkeypatch):

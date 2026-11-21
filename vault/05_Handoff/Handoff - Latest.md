@@ -1,8 +1,8 @@
 # Handoff - Latest
 
 Last updated: 2026-11-21
-Last reviewed: 2026-11-21 (184x184 masks and training semantics)
-Repository snapshot: `vae/wic-si12` at `333b888`, with generated-output changes preserved; `main` remains at `7c71591`
+Last reviewed: 2026-11-21 (hierarchical184x184 CVAE implementation)
+Repository snapshot: `vae/wic-si12` including the hierarchical native-grid commit, with generated-output changes preserved; `main` remains at `7c71591`
 
 ## 184x184 transition prerequisites started (2026-11-19)
 
@@ -22,9 +22,19 @@ scientific settings. A simulated epoch2 interruption resumed from epoch1 and
 completed successfully.
 
 The user reports that the accelerated Model2 completed and looked good,
-Model1 completed, and the full Model2 application completed. The full
-two-stage Model1+Model2 mask export is running. The final artifacts and counts
-have not been transferred or independently inspected locally.
+Model1 completed, and both the full Model2 application and the full two-stage
+Model1+Model2 mask export completed. The final artifacts and counts have not
+been transferred or independently inspected locally.
+
+The hierarchical native-grid CVAE is now implemented behind
+`train_wic_cvae.py --architecture hierarchical`. It uses five masked residual
+encoder scales ending at6x6, GroupNorm/SiLU, FiLM and fixed coordinates; a36-
+value global plus default8x6x6 spatial latent; and residual upsampling to
+separate WIC/SI12 spline heads. Both30- and92-control-point comparisons are
+available. Artifacts retain global/spatial/total latent contracts, and training
+reports separate KL terms with optional deterministic linear warm-up. A
+native184x184 Kp-conditioned synthetic forward/backward smoke was finite
+with428,290 parameters. No scientific run was launched.
 
 The user verified write access to `/disk`; use `/disk/CVAE_cache` for the
 approximately220-GiB uncompressed orbit-sharded cache. Do not compress it or
@@ -35,11 +45,10 @@ Default holes scale from12/46 to48/184, while an explicit `--hole-size` remains
 literal. Effective-batch KL balance remains unresolved and is the next
 training-semantics decision after cache preparation.
 
-The reference plan is
+The reference and implementation checkpoint is
 `vault/02_Algorithm/184x184 WIC-SI12 CVAE Transition Plan.md`. It records the
-proposed five-stage masked encoder, global plus spatial latent,92x92 spline-
-coefficient decoder candidate, controlled ablations and an explicit gate before
-architecture changes.
+five-stage masked encoder, global plus spatial latent,92x92 spline-coefficient
+decoder candidate, controlled ablations and the remaining pilot gate.
 
 The canonical184x184 annotation now rasterizes382 transferred line-set
 keyframes on the native grid and uses conservative source-cell expansion for55
@@ -59,10 +68,11 @@ mechanical Model2 masks;119 eligible manual-cache paired frames;107,568,159
 cache bytes; finite184x184 current-model forward/backward. This validates
 mechanics only. No scientific model was trained or sampled.
 
-Next: let the full two-stage mask export finish, regenerate full conditioning,
-build the paired cache on `/disk/CVAE_cache`, establish a memory-safe effective
-batch, then begin the controlled architecture work. Out-of-core50000-draw
-summaries remain required before sampling.
+Next: finish and validate the paired cache on `/disk/CVAE_cache`, regenerate
+full conditioning, then measure a memory-safe batch on the RTX6000 Ada. Decide
+whether gradient accumulation is needed before launching the three controlled
+architecture pilots. Out-of-core50000-draw summaries remain required before
+sampling.
 
 Portfolio impact: Central update needed: No.
 

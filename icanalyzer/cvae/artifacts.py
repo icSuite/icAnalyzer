@@ -6,6 +6,7 @@ from pathlib import Path
 import torch
 
 from .data import ChannelTransform
+from .hierarchical import HierarchicalSplineConditionalVAE
 from .model import SplineConditionalVAE
 
 
@@ -86,7 +87,10 @@ def load_run_artifact(filename, device="cpu"):
     if artifact.get("artifact_type") not in SUPPORTED_ARTIFACT_TYPES:
         raise ValueError("expected a Hall/Pedersen or WIC automatic CVAE artifact")
     configuration = dict(artifact["model_configuration"])
-    if configuration.get("model") not in ("SplineConditionalVAE", "SplineWICSI12VAE"):
+    if configuration.get("model") not in (
+        "SplineConditionalVAE", "SplineWICSI12VAE",
+        "HierarchicalSplineConditionalVAE"
+    ):
         raise ValueError("current automatic CVAEs require the spline conditional model")
     if (
         artifact["artifact_type"] == CONDUCTANCE_CVAE_ARTIFACT_TYPE
@@ -95,7 +99,10 @@ def load_run_artifact(filename, device="cpu"):
         # Old conductance runs inherited the former class's WIC/SI12 labels.
         # Only the labels were wrong; the trained state is the same two-channel model.
         configuration["field_names"] = ["Hall", "Pedersen"]
-    model = SplineConditionalVAE.from_configuration(configuration)
+    if configuration.get("model") == "HierarchicalSplineConditionalVAE":
+        model = HierarchicalSplineConditionalVAE.from_configuration(configuration)
+    else:
+        model = SplineConditionalVAE.from_configuration(configuration)
     model.load_state_dict(artifact["model_state"])
     training = artifact.get("training_configuration", {})
     model.loss_configuration = training.get(

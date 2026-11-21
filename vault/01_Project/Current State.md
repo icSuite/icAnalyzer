@@ -1,7 +1,8 @@
 # Current State
 
-Last reviewed: 2026-11-21 (184x184 masks and training semantics)
-Repository snapshot: `vae/wic-si12` at `333b888`; `main` remains at `7c71591`
+Last reviewed: 2026-11-21 (hierarchical184x184 CVAE implementation)
+Repository snapshot: `vae/wic-si12` including the hierarchical native-grid
+commit; `main` remains at `7c71591`
 Worktree: user annotation and generated-output changes preserved
 
 ## 184x184 prerequisites partially implemented (2026-11-19)
@@ -24,9 +25,9 @@ state, best state and exact `--resume` support are implemented and covered by
 a simulated interruption during epoch2.
 
 The user reports that the accelerated184x184 Model2 completed and looked good,
-Model1 completed, and full-corpus Model2 masks completed. The full two-stage
-Model1+Model2 export is currently running on the server. No run artifacts have
-been transferred or independently inspected locally.
+Model1 completed, and both the full-corpus Model2 application and full two-stage
+Model1+Model2 export completed. No run artifacts have been transferred or
+independently inspected locally.
 
 The high-resolution cache will use the existing uncompressed orbit-sharded
 layout at `/disk/CVAE_cache`; the user verified write access to `/disk`, which
@@ -37,10 +38,20 @@ artifacts readable. The default training hole now scales from12 pixels at46x46
 to48 at184x184; explicit `--hole-size` values remain native pixels. Batch-size
 KL scaling still requires a matched effective batch or explicit adjustment.
 
-The durable transition and proposed hierarchical encoder/decoder are recorded
-in `vault/02_Algorithm/184x184 WIC-SI12 CVAE Transition Plan.md`. Architecture
-work is gated behind annotation/masking, conditioning, cache, resource and
-current-model smoke checks.
+The durable transition is recorded in
+`vault/02_Algorithm/184x184 WIC-SI12 CVAE Transition Plan.md`. The hierarchical
+encoder, spatial latent and decoder are now implemented behind
+`--architecture hierarchical`; legacy remains the default. At184x184 the
+candidate uses scales92/46/23/12/6,36 global latent values, an8x6x6 spatial
+latent, separate sensor coefficient heads and optionally92 spline control
+points. Artifacts preserve grid coordinates and report global/spatial KL
+separately. Deterministic linear KL warm-up is optional.
+
+A synthetic Kp-conditioned native-grid forward/backward smoke completed
+with428,290 parameters, finite loss and output shape `1 x 2 x 184 x 184`. No
+scientific training was launched. Full conditioning regeneration,
+completion/validation of the cache on `/disk`, effective-batch selection and
+out-of-core sampling remain before production-scale comparisons.
 
 The canonical `data/partial_image_annotations_184x184.json` now rasterizes all
 382 affinely transferred line-set keyframes at native target-cell centres. All
@@ -67,10 +78,9 @@ one broad-order GUI test encountered the pre-existing Matplotlib/LaTeX Unicode
 star failure, while the same GUI test and a real184x184 GUI smoke pass in
 isolation. Syntax and diff checks pass.
 
-No CVAE scientific training was launched. Remaining prerequisites are
-completion of the running two-stage mask export, full conditioning
-regeneration, full cache preparation on `/disk`, memory-safe effective-batch
-selection, architecture work and out-of-core50000-draw summaries.
+No CVAE scientific training was launched. Remaining prerequisites are full
+conditioning regeneration, full cache preparation on `/disk`, memory-safe
+effective-batch selection and out-of-core50000-draw summaries.
 
 ## Rebuilt Kp and hybrid4 paired CVAEs complete; sampling next (2026-11-17)
 
