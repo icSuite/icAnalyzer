@@ -59,7 +59,14 @@ atomically save `training_state.pt` after every completed epoch and accept
 `--resume` only with the same cache hash, model and training configuration.
 Resume restores the current and best model states, optimizer, scheduler,
 history, random streams and training-hole generator. Focused resume and
-compatibility tests pass; no server probe or scientific training was started.
+compatibility tests pass; no scientific training was started.
+
+The scalar-Kp hierarchical batch probe subsequently completed at batch264
+with5.80GiB peak allocated and6.87GiB peak reserved. It used36 global latent
+values,8x6x6 spatial channels and92 spline control points. The historical
+effective batch fits comfortably, so retain batch264 and beta0.048 without
+gradient accumulation. The next executable action is the full scalar-Kp run;
+no named conditioning table is required.
 
 The reference and implementation checkpoint is
 `vault/02_Algorithm/184x184 WIC-SI12 CVAE Transition Plan.md`. It records the

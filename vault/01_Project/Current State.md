@@ -63,6 +63,14 @@ training random streams. A simulated interruption after epoch1 resumed exactly
 and completed epochs2--3. The server must pull this implementation before the
 batch264 probe.
 
+The server batch probe has now completed for the primary scalar-Kp candidate:
+batch264,36 global values,8x6x6 spatial latent and92 spline control points.
+Two real training steps peaked at5.80GiB allocated and6.87GiB reserved on the
+RTX6000 Ada. The historical effective batch therefore fits comfortably and no
+gradient accumulation or beta adjustment is needed. The probe reconstruction
+terms were28.51 WIC and26.32 SI12; initial KL was0.76 global and39.05 spatial.
+These untrained two-batch values are mechanical diagnostics only.
+
 The canonical `data/partial_image_annotations_184x184.json` now rasterizes all
 382 affinely transferred line-set keyframes at native target-cell centres. All
 382 line sets exactly reproduced their original46x46 masks, so this carries

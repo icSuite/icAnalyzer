@@ -166,8 +166,9 @@ quality. No training or sampling run was started.
 - [x] Scale artificial holes by physical size. An omitted `--hole-size`
   resolves from12 pixels at46x46 to48 at184x184; an explicit value remains a
   literal native-pixel override.
-- [ ] Establish a memory-safe batch size and use gradient accumulation if a
-  comparable optimizer batch is required.
+- [x] Establish a memory-safe batch size. The primary hierarchical candidate
+  used5.80GiB allocated/6.87GiB reserved at batch264 on the RTX6000 Ada, so
+  the historical effective batch fits without gradient accumulation.
 - [x] Add bounded real-batch GPU probing and atomic per-epoch CVAE
   checkpoint/resume before starting long native-grid training.
 - [ ] Make ensemble summaries out-of-core. A 50,000-member paired 184x184
