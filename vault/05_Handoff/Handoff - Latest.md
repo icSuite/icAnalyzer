@@ -82,9 +82,13 @@ training epoch. The user chose to rebuild rather than add a repacking workflow:
 `prepare_wic_si12_cvae_cache.py` now writes a version-2 training cache containing
 only corrected WIC, SI12, two quality maps and two validity masks. Formal
 uncertainty remains in Product2, and old version-1 caches remain readable. The
-new logical layout is18 rather than26 bytes/pixel, about155GiB for this corpus,
-so it fits in the252GiB `/dev/shm`. Next rebuild to a fresh `/disk` directory,
-copy the completed cache into `/dev/shm`, and restart scalar-Kp training there.
+new logical layout is18 rather than26 bytes/pixel and fits in the252GiB
+`/dev/shm` in isolation.
+
+The rebuilt cache is168GiB logical/81GiB allocated on ZFS, down from
+242GiB/139GiB, with unchanged188,258/40,580/42,396 split counts. Other server
+workloads make reserving the full168GiB in `/dev/shm` inappropriate. Use the
+lean cache directly on ZFS and let ARC cache it opportunistically.
 
 The reference and implementation checkpoint is
 `vault/02_Algorithm/184x184 WIC-SI12 CVAE Transition Plan.md`. It records the

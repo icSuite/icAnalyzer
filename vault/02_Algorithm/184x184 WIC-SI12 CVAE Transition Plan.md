@@ -175,9 +175,9 @@ quality. No training or sampling run was started.
 - [x] Add deterministic orbit-local batching with shuffled orbit order and
   sequential within-orbit reads. Frame-level and within-orbit random reads
   caused mapping-thrash bursts and about5.14s/batch respectively.
-- [ ] Rebuild the version-2 lean paired cache and stage it in `/dev/shm` before
-  restarting the scalar-Kp run. Sequential ZFS reads still took43 minutes for
-  92% of the first training epoch.
+- [x] Rebuild the version-2 lean paired cache. It is168GiB logical/81GiB on
+  ZFS with unchanged split counts. Do not reserve it in `/dev/shm` while other
+  server workloads are active; train from ZFS and allow opportunistic ARC use.
 - [ ] Make ensemble summaries out-of-core. A 50,000-member paired 184x184
   float32 ensemble is about 12.6 GiB before median work.
 - [ ] Remove fixed 46x46 assertions from active comparison plots and validate

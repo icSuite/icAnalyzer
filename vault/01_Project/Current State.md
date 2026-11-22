@@ -85,9 +85,14 @@ of the first training epoch. The user chose the simpler storage change: paired
 cache generation now omits the two formal-uncertainty channels because the
 active loss does not load them. The new version-2 cache stores corrected WIC,
 SI12, both quality maps and both validity masks; Product2 remains authoritative
-for uncertainty, and version-1 caches remain readable. Its logical estimate is
-about69% of the old layout, roughly155GiB, so rebuild it directly and stage it
-in the252GiB `/dev/shm` before restarting training.
+for uncertainty, and version-1 caches remain readable. Its expected logical
+size was about69% of the old layout.
+
+The completed version-2 cache is168GiB logical and81GiB on ZFS, versus242GiB
+logical and139GiB for version1, with identical split counts. Because other
+server workloads are active, the user decided not to reserve168GiB in
+`/dev/shm`. Train directly from the lean ZFS cache and let ARC use otherwise
+available RAM opportunistically rather than pinning the full dataset.
 
 The canonical `data/partial_image_annotations_184x184.json` now rasterizes all
 382 affinely transferred line-set keyframes at native target-cell centres. All
