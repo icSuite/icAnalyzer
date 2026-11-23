@@ -1,9 +1,29 @@
 # Current State
 
-Last reviewed: 2026-11-23 (native-grid Kp sampling checkpoint)
+Last reviewed: 2026-11-23 (native-resolution Test A)
 Repository snapshot: `vae/wic-si12` including the hierarchical native-grid
 commit; `main` remains at `7c71591`
 Worktree: user annotation and generated-output changes preserved
+
+## Native-resolution Test A completed (2026-11-23)
+
+Matched 46x46 and 184x184 precipitation-CS products were compared for one
+bright corrected-WIC frame in each of eight mission-spanning orbits. The grids
+are exactly nested at factor four and the orbit timestamps match. Averaging the
+native184 fields onto46x46 reproduces the native46 products with correlation
+at least0.99965 and RMSE below2.7% of the coarse-scale spatial standard
+deviation. This rules out a material product-generation mismatch at the shared
+scale.
+
+The spatial variance below the46-cell scale spans1.7--12.1% for corrected WIC
+(median7.0%) and7.8--38.2% for SI12 (median19.4%). Thus184x184 does retain
+additional structure, but this test does not establish that all of it is
+scientifically useful. In particular, SI12 fine residuals often have streaky
+texture consistent with a mixture of morphology and sampling/noise. Before a
+92-versus184 architecture decision, compare fine residuals with uncertainty
+and adjacent-frame persistence. The reproducible script is
+`scripts/CVAE/compare_precipitation_cs_resolution.py`; the generated gallery
+and metrics are outside the repository in `temp_storage/test_A`.
 
 ## Native-grid Kp model and disk-backed sampling ready (2026-11-23)
 

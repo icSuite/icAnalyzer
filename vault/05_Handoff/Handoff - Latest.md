@@ -1,8 +1,21 @@
 # Handoff - Latest
 
 Last updated: 2026-11-23
-Last reviewed: 2026-11-23 (native-grid Kp sampling checkpoint)
+Last reviewed: 2026-11-23 (native-resolution Test A)
 Repository snapshot: `vae/wic-si12` including the hierarchical native-grid commit, with generated-output changes preserved; `main` remains at `7c71591`
+
+## Native-resolution Test A complete
+
+`compare_precipitation_cs_resolution.py` compared one bright frame from each
+of eight matched, mission-spanning precipitation-CS orbits. Native184 averaged
+to46 agrees with native46 at correlation >=0.99965 and normalized RMSE <=0.027.
+Below-cell variance is1.7--12.1% for corrected WIC (median7.0%) and7.8--38.2%
+for SI12 (median19.4%). The extra resolution is therefore measurable, but SI12
+residuals can be visibly streaky and Test A does not yet separate useful signal
+from sampling/noise. Next resolution diagnostic: compare these residuals to
+formal uncertainty and temporal persistence before choosing92 or184.
+
+Portfolio impact: Central update needed: No.
 
 ## Native184x184 scalar-Kp model ready to sample
 
