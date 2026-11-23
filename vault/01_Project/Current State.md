@@ -1,9 +1,44 @@
 # Current State
 
-Last reviewed: 2026-11-23 (native-resolution Test A)
+Last reviewed: 2026-11-23 (native-resolution Tests A--C)
 Repository snapshot: `vae/wic-si12` including the hierarchical native-grid
 commit; `main` remains at `7c71591`
 Worktree: user annotation and generated-output changes preserved
+
+## Native-resolution Tests B and C completed (2026-11-23)
+
+Eight mission-spanning orbit-held-out test frames were encoded with the
+completed184x184 scalar-Kp artifact and reconstructed from posterior means.
+Median native-grid RMSE normalized by observed spatial standard deviation was
+0.798 for corrected WIC and0.671 for SI12. After4x4 averaging to46x46 the
+medians remained0.788 and0.565. One selected frame had essentially zero SI12
+contrast, making its normalized SI12 errors extreme; logarithmic summary axes
+retain that case without hiding the other frames. Because most reconstruction
+error remains at46x46 scale, the principal limitation is not simply that the
+target grid is too fine.
+
+Fine-scale observed/reconstruction correlations have medians0.431 for WIC and
+0.235 for SI12. Reconstructed fine-scale amplitudes have median ratios0.393
+and0.315 relative to observations. The posterior therefore retains some WIC
+sub-cell pattern but substantially smooths both sensors, especially SI12.
+
+The latent-group diagnosis confirms global-latent collapse in this artifact.
+Across these frames, the36-value global group contributes0.081 total KL per
+frame (0.00226 per dimension) with only1/36 dimensions above the descriptive
+0.01-nat threshold. The288-value spatial group contributes27.125 nats
+(0.0942 per dimension), with46/288 dimensions above that threshold. Zeroing
+the posterior global group changes output by only about0.3% of spatial standard
+deviation at the median; zeroing the spatial group changes WIC/SI12 by about
+73%/65%. Prior variation likewise comes almost entirely from the spatial group.
+The spatial latent is genuinely used, but sparsely, and does not recover most
+native fine structure.
+
+Together with Test A, the evidence favors an architecture/training-capacity
+problem over abandoning184x184: the data contain additional spatial structure,
+but this model cannot reproduce even the coarse-scale observations well from
+its posterior. The reproducible diagnostic is
+`scripts/CVAE/diagnose_native_cvae_resolution.py`; generated plots and metrics
+are in `temp_storage/test_B` and `temp_storage/test_C`.
 
 ## Native-resolution Test A completed (2026-11-23)
 

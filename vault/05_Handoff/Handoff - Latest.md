@@ -1,8 +1,29 @@
 # Handoff - Latest
 
 Last updated: 2026-11-23
-Last reviewed: 2026-11-23 (native-resolution Test A)
+Last reviewed: 2026-11-23 (native-resolution Tests A--C)
 Repository snapshot: `vae/wic-si12` including the hierarchical native-grid commit, with generated-output changes preserved; `main` remains at `7c71591`
+
+## Native-resolution Tests B/C complete
+
+Posterior-mean reconstructions were measured on one bright frame from each of
+eight orbit-held-out test orbits. Median normalized native-grid reconstruction
+error is0.798 WIC/0.671 SI12 and remains0.788/0.565 after averaging to46x46.
+Fine-scale pattern correlation is0.431/0.235 and amplitude retention is
+0.393/0.315. One almost signal-free SI12 frame produces a valid but extreme
+normalized-error outlier and remains explicit on logarithmic axes.
+
+The global latent is collapsed: mean total KL0.081 nats/frame,1/36 dimensions
+above0.01 nat, and median decoder change around0.3% when its posterior mean is
+zeroed. The spatial group is used:27.125 nats/frame,46/288 dimensions above
+0.01 nat, and zeroing it changes WIC/SI12 by about73%/65%. Prior output spread
+also comes almost entirely from the spatial group. Combined Tests A--C indicate
+that184x184 is not the main failure; the current posterior cannot reconstruct
+coarse observations well and smooths most native detail. Next controlled pilot
+should target latent/decoder/training capacity rather than downsample solely to
+hide this limitation.
+
+Portfolio impact: Central update needed: No.
 
 ## Native-resolution Test A complete
 
