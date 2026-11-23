@@ -1,9 +1,36 @@
 # Current State
 
-Last reviewed: 2026-11-21 (hierarchical184x184 CVAE implementation)
+Last reviewed: 2026-11-23 (native-grid Kp sampling checkpoint)
 Repository snapshot: `vae/wic-si12` including the hierarchical native-grid
 commit; `main` remains at `7c71591`
 Worktree: user annotation and generated-output changes preserved
+
+## Native-grid Kp model and disk-backed sampling ready (2026-11-23)
+
+The completed local scalar-Kp run
+`wic_si12_kp_hierarchical_lean_b264_20261122` is a paired corrected-WIC/SI12
+hierarchical artifact on the184x184 grid. It selected epoch495 with validation
+objective3.757115; final validation/test objectives are3.759365/3.876941. The
+artifact records36 global latent values,8x6x6 spatial latent channels,92 spline
+controls and cache-manifest SHA256
+`db1b61767f35860463991fda2b2823273fb7d4c7d05abb75c53d06c4f1625189`.
+
+`sample_wic_at_kp.py` now keeps 50,000-draw memory bounded. It decodes paired
+members to state-major temporary `.npy` files, propagates corrected WIC through
+Fang in batches, computes exact pixel quantiles in configurable bounded blocks,
+and converts those same files in place to aligned WIC/SI12/conductance anomaly
+factors. The final `ensemble_products.npz` contract and existing plotter remain
+unchanged. A conservative disk preflight accounts for all requested Kp archives
+plus one working ensemble. Temporary members are removed after each completed
+archive.
+
+The real completed artifact passed an8-draw end-to-end184x184 sample-and-plot
+smoke, producing correctly shaped paired and conductance factors with no
+remaining `.sampling_work` directory. Fifty-eight focused CVAE checks pass,
+including exact equivalence between in-memory and disk-backed decoding,
+quantiles and anomaly factors. Production Kp0--6 sampling is now executable;
+the separate minute-resolved event sampler and fixed46x46 event-comparison
+assertions have not yet been adapted.
 
 ## 184x184 prerequisites partially implemented (2026-11-19)
 

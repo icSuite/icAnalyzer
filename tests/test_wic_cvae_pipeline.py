@@ -17,7 +17,13 @@ from icanalyzer.cvae.artifacts import (
     save_run_artifact
 )
 from icanalyzer.cvae.data import ChannelTransform, split_orbit_files
-from icanalyzer.cvae.ensemble import ensemble_statistics, sample_decoded_ensemble
+from icanalyzer.cvae.ensemble import (
+    ensemble_statistics,
+    sample_decoded_ensemble,
+    sample_decoded_members_to_disk,
+    state_major_anomaly_factor_in_place,
+    state_major_summaries,
+)
 from icanalyzer.cvae.model import SplineConditionalVAE
 from icanalyzer.cvae.regimes import (
     CONTROLLED_SML_BANDS,
@@ -547,6 +553,48 @@ def test_one_field_transform_model_artifact_and_sampling(tmp_path):
     samples = sample_decoded_ensemble(loaded, loaded_transform, 5, batch_size=2, kp=3)
     assert samples.shape == (5, 1, 8, 8)
     assert np.all(samples >= 0)
+
+
+def test_disk_sampling_and_summaries_match_in_memory(tmp_path):
+    conditioning = dict(
+        center=2.0, scale=1.0, training_min=0.0, training_max=9.0,
+        embedding_dim=3
+    )
+    model = SplineConditionalVAE(
+        image_shape=(8, 8), latent_dim=4, spline_control_points=4,
+        spline_degree=2, kp_conditioning=conditioning,
+        field_names=("wic_corrected", "si12")
+    ).eval()
+    transform = ChannelTransform(
+        [1, 1], [0, 0], [1, 1], kind=ChannelTransform.LOG10_KIND
+    )
+    support = np.ones((2, 8, 8), dtype=bool)
+    expected, expected_latent = sample_decoded_ensemble(
+        model, transform, 7, batch_size=3, seed=9, return_latent=True,
+        support_mask=support, kp=3
+    )
+    members, latent = sample_decoded_members_to_disk(
+        model, transform, 7, tmp_path / "members.npy",
+        tmp_path / "latent.npy", batch_size=3, seed=9,
+        support_mask=support, kp=3
+    )
+    recovered = np.asarray(members).T.reshape(expected.shape)
+    np.testing.assert_allclose(recovered, expected)
+    np.testing.assert_allclose(latent, expected_latent)
+
+    mean, quantiles = state_major_summaries(
+        members, expected.shape[1:], working_mib=1
+    )
+    np.testing.assert_allclose(mean, expected.mean(axis=0), rtol=1e-6)
+    np.testing.assert_allclose(
+        quantiles, np.quantile(expected, [0.1, 0.5, 0.9], axis=0)
+    )
+    state_major_anomaly_factor_in_place(members, mean, working_mib=1)
+    expected_statistics = ensemble_statistics(expected)
+    np.testing.assert_allclose(
+        members, expected_statistics["anomaly_factor"], rtol=1e-6,
+        atol=1e-7
+    )
 
 
 def test_generic_cvae_split_recognizes_native_orbit_names():

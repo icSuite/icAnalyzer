@@ -178,8 +178,11 @@ quality. No training or sampling run was started.
 - [x] Rebuild the version-2 lean paired cache. It is168GiB logical/81GiB on
   ZFS with unchanged split counts. Do not reserve it in `/dev/shm` while other
   server workloads are active; train from ZFS and allow opportunistic ARC use.
-- [ ] Make ensemble summaries out-of-core. A 50,000-member paired 184x184
-  float32 ensemble is about 12.6 GiB before median work.
+- [x] Make fixed-condition ensemble summaries out-of-core. The sampler now
+  writes state-major paired and Fang members to disk, computes exact quantiles
+  in bounded blocks, and converts the same files in place to anomaly factors.
+  The completed184x184 Kp artifact passed an end-to-end sample/plot smoke on
+  2026-11-23. Minute-resolved event medians remain a separate adaptation.
 - [ ] Remove fixed 46x46 assertions from active comparison plots and validate
   coordinates against the artifact/product grid.
 

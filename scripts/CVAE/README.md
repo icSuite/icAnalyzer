@@ -342,6 +342,24 @@ model's learned support; the IMAGE panels retain each observation's finite
 footprint. A source frame with no finite observation remains blank rather than
 being fabricated.
 
+Fixed-Kp sampling is disk-backed and grid independent. Decoded sensor members
+and Fang conductance members are written state-major under a temporary
+`.sampling_work` directory, exact per-cell quantiles are evaluated in bounded
+blocks, and those same files are converted in place to the anomaly factors in
+`ensemble_products.npz`. The temporary files are removed only after the final
+archive is complete. At184x184,50,000 paired draws with conductance need about
+25.2GiB for the final uncompressed factors and roughly twice that free space
+during one condition. `--summary-memory-mib` bounds quantile workspace and
+defaults to256MiB; it does not change the result.
+
+```bash
+PYTHONPATH=. python scripts/CVAE/sample_wic_at_kp.py \
+  "$CVAE_RUN" --kp 0 1 2 3 4 5 6 --output "$SAMPLES" \
+  --draws 50000 --batch-size 500 --device cuda --no-plots
+
+PYTHONPATH=. python scripts/CVAE/plot_wic_at_kp.py "$SAMPLES"
+```
+
 Exact-condition sampling remains available for diagnostics through a JSON list
 containing all 11 conceptual conditions. It should not be used to represent a
 broad IMF regime because every decoded member receives that same vector. Its

@@ -9,6 +9,7 @@ from importlib.metadata import version
 import json
 from pathlib import Path
 import re
+import shutil
 import warnings
 
 import matplotlib
@@ -29,7 +30,11 @@ from icanalyzer.cvae.conditioning import (
     conditioning_vector_from_record,
     resolve_conditioning_features,
 )
-from icanalyzer.cvae.ensemble import ensemble_statistics, sample_decoded_ensemble
+from icanalyzer.cvae.ensemble import (
+    sample_decoded_members_to_disk,
+    state_major_anomaly_factor_in_place,
+    state_major_summaries,
+)
 from icanalyzer.cvae.regimes import (
     CONTROLLED_SML_BANDS,
     CONTROLLED_SML_LABELS,
@@ -38,7 +43,7 @@ from icanalyzer.cvae.regimes import (
     empirical_regime_masks,
     load_training_conditions,
 )
-from icanalyzer.cvae.summaries import summarize_wic_samples
+from icanalyzer.cvae.summaries import summarize_wic_anomaly_factor
 
 
 #%% Fang configuration
@@ -274,11 +279,12 @@ def fang_magnetic_field_from_apex_grid(
     }
 
 
-def fang_conductance_from_wic(
-    wic_samples, kp, mlt, model_support, magnetic_field_microtesla,
-    low_energy_policy, batch_size
+def fang_conductance_from_wic_batches(
+    sample_count, get_wic_batch, kp, mlt, model_support,
+    magnetic_field_microtesla, low_energy_policy, batch_size,
+    state_major_output=None
 ):
-    """Propagate sampled corrected WIC through collapsed ZP and Fang.
+    """Propagate corrected WIC batches without holding the ensemble in RAM.
 
     Unit corrected-WIC is passed through the public icPhysics precipitation
     function once. The resulting flux per count makes the nominal conversion
@@ -287,15 +293,12 @@ def fang_conductance_from_wic(
     not sampled as predictive uncertainty.
     """
 
-    wic_samples = np.asarray(wic_samples, dtype=np.float32)
     mlt = np.asarray(mlt, dtype=float)
     model_support = np.asarray(model_support, dtype=bool)
-    if wic_samples.ndim != 3 or wic_samples.shape[1:] != mlt.shape:
-        raise ValueError("WIC samples and MLT grid do not align")
+    if sample_count < 2:
+        raise ValueError("at least two WIC samples are required")
     if model_support.shape != mlt.shape or not model_support.any():
         raise ValueError("WIC model support must be nonempty and match the grid")
-    if np.any(~np.isfinite(wic_samples[:, model_support])) or np.any(wic_samples[:, model_support] < 0):
-        raise ValueError("corrected-WIC samples must be finite and nonnegative on model support")
     magnetic_field_microtesla = np.asarray(magnetic_field_microtesla, dtype=float)
     try:
         magnetic_field_microtesla = np.broadcast_to(magnetic_field_microtesla, mlt.shape)
@@ -309,8 +312,8 @@ def fang_conductance_from_wic(
     kp = np.asarray(kp, dtype=np.float32)
     scalar_kp = kp.ndim == 0
     if scalar_kp:
-        sample_kp = np.full(len(wic_samples), kp, dtype=np.float32)
-    elif kp.shape == (len(wic_samples),):
+        sample_kp = np.full(sample_count, kp, dtype=np.float32)
+    elif kp.shape == (sample_count,):
         sample_kp = kp
     else:
         raise ValueError("Kp must be a scalar or one value per WIC sample")
@@ -335,12 +338,34 @@ def fang_conductance_from_wic(
     if not conductance_support.any():
         raise ValueError("collapsed Zhang--Paxton/Fang has no valid cells on WIC support")
 
-    conductance = np.zeros((len(wic_samples), 2, *mlt.shape), dtype=np.float32)
-    for start in range(0, len(wic_samples), batch_size):
-        stop = min(start + batch_size, len(wic_samples))
+    if state_major_output is None:
+        conductance = np.zeros(
+            (sample_count, 2, *mlt.shape), dtype=np.float32
+        )
+    else:
+        conductance = state_major_output
+        expected_shape = (2 * mlt.size, sample_count)
+        if conductance.shape != expected_shape or conductance.dtype != np.float32:
+            raise ValueError(
+                "state-major conductance output has the wrong shape or dtype"
+            )
+        conductance[:] = 0
+
+    for start in range(0, sample_count, batch_size):
+        stop = min(start + batch_size, sample_count)
+        wic_batch = np.asarray(get_wic_batch(start, stop), dtype=np.float32)
+        if wic_batch.shape != (stop - start, *mlt.shape):
+            raise ValueError("WIC sample batches and MLT grid do not align")
+        if (
+            np.any(~np.isfinite(wic_batch[:, model_support]))
+            or np.any(wic_batch[:, model_support] < 0)
+        ):
+            raise ValueError(
+                "corrected-WIC samples must be finite and nonnegative on model support"
+            )
         lookup = sample_kp_index[start:stop]
         batch_energy = energy[lookup]
-        energy_flux = wic_samples[start:stop] * flux_per_count[lookup]
+        energy_flux = wic_batch * flux_per_count[lookup]
         propagated = fang_2025_conductance(
             batch_energy, energy_flux, magnetic_field_microtesla,
             low_energy_policy=low_energy_policy
@@ -349,8 +374,13 @@ def fang_conductance_from_wic(
         pedersen = np.asarray(propagated["P"], dtype=np.float32)
         if np.any(~np.isfinite(hall[:, conductance_support])) or np.any(~np.isfinite(pedersen[:, conductance_support])):
             raise ValueError("Fang produced nonfinite conductance on supported cells")
-        conductance[start:stop, 0, conductance_support] = hall[:, conductance_support]
-        conductance[start:stop, 1, conductance_support] = pedersen[:, conductance_support]
+        batch = np.zeros((stop - start, 2, *mlt.shape), dtype=np.float32)
+        batch[:, 0, conductance_support] = hall[:, conductance_support]
+        batch[:, 1, conductance_support] = pedersen[:, conductance_support]
+        if state_major_output is None:
+            conductance[start:stop] = batch
+        else:
+            conductance[:, start:stop] = batch.reshape(stop - start, -1).T
 
     diagnostics = {
         "electron_mean_energy": energy,
@@ -372,7 +402,25 @@ def fang_conductance_from_wic(
             "fang_evaluated_energy"
         ):
             diagnostics[name] = diagnostics[name][0]
+    if hasattr(conductance, "flush"):
+        conductance.flush()
     return conductance, diagnostics
+
+
+def fang_conductance_from_wic(
+    wic_samples, kp, mlt, model_support, magnetic_field_microtesla,
+    low_energy_policy, batch_size
+):
+    """Propagate an in-memory corrected-WIC ensemble through Fang."""
+
+    wic_samples = np.asarray(wic_samples, dtype=np.float32)
+    if wic_samples.ndim != 3:
+        raise ValueError("WIC samples must have shape (sample, y, x)")
+    return fang_conductance_from_wic_batches(
+        len(wic_samples), lambda start, stop: wic_samples[start:stop],
+        kp, mlt, model_support, magnetic_field_microtesla,
+        low_energy_policy, batch_size
+    )
 
 
 def _named_selections(filename, model):
@@ -587,15 +635,17 @@ def run(arguments):
         dtype=float,
     )
     if (
-        arguments.draws < 2 or arguments.threads < 1
+        arguments.draws < 2 or arguments.batch_size < 1
+        or arguments.summary_memory_mib < 1 or arguments.threads < 1
         or not np.isfinite(sensor_limits).all()
         or np.any(sensor_limits <= 0)
         or not np.isfinite(sensor_thresholds).all()
         or np.any(sensor_thresholds < 0)
     ):
         raise ValueError(
-            "need at least two draws, positive threads, positive sensor "
-            "display limits and nonnegative sensor thresholds"
+            "need at least two draws, positive batch/summary-memory/thread "
+            "settings, positive sensor display limits and nonnegative "
+            "sensor thresholds"
         )
     if not np.isfinite(limits).all() or np.any(limits <= 0):
         raise ValueError("conductance display limits must be finite and positive")
@@ -695,6 +745,20 @@ def run(arguments):
     model_sha = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
     output.mkdir(parents=True, exist_ok=True)
 
+    cell_count = int(np.prod(model.image_shape))
+    saved_state_count = len(field_names) * cell_count
+    if conductance_enabled:
+        saved_state_count += 2 * cell_count
+    member_bytes = arguments.draws * (
+        saved_state_count + model.latent_dim
+    ) * np.dtype(np.float32).itemsize
+    peak_disk_bytes = int((len(requested) + 1.1) * member_bytes)
+    if shutil.disk_usage(output).free < peak_disk_bytes:
+        raise OSError(
+            "insufficient free disk for temporary members and the final "
+            f"ensemble archive; need about {peak_disk_bytes / 1024**3:.1f} GiB"
+        )
+
     selections = []
     for selection in requested:
         if selection["mode"] == "empirical_regime":
@@ -751,52 +815,102 @@ def run(arguments):
             {"conditioning": condition_values}
             if model.conditioning is not None else {"kp": kp}
         )
-        samples, latent = sample_decoded_ensemble(
-            model, transform, arguments.draws, batch_size=arguments.batch_size,
-            device=device, seed=arguments.seed, return_latent=True,
-            support_mask=sensor_support, **condition_arguments
+        working = destination / ".sampling_work"
+        working.mkdir()
+        sensor_path = working / "sensor_members.npy"
+        latent_path = working / "latent_samples.npy"
+        sensor_members, latent = sample_decoded_members_to_disk(
+            model, transform, arguments.draws, sensor_path, latent_path,
+            batch_size=arguments.batch_size, device=device,
+            seed=arguments.seed, support_mask=sensor_support,
+            **condition_arguments
         )
-        wic = samples[:, 0]
-        if (
-            not np.isfinite(wic[:, wic_support]).all()
-            or np.any(wic[:, wic_support] < 0)
-        ):
-            raise ValueError("decoder produced invalid WIC on learned support")
-        wic_quantiles = np.quantile(wic, [0.1, 0.5, 0.9], axis=0)
+        sensor_shape = (len(field_names), *grid_shape)
+        sensor_mean, sensor_quantiles = state_major_summaries(
+            sensor_members, sensor_shape,
+            working_mib=arguments.summary_memory_mib
+        )
+        wic_members = sensor_members[:cell_count]
+        wic_quantiles = sensor_quantiles[:, 0]
         wic_quantiles[:, ~wic_support] = np.nan
-        mosaic_count = min(36, len(wic))
+        mosaic_count = min(36, arguments.draws)
         mosaic_indices = np.arange(mosaic_count, dtype=np.int32)
-        mosaic_samples = wic[mosaic_indices].copy()
-        distribution_summary = summarize_wic_samples(
-            wic, wic_support, mlat, mlt,
-            threshold=arguments.wic_exceedance_threshold
+        mosaic_samples = np.asarray(
+            wic_members[:, :mosaic_count].T
+        ).reshape(mosaic_count, *grid_shape).copy()
+
+        conductance_products = {}
+        conductance_members = None
+        conductance_path = None
+        if conductance_enabled:
+            conductance_path = working / "conductance_members.npy"
+            conductance_members = np.lib.format.open_memmap(
+                conductance_path, mode="w+", dtype=np.float32,
+                shape=(2 * cell_count, arguments.draws)
+            )
+
+            def get_wic_batch(start, stop):
+                return np.asarray(
+                    wic_members[:, start:stop].T
+                ).reshape(stop - start, *grid_shape)
+
+            conductance_members, physics = fang_conductance_from_wic_batches(
+                arguments.draws, get_wic_batch, kp, mlt, wic_support,
+                fang_geometry["magnetic_field_microtesla"],
+                arguments.fang_low_energy_policy, arguments.batch_size,
+                state_major_output=conductance_members
+            )
+            conductance_mean, conductance_quantiles = state_major_summaries(
+                conductance_members, (2, *grid_shape),
+                working_mib=arguments.summary_memory_mib
+            )
+            conductance_quantiles[
+                :, :, ~physics["conductance_supported"]
+            ] = np.nan
+
+        state_major_anomaly_factor_in_place(
+            sensor_members, sensor_mean,
+            working_mib=arguments.summary_memory_mib
         )
-        sensor_statistics = ensemble_statistics(samples)
-        cell_count = int(np.prod(model.image_shape))
+        sensor_members.flush()
         wic_statistics = {
-            "mean": sensor_statistics["mean"][0],
-            "anomaly_factor": sensor_statistics["anomaly_factor"][:cell_count],
+            "mean": sensor_mean[0],
+            "anomaly_factor": sensor_members[:cell_count],
         }
+        distribution_summary = summarize_wic_anomaly_factor(
+            wic_statistics["mean"], wic_statistics["anomaly_factor"],
+            wic_support, mlat, mlt,
+            threshold=arguments.wic_exceedance_threshold,
+            batch_size=arguments.batch_size
+        )
         si12_products = {}
         si12_statistics = None
         si12_quantiles = None
         si12_mosaic_samples = None
         si12_distribution_summary = None
         if paired:
-            si12 = samples[:, 1]
-            if (
-                not np.isfinite(si12[:, si12_support]).all()
-                or np.any(si12[:, si12_support] < 0)
-            ):
-                raise ValueError(
-                    "decoder produced invalid SI12 on learned support"
-                )
-            si12_quantiles = np.quantile(si12, [0.1, 0.5, 0.9], axis=0)
+            si12_quantiles = sensor_quantiles[:, 1]
             si12_quantiles[:, ~si12_support] = np.nan
-            si12_mosaic_samples = si12[mosaic_indices].copy()
-            si12_distribution_summary = summarize_wic_samples(
-                si12, si12_support, mlat, mlt,
-                threshold=arguments.si12_exceedance_threshold
+            si12_mosaic_samples = np.asarray(
+                sensor_members[
+                    cell_count:2 * cell_count, :mosaic_count
+                ].T
+            ).reshape(mosaic_count, *grid_shape).copy()
+            normalization = np.sqrt(arguments.draws - 1)
+            si12_mosaic_samples *= normalization
+            si12_mosaic_samples += sensor_mean[1]
+            si12_statistics = {
+                "mean": sensor_mean[1],
+                "anomaly_factor": sensor_members[
+                    cell_count:2 * cell_count
+                ],
+            }
+            si12_distribution_summary = summarize_wic_anomaly_factor(
+                si12_statistics["mean"],
+                si12_statistics["anomaly_factor"],
+                si12_support, mlat, mlt,
+                threshold=arguments.si12_exceedance_threshold,
+                batch_size=arguments.batch_size
             )
             si12_feature_names = tuple(
                 name.replace("wic", "si12")
@@ -804,12 +918,6 @@ def run(arguments):
                     "medoid_feature_names"
                 ]
             )
-            si12_statistics = {
-                "mean": sensor_statistics["mean"][1],
-                "anomaly_factor": sensor_statistics["anomaly_factor"][
-                    cell_count:2 * cell_count
-                ],
-            }
             si12_products = {
                 "si12_mean": si12_statistics["mean"],
                 "si12_anomaly_factor": si12_statistics["anomaly_factor"],
@@ -837,20 +945,16 @@ def run(arguments):
                     "exceedance_threshold"
                 ],
             }
-        conductance_products = {}
         if conductance_enabled:
-            conductance, physics = fang_conductance_from_wic(
-                wic, kp, mlt, wic_support,
-                fang_geometry["magnetic_field_microtesla"],
-                arguments.fang_low_energy_policy, arguments.batch_size
+            state_major_anomaly_factor_in_place(
+                conductance_members, conductance_mean,
+                working_mib=arguments.summary_memory_mib
             )
-            conductance_quantiles = np.quantile(
-                conductance, [0.1, 0.5, 0.9], axis=0
-            )
-            conductance_quantiles[
-                :, :, ~physics["conductance_supported"]
-            ] = np.nan
-            conductance_statistics = ensemble_statistics(conductance)
+            conductance_members.flush()
+            conductance_statistics = {
+                "mean": conductance_mean,
+                "anomaly_factor": conductance_members,
+            }
             conductance_products = {
                 "conductance_mean": conductance_statistics["mean"],
                 "conductance_anomaly_factor": conductance_statistics[
@@ -1201,17 +1305,29 @@ def run(arguments):
                     selection["label"], destination, limits
                 )
         selections.append(metadata)
-        del samples, latent, wic, wic_quantiles, wic_statistics
-        del sensor_statistics
+        del wic_members
+        del wic_quantiles, wic_statistics
         del mosaic_samples, mosaic_indices
         del distribution_summary
         if paired:
-            del si12, si12_quantiles, si12_statistics
+            del si12_quantiles, si12_statistics
             del si12_mosaic_samples, si12_distribution_summary
         if conductance_enabled:
-            del conductance, conductance_quantiles
+            del conductance_quantiles
             del conductance_statistics, physics
         del si12_products, conductance_products
+        sensor_members.flush()
+        latent.flush()
+        sensor_members._mmap.close()
+        latent._mmap.close()
+        if conductance_members is not None:
+            conductance_members.flush()
+            conductance_members._mmap.close()
+        sensor_path.unlink()
+        latent_path.unlink()
+        if conductance_path is not None:
+            conductance_path.unlink()
+        working.rmdir()
 
     if hashlib.sha256(artifact_path.read_bytes()).hexdigest() != model_sha:
         raise RuntimeError("source WIC model changed during sampling")
@@ -1280,6 +1396,10 @@ def parse_arguments(argv=None):
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--draws", type=int, default=50000)
     parser.add_argument("--batch-size", type=int, default=256)
+    parser.add_argument(
+        "--summary-memory-mib", type=int, default=256,
+        help="maximum member block used for exact quantiles (default: 256 MiB)"
+    )
     parser.add_argument("--seed", type=int, default=12104)
     parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")

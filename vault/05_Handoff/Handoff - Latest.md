@@ -1,8 +1,33 @@
 # Handoff - Latest
 
-Last updated: 2026-11-21
-Last reviewed: 2026-11-21 (hierarchical184x184 CVAE implementation)
+Last updated: 2026-11-23
+Last reviewed: 2026-11-23 (native-grid Kp sampling checkpoint)
 Repository snapshot: `vae/wic-si12` including the hierarchical native-grid commit, with generated-output changes preserved; `main` remains at `7c71591`
+
+## Native184x184 scalar-Kp model ready to sample
+
+The completed local run `wic_si12_kp_hierarchical_lean_b264_20261122` has the
+expected paired corrected-WIC/SI12,184x184 hierarchical contract. It selected
+epoch495; validation/test objectives are3.759365/3.876941. Its cache-manifest
+SHA256 is
+`db1b61767f35860463991fda2b2823273fb7d4c7d05abb75c53d06c4f1625189`.
+
+Fixed-Kp sampling is now out of core. Decoded sensor members and member-wise
+Fang conductance are stored temporarily in state-major `.npy` arrays; exact
+quantiles use a default256MiB block; the same arrays are centered and normalized
+in place into the existing aligned anomaly-factor products. The archive schema
+and `plot_wic_at_kp.py` are unchanged. Disk is preflighted for all requested
+condition archives plus one working ensemble, and temporary files are removed
+only after a complete archive exists.
+
+An actual8-draw run from the completed model sampled and plotted all WIC, SI12
+and conductance products at184x184. Factor shapes were33856x8 per sensor and
+67712x8 for joint conductance. Fifty-eight focused tests pass. Next run the
+production Kp0--6 sample command with50,000 draws and `--no-plots`, then run
+the plot-only command. The minute-resolved hybrid event path is still separate
+and retains unresolved46x46 assumptions.
+
+Portfolio impact: Central update needed: No.
 
 ## 184x184 transition prerequisites started (2026-11-19)
 

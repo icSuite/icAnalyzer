@@ -625,7 +625,7 @@ def test_joint_sampler_and_plotter_preserve_paired_members(tmp_path, monkeypatch
     ]))
 
     def fixed_samples(
-        model, transform, n_samples, return_latent=False,
+        model, transform, n_samples, members_filename, latent_filename,
         support_mask=None, **kwargs
     ):
         assert model.field_names == ("wic_corrected", "si12")
@@ -635,8 +635,17 @@ def test_joint_sampler_and_plotter_preserve_paired_members(tmp_path, monkeypatch
         samples = np.empty((n_samples, 2, 46, 46), dtype=np.float32)
         samples[:, 0] = sequence[:, None, None] * 100
         samples[:, 1] = sequence[:, None, None] * 5
-        latent = np.column_stack((sequence, -sequence)).astype(np.float32)
-        return (samples, latent) if return_latent else samples
+        members = np.lib.format.open_memmap(
+            members_filename, mode="w+", dtype=np.float32,
+            shape=(2 * 46 * 46, n_samples)
+        )
+        members[:] = samples.reshape(n_samples, -1).T
+        latent = np.lib.format.open_memmap(
+            latent_filename, mode="w+", dtype=np.float32,
+            shape=(n_samples, 2)
+        )
+        latent[:] = np.column_stack((sequence, -sequence))
+        return members, latent
 
     def fixed_precipitation(wic, dwic, kp, mlt):
         wic, kp, mlt = np.broadcast_arrays(wic, kp, mlt)
@@ -659,7 +668,9 @@ def test_joint_sampler_and_plotter_preserve_paired_members(tmp_path, monkeypatch
             "evaluated_energy": energy,
         }
 
-    monkeypatch.setattr(sampler, "sample_decoded_ensemble", fixed_samples)
+    monkeypatch.setattr(
+        sampler, "sample_decoded_members_to_disk", fixed_samples
+    )
     monkeypatch.setattr(
         sampler, "precipitation_from_collapsed_zhang_paxton",
         fixed_precipitation
