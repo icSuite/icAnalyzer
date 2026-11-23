@@ -1,9 +1,28 @@
 # Current State
 
-Last reviewed: 2026-11-23 (beta-zero native-resolution diagnosis)
+Last reviewed: 2026-11-23 (beta=0.0003 native-resolution screen)
 Repository snapshot: `vae/wic-si12` including the hierarchical native-grid
 commit; `main` remains at `7c71591`
 Worktree: user annotation and generated-output changes preserved
+
+## Beta=0.0003 retains reconstruction without collapse (2026-11-23)
+
+The user completed and transferred the50-epoch `beta=0.0003` run with a
+20-epoch warm-up. Identical eight-frame diagnostics give median native/coarse
+normalized errors0.573/0.542 for WIC and0.605/0.470 for SI12. These remain
+close to the beta-zero values0.546/0.513 and0.616/0.488, and materially improve
+on the production-beta values0.798/0.788 and0.671/0.565. Fine-pattern
+correlation is0.523 WIC/0.286 SI12, versus0.545/0.282 at beta zero and
+0.431/0.235 at beta0.048.
+
+All36 global and288 spatial dimensions remain above the descriptive0.01-nat
+threshold. On the selected bright frames, mean KL is70.4 global plus398.6
+spatial, down from195.7+2095.3 at beta zero. Full held-out test KL is348.6
+nats/frame (54.1 global,294.5 spatial), with reconstruction2.322 and total
+objective2.427. Thus0.0003 is a strong rate--distortion candidate: it removes
+most unconstrained KL while retaining reconstruction. The aggregate posterior
+is nevertheless still far from the unit normal, so the next gate is a small
+fixed-Kp prior-sample morphology check, not a50,000-draw production run.
 
 ## Beta-zero diagnostic identifies over-regularization (2026-11-23)
 

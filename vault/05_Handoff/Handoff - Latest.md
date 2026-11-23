@@ -1,8 +1,22 @@
 # Handoff - Latest
 
 Last updated: 2026-11-23
-Last reviewed: 2026-11-23 (beta-zero native-resolution diagnosis)
+Last reviewed: 2026-11-23 (beta=0.0003 native-resolution screen)
 Repository snapshot: `vae/wic-si12` including the hierarchical native-grid commit, with generated-output changes preserved; `main` remains at `7c71591`
+
+## Beta=0.0003 screen passes reconstruction/usage gate
+
+The50-epoch `beta=0.0003`,20-epoch-warm-up model was evaluated on the same
+eight held-out frames. Median native/coarse normalized error is0.573/0.542 WIC
+and0.605/0.470 SI12, close to beta zero and much better than beta0.048.
+Fine-pattern correlations are0.523/0.286. All36 global and288 spatial latent
+dimensions remain active. Selected-frame KL falls from the beta-zero
+195.7+2095.3 to70.4+398.6 nats; full held-out test KL is348.6 nats/frame.
+This is the first useful rate--distortion candidate, but its posterior is still
+far from the unit normal. Next: generate only a small fixed-Kp prior gallery to
+check morphology before any production sampling or another beta choice.
+
+Portfolio impact: Central update needed: No.
 
 ## Beta-zero diagnostic confirms excessive latent regularization
 
