@@ -1,8 +1,23 @@
 # Handoff - Latest
 
 Last updated: 2026-11-23
-Last reviewed: 2026-11-23 (native-resolution Tests A--C)
+Last reviewed: 2026-11-23 (beta-zero native-resolution diagnosis)
 Repository snapshot: `vae/wic-si12` including the hierarchical native-grid commit, with generated-output changes preserved; `main` remains at `7c71591`
+
+## Beta-zero diagnostic confirms excessive latent regularization
+
+The50-epoch `beta=0` run completed, was transferred locally and was evaluated
+on the same eight held-out frames. WIC median native/coarse normalized error
+improves0.798/0.788 ->0.546/0.513; SI12 improves0.671/0.565 ->0.616/0.488.
+Fine-pattern correlation improves0.431/0.235 ->0.545/0.282 for WIC/SI12. All
+36 global and288 spatial dimensions are active above0.01 nat, compared with
+1 and46 in the `beta=0.048` model. The architecture therefore has unused
+capacity; summed KL regularization is the primary demonstrated cause of global
+collapse and smoothing. Beta-zero is not a sampleable standard-normal CVAE.
+Next: test a substantially weaker or capacity-controlled/group-aware KL
+objective with short pilots before another production run.
+
+Portfolio impact: Central update needed: No.
 
 ## Native-resolution Tests B/C complete
 

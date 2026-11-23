@@ -1,9 +1,28 @@
 # Current State
 
-Last reviewed: 2026-11-23 (native-resolution Tests A--C)
+Last reviewed: 2026-11-23 (beta-zero native-resolution diagnosis)
 Repository snapshot: `vae/wic-si12` including the hierarchical native-grid
 commit; `main` remains at `7c71591`
 Worktree: user annotation and generated-output changes preserved
+
+## Beta-zero diagnostic identifies over-regularization (2026-11-23)
+
+The user completed and transferred the50-epoch `beta=0` diagnostic using the
+same184x184 hierarchical architecture and cache. On the identical eight
+held-out frames, median native/coarse normalized WIC reconstruction errors fell
+from0.798/0.788 to0.546/0.513. SI12 fell from0.671/0.565 to0.616/0.488. Median
+fine-pattern correlation rose from0.431 to0.545 for WIC and0.235 to0.282 for
+SI12; fine-amplitude retention rose from0.393/0.315 to0.489/0.395.
+
+All36 global and all288 spatial dimensions exceed the descriptive0.01-nat KL
+threshold under `beta=0`, versus1/36 and46/288 in the regularized artifact.
+This confirms that the original `beta=0.048` objective, with summed KL across
+324 dimensions, caused the global collapse and much of the smoothing. The
+architecture has materially more reconstruction capacity than the production
+run used, although beta-zero reconstruction remains imperfect and beta-zero
+latents do not define a standard-normal generative prior. The next controlled
+work should redesign or greatly weaken latent regularization, not replace the
+184x184 grid or architecture first.
 
 ## Native-resolution Tests B and C completed (2026-11-23)
 
