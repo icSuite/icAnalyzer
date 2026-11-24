@@ -25,12 +25,16 @@ FIELD_NAMES = ("wic_corrected", "si12")
 #%% Deterministic Kp-local bank selection
 
 def evenly_spaced_subset(indices, maximum):
-    """Retain a mission-spanning deterministic subset of sorted indices."""
+    """Retain all indices or a mission-spanning deterministic subset."""
 
     indices = np.asarray(indices, dtype=np.int64)
+    if indices.ndim != 1:
+        raise ValueError("indices must be one-dimensional")
+    if maximum is None:
+        return indices.copy()
     maximum = int(maximum)
-    if indices.ndim != 1 or maximum < 1:
-        raise ValueError("indices must be one-dimensional and maximum positive")
+    if maximum < 1:
+        raise ValueError("maximum must be positive or None")
     if len(indices) <= maximum:
         return indices.copy()
     positions = np.linspace(0, len(indices) - 1, maximum).astype(np.int64)
@@ -38,7 +42,7 @@ def evenly_spaced_subset(indices, maximum):
 
 
 def select_bank_indices(kp, targets, half_width, maximum_per_target):
-    """Select bounded source frames around every requested Kp."""
+    """Select all or a bounded number of frames around each Kp category."""
 
     kp = np.asarray(kp, dtype=float)
     targets = np.asarray(targets, dtype=float)
@@ -200,9 +204,13 @@ def run(arguments):
         raise ValueError("run artifact and empirical-sampling cache do not match")
 
     targets = np.asarray(arguments.kp, dtype=float)
+    maximum_per_target = (
+        None if arguments.all_matching_frames
+        else arguments.bank_frames_per_kp
+    )
     bank_indices, available = select_bank_indices(
         dataset.kp, targets, arguments.kp_half_width,
-        arguments.bank_frames_per_kp,
+        maximum_per_target,
     )
     subset = Subset(dataset, bank_indices.tolist())
     loader_options = {
@@ -239,6 +247,44 @@ def run(arguments):
         "time": dataset.frame_time[bank_indices],
     }
     np.savez_compressed(output / "empirical_latent_bank.npz", **bank_products)
+
+    summary = {
+        "run_directory": str(run_directory),
+        "artifact_sha256": hashlib.sha256(artifact_path.read_bytes()).hexdigest(),
+        "cache_directory": str(cache),
+        "cache_manifest_sha256": dataset.metadata["manifest_sha256"],
+        "split": "train",
+        "bank_frames": int(len(bank_indices)),
+        "bank_frames_per_kp_limit": maximum_per_target,
+        "all_matching_frames": arguments.all_matching_frames,
+        "available_training_frames_by_target": available,
+        "kp_half_width": arguments.kp_half_width,
+        "draws": 0 if arguments.bank_only else arguments.draws,
+        "posterior_mode": None if arguments.bank_only else arguments.posterior_mode,
+        "seed": arguments.seed,
+        "bank_selection_policy": (
+            "every training frame matching each requested discrete Kp category"
+            if arguments.all_matching_frames else
+            "mission-spanning capped subset around each requested Kp category"
+        ),
+        "sampling_policy": (
+            None if arguments.bank_only else
+            "complete joint global+spatial posterior rows sampled uniformly "
+            "from Kp-local training encodings; dimensions and groups are never "
+            "resampled independently; decoder receives the requested Kp category"
+        ),
+        "selections": [],
+    }
+    if arguments.bank_only:
+        (output / "sampling_summary.json").write_text(
+            json.dumps(summary, indent=2) + "\n"
+        )
+        dataset.close()
+        print(
+            f"Encoded all {len(bank_indices)} selected latent rows; "
+            "gallery decoding skipped", flush=True,
+        )
+        return summary
 
     modes = (
         ("mean", False), ("sample", True)
@@ -297,26 +343,7 @@ def run(arguments):
         })
         print(f"Kp {target:g}: empirical latent gallery complete", flush=True)
 
-    summary = {
-        "run_directory": str(run_directory),
-        "artifact_sha256": hashlib.sha256(artifact_path.read_bytes()).hexdigest(),
-        "cache_directory": str(cache),
-        "cache_manifest_sha256": dataset.metadata["manifest_sha256"],
-        "split": "train",
-        "bank_frames": int(len(bank_indices)),
-        "bank_frames_per_kp_limit": arguments.bank_frames_per_kp,
-        "available_training_frames_by_target": available,
-        "kp_half_width": arguments.kp_half_width,
-        "draws": arguments.draws,
-        "posterior_mode": arguments.posterior_mode,
-        "seed": arguments.seed,
-        "sampling_policy": (
-            "complete joint global+spatial posterior rows sampled uniformly "
-            "from Kp-local training encodings; dimensions and groups are never "
-            "resampled independently; decoder receives the exact target Kp"
-        ),
-        "selections": selections,
-    }
+    summary["selections"] = selections
     (output / "sampling_summary.json").write_text(
         json.dumps(summary, indent=2) + "\n"
     )
@@ -332,6 +359,14 @@ def parse_arguments(argv=None):
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--kp-half-width", type=float, default=0.34)
     parser.add_argument("--bank-frames-per-kp", type=int, default=4096)
+    parser.add_argument(
+        "--all-matching-frames", action="store_true",
+        help="encode every training frame in each requested Kp window",
+    )
+    parser.add_argument(
+        "--bank-only", action="store_true",
+        help="write the latent bank without decoding empirical galleries",
+    )
     parser.add_argument("--minimum-pool", type=int, default=100)
     parser.add_argument("--draws", type=int, default=500)
     parser.add_argument("--posterior-mode", choices=("mean", "sample", "both"), default="both")
@@ -359,10 +394,18 @@ def parse_arguments(argv=None):
         or not np.isfinite(arguments.kp_half_width) or arguments.kp_half_width < 0
         or not np.isfinite(arguments.kp).all()
         or any(not 0 <= value <= 9 for value in arguments.kp)
+        or not np.allclose(
+            np.asarray(arguments.kp) * 3,
+            np.round(np.asarray(arguments.kp) * 3),
+            atol=0.0011, rtol=0,
+        )
         or len(set(arguments.kp)) != len(arguments.kp)
         or arguments.wic_vmax <= 0 or arguments.si12_vmax <= 0
     ):
-        parser.error("invalid workers, cache, Kp, half-width or display limits")
+        parser.error(
+            "invalid workers, cache, discrete one-third Kp category, "
+            "half-width or display limits"
+        )
     return arguments
 
 

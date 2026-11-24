@@ -218,9 +218,28 @@ add each selected frame's learned diagonal variance. Plausible empirical
 galleries alongside bad unit-normal galleries identify prior mismatch. They do
 not themselves define a deployable generative prior.
 
+For an uncapped bank containing every training frame in the requested native
+Kp categories, use a narrow tolerance around each stored category and skip the
+unneeded gallery decoding:
+
+```bash
+PYTHONPATH=. python scripts/CVAE/sample_empirical_latent_at_kp.py \
+  /path/to/cvae_run /path/to/matching/cache \
+  --kp 0 2 4 6 \
+  --output /path/to/empty/complete_empirical_latent_bank \
+  --kp-half-width 0.01 --all-matching-frames --bank-only \
+  --encode-batch-size 264 --cache-mib 4096 \
+  --num-workers 4 --prefetch-factor 4 --device cuda
+```
+
+Kp remains a discrete index. GFZ and Product2 encode its traditional thirds
+as decimals (`1.667` is the discrete `2-` category); these are not arbitrary
+continuous Kp values. The narrow numerical tolerance only accommodates that
+storage representation.
+
 Test multimodality from the saved bank without reopening the image cache. Use
-exact Kp values so neighboring activity levels cannot manufacture apparent
-modes. The analyzer fits PCA on orbit-grouped training rows, compares one
+individual Kp categories so neighboring activity levels cannot manufacture
+apparent modes. The analyzer fits PCA on orbit-grouped training rows, compares one
 through six diagonal Gaussian components using training BIC and orbit-held-out
 log density, measures assignment stability, and decodes both each mathematical
 component center and one real high-responsibility representative:

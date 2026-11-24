@@ -66,6 +66,14 @@ in the leading projection, and their decoded centers are morphologically almost
 identical. Treat this as evidence for a non-Gaussian/confounded Kp-conditioned
 aggregate posterior, not evidence for named physical auroral modes.
 
+The mode test must now be repeated without the original4096-frame-per-target
+neighborhood cap. `sample_empirical_latent_at_kp.py` supports
+`--all-matching-frames --bank-only`; with `--kp-half-width0.01` this encodes
+every training frame in the requested discrete Kp categories and skips gallery
+decoding. Kp is not continuous: GFZ/Product2 store the traditional thirds as
+decimals (`1.667` means the discrete `2-` category). That representation
+entered upstream with icBuilder commit `b67a6f1` on2026-08-04, not in the CVAE.
+
 ## Beta=0.001 is the leading prior-sampling candidate (2026-11-24)
 
 The100-epoch `beta=0.001` run with30-epoch warm-up completed, was transferred

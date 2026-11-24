@@ -24,6 +24,18 @@ def test_bank_selection_is_bounded_and_spans_each_kp_pool():
     assert available == {"0.0": 3, "2.0": 4}
 
 
+def test_bank_selection_can_retain_every_matching_frame():
+    # GFZ stores the discrete 2- and 2+ categories as 1.667 and 2.333.
+    kp = np.array([0, 0, 0, 1.667, 2, 2, 2.333, 4])
+
+    selected, available = MODULE.select_bank_indices(
+        kp, targets=[0, 2], half_width=0.01, maximum_per_target=None
+    )
+
+    np.testing.assert_array_equal(selected, [0, 1, 2, 4, 5])
+    assert available == {"0.0": 3, "2.0": 2}
+
+
 def test_empirical_mean_sampling_preserves_complete_joint_rows():
     mu = np.arange(20, dtype=np.float32).reshape(5, 4)
     logvar = np.zeros_like(mu)

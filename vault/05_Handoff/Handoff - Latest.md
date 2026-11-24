@@ -48,6 +48,14 @@ that the Kp-conditioned aggregate posterior is non-Gaussian and confounded by
 omitted conditions/orbit sampling; a flexible prior remains justified, while
 the fitted components should not be presented as physical auroral modes.
 
+Repeat the mode test using an uncapped category bank before designing the
+prior. The empirical sampler now accepts `--all-matching-frames --bank-only`;
+combine it with `--kp-half-width0.01` to encode every training frame at Kp
+categories0,2,4 and6 without decoding galleries. Kp remains discrete. GFZ and
+Product2 encode thirds as decimals (`1.667` is `2-`); this representation was
+introduced upstream in icBuilder commit `b67a6f1` on2026-08-04 rather than by
+the CVAE.
+
 Portfolio impact: Central update needed: No.
 
 ## Beta=0.001 leads the rate--distortion screen

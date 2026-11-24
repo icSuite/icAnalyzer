@@ -227,7 +227,7 @@ def plot_model_selection(records, selected, output, kp):
     for axis in axes:
         axis.axvline(selected, color="black", linestyle="--", linewidth=.8)
         axis.set_xticks(components)
-    figure.suptitle(f"Exact Kp={kp:g}: statistical mode selection")
+    figure.suptitle(f"Kp category {kp:g}: statistical mode selection")
     figure.savefig(output / "model_selection.png", dpi=180)
     figure.savefig(output / "model_selection.pdf")
     plt.close(figure)
@@ -246,7 +246,7 @@ def plot_latent_projection(scores, labels, centers, output, kp):
         edgecolor="black", linewidth=.8, color="white", label="GMM centers",
     )
     axis.set(
-        title=f"Exact Kp={kp:g}: posterior means in PCA space",
+        title=f"Kp category {kp:g}: posterior means in PCA space",
         xlabel="PC1", ylabel="PC2",
     )
     axis.legend()
@@ -285,7 +285,7 @@ def plot_mode_gallery(
     figure.colorbar(contours[0], ax=axes[:2], shrink=.7, label="WIC [counts]")
     figure.colorbar(contours[2], ax=axes[2:], shrink=.7, label="SI12 [counts]")
     figure.suptitle(
-        f"Exact Kp={kp:g}: candidate statistical modes\n"
+        f"Kp category {kp:g}: candidate statistical modes\n"
         "centers are synthetic; representatives are actual encoded frames"
     )
     figure.savefig(output / "decoded_mode_gallery.png", dpi=180)
@@ -454,7 +454,7 @@ def run(arguments):
         )
         if len(selected) < arguments.minimum_frames:
             raise ValueError(
-                f"exact Kp={kp:g} has only {len(selected)} bank frames; "
+                f"Kp category {kp:g} has only {len(selected)} bank frames; "
                 "reduce --minimum-frames or rebuild a larger bank"
             )
         arguments.current_kp = kp
