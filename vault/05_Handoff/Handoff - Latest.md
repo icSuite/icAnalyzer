@@ -37,8 +37,16 @@ samples from the same beta=0.001 decoder.
 from the saved bank: orbit-held-out PCA plus1--6 component GMM comparison,
 assignment stability, decoded centers/real representatives and complete
 assignment/model products. Six focused checks pass; a synthetic two-mode
-end-to-end smoke recovered two stable components. No real-bank mode analysis
-has yet been reported.
+end-to-end smoke recovered two stable components. The real-bank analysis is
+now complete and does not support clean physical
+mode labels. Kp0,4 and6 select complex mixtures by training BIC but have weak
+assignment stability, no convincing selected-complexity gain on held-out
+orbits, and orbit-concentrated minor components. Kp2 selects two near-equal
+components with median adjusted Rand0.98, but one initialization fails and the
+two decoded centers are nearly indistinguishable. The durable conclusion is
+that the Kp-conditioned aggregate posterior is non-Gaussian and confounded by
+omitted conditions/orbit sampling; a flexible prior remains justified, while
+the fitted components should not be presented as physical auroral modes.
 
 Portfolio impact: Central update needed: No.
 

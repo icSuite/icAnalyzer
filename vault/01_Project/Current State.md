@@ -56,7 +56,15 @@ selection for one through six components, measures initialization stability,
 saves frame assignments, and decodes mathematical centers beside real
 high-responsibility representatives. Six focused mode/sampling checks pass. A
 synthetic600-frame/two-mode end-to-end smoke selected two stable components and
-wrote every plot/data product. Real-bank mode results remain unmeasured.
+wrote every plot/data product. The real-bank run does not support clean,
+discrete physical modes. Kp0,4 and6 selected complex mixtures by training BIC
+but had low median assignment stability (0.45,0.29 and0.31), no convincing
+held-out-density gain at the selected complexity, and small components strongly
+concentrated in a few orbits. Kp2 selected two near-equal components with high
+median stability (0.98), but one initialization failed, the components overlap
+in the leading projection, and their decoded centers are morphologically almost
+identical. Treat this as evidence for a non-Gaussian/confounded Kp-conditioned
+aggregate posterior, not evidence for named physical auroral modes.
 
 ## Beta=0.001 is the leading prior-sampling candidate (2026-11-24)
 
