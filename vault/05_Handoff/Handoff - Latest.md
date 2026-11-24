@@ -1,7 +1,7 @@
 # Handoff - Latest
 
 Last updated: 2026-11-24
-Last reviewed: 2026-11-24 (joint conditional prior implementation)
+Last reviewed: 2026-11-24 (joint conditional prior full run)
 Repository snapshot: `vae/wic-si12` including the hierarchical native-grid commit, with generated-output changes preserved; `main` remains at `7c71591`
 
 ## Joint conditional prior is implemented
@@ -20,8 +20,13 @@ Use `--latent-prior conditional-mixture --prior-components 6
 native184 beta0.001/30-epoch-warm-up configuration. This option currently
 supports scalar Kp only. Joint covariance makes global/spatial KL decomposition
 undefined, so histories report total KL only. Seventy-three focused tests pass.
-Next run the full model on the server, then evaluate reconstruction and matched
-fixed-Kp prior galleries rather than another prior-family sweep.
+The full100-epoch run is complete and local; artifact reload confirms184x184
+output,324 total latent values, six components and rank-eight covariance.
+Epoch98 is selected. Held-out test reconstruction, joint KL and total are
+2.1700,148.35 and2.3183, compared with2.217,168.5 and2.385 for the matched
+standard-normal beta0.001 run. Next evaluate the same reconstruction frames
+and matched fixed-Kp decoded galleries; do not infer calibration from the
+objective alone or start another prior-family sweep.
 
 Portfolio impact: Central update needed: No.
 

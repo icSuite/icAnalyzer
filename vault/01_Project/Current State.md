@@ -1,11 +1,11 @@
 # Current State
 
-Last reviewed: 2026-11-24 (joint conditional prior implementation)
+Last reviewed: 2026-11-24 (joint conditional prior full run)
 Repository snapshot: `vae/wic-si12` including the hierarchical native-grid
 commit; `main` remains at `7c71591`
 Worktree: user annotation and generated-output changes preserved
 
-## Joint Kp-conditioned rank-eight prior is ready for full training (2026-11-24)
+## Joint Kp-conditioned rank-eight prior full run is complete (2026-11-24)
 
 The hierarchical CVAE now optionally learns the selected six-component,
 rank-eight Kp-conditioned prior jointly with the encoder and decoder. Training
@@ -20,10 +20,14 @@ it automatically. The fixed standard-normal path remains the default and is
 backward compatible. The server's incompatible optional Triton BMM override is
 disabled for low-rank CUDA runs while standard ATen CUDA BMM is retained.
 
-Seventy-three focused CVAE, artifact and sampling tests pass. Next run the full
-100-epoch native184 Kp model with `--latent-prior conditional-mixture`, six
-components and covariance rank eight; then apply the existing reconstruction
-and fixed-Kp decoded-calibration checks to the resulting artifact.
+Seventy-three focused CVAE, artifact and sampling tests pass. The full
+100-epoch native184 Kp run is now local and reloads with the intended324-value,
+six-component, rank-eight prior. Epoch98 is selected with validation total
+2.2016. Held-out test reconstruction is2.1700, joint KL148.35 and total2.3183;
+the corresponding standard-normal beta0.001 run had reconstruction2.217 and
+KL168.5. This is an encouraging objective improvement, not yet a decoded-
+calibration result. Next apply the existing reconstruction diagnostics and
+matched fixed-Kp prior galleries to the new artifact.
 
 ## Empirical Kp-local latent samples look substantially better (2026-11-24)
 
