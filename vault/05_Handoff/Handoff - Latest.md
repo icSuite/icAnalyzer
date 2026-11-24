@@ -123,6 +123,16 @@ a correlated-data smoke improved negative log density10.08 to7.26. Run the
 rank0/rank8 post-hoc fit on the existing uncapped bank next. Do not retrain the
 CVAE.
 
+That matched fit is complete. Rank8 wins pooled orbit-held-out density at
+-442.099+/-0.166 per frame versus -451.075+/-0.148 for diagonal K=6: +8.976.
+Validation is best at epoch2 and then slowly worsens while training density
+continues improving; early stopping at epoch22 restores the epoch2 checkpoint.
+The Kp6 galleries are plausible and show broader coherent WIC/SI12 variation.
+This is strong overall evidence for residual covariance, but the per-Kp density,
+tail calibration and cross-channel correlation evaluation has not yet been run
+for rank8. Run `evaluate_posthoc_conditional_prior.py` on this fit next; no
+refitting is needed.
+
 Portfolio impact: Central update needed: No.
 
 ## Beta=0.001 leads the rate--distortion screen

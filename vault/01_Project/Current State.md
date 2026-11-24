@@ -157,6 +157,18 @@ reduced negative log density from10.08 to7.26. Fit rank0 versus rank8 on the
 existing uncapped bank next; this is post-hoc prior training, not CVAE
 retraining.
 
+The matched rank0/rank8 fit is complete. Rank8 is selected with pooled
+orbit-held-out log density -442.099+/-0.166 per frame versus
+-451.075+/-0.148 for diagonal K=6, an improvement of8.976. Its best validation
+checkpoint occurs at epoch2; training continues to improve while validation
+slowly degrades until early stopping at epoch22, and the fitter correctly
+restores the epoch2 state. The Kp6 galleries remain plausible and visibly add
+coherent amplitude/morphology variation; their small36-frame screen also shows
+broader WIC/SI12 upper tails. This establishes that residual covariance matters
+overall, but does not yet establish per-Kp or decoded calibration. Run the
+existing per-Kp evaluator on the saved rank0/rank8 directory next before
+choosing rank8 as the production prior.
+
 ## Beta=0.001 is the leading prior-sampling candidate (2026-11-24)
 
 The100-epoch `beta=0.001` run with30-epoch warm-up completed, was transferred
