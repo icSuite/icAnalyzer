@@ -14,6 +14,11 @@ from narrow Kp neighborhoods, and decode at matching Kp. Plausible results
 would justify a learned Kp-conditional prior; bad results would identify a
 deeper latent-geometry/objective problem.
 
+`sample_empirical_latent_at_kp.py` now implements this diagnostic with bounded
+Kp-local bank selection, cache-hash validation, joint-row provenance and
+separate posterior-mean/posterior-sample WIC/SI12 galleries. It has focused
+helper coverage but has not yet been exercised against the full server cache.
+
 Portfolio impact: Central update needed: No.
 
 ## Beta=0.001 leads the rate--distortion screen

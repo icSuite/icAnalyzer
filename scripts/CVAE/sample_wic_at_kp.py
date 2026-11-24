@@ -94,7 +94,8 @@ def polar_contour(
 
 def plot_wic(
     mean, quantiles, support, mlat, mlt, title, output, maximum,
-    field_label="Corrected WIC", file_prefix="wic"
+    field_label="Corrected WIC", file_prefix="wic",
+    distribution_label="model prior",
 ):
     figure, axes = plt.subplots(1, 4, figsize=(13, 3.4), layout="constrained")
     fields = [mean, *quantiles]
@@ -105,7 +106,9 @@ def plot_wic(
     figure.colorbar(
         contour, ax=axes, shrink=0.72, label=f"{field_label} [counts]"
     )
-    figure.suptitle(f"{field_label} model prior: {title}; common latent seed")
+    figure.suptitle(
+        f"{field_label} {distribution_label}: {title}; common latent seed"
+    )
     figure.savefig(output / f"{file_prefix}_at_kp.png", dpi=160)
     figure.savefig(output / f"{file_prefix}_at_kp.pdf")
     plt.close(figure)

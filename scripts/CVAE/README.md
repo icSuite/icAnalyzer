@@ -193,6 +193,31 @@ threshold; override them with `--si12-vmax` and
 `--si12-exceedance-threshold`. Sampling and plotting use the same commands
 shown below; point `CVAE_RUN` at the paired run directory.
 
+When low-beta posterior reconstruction is good but fixed-normal prior samples
+are implausible, diagnose the learned latent support before retraining. The
+empirical sampler selects a bounded mission-spanning training subset near each
+requested Kp, encodes it once, and samples complete joint global+spatial rows.
+It writes separate mosaics for posterior means and posterior draws; latent
+dimensions and groups are never shuffled independently:
+
+```bash
+PYTHONPATH=. python scripts/CVAE/sample_empirical_latent_at_kp.py \
+  /path/to/cvae_run /path/to/matching/cache \
+  --kp 0 2 4 6 \
+  --output /path/to/empty/empirical_latent_gallery \
+  --bank-frames-per-kp 4096 --kp-half-width 0.34 \
+  --draws 500 --posterior-mode both \
+  --encode-batch-size 264 --decode-batch-size 64 \
+  --cache-mib 4096 --num-workers 4 --prefetch-factor 4 \
+  --seed 12104 --device cuda
+```
+
+The cache manifest hash must match the run artifact. `posterior means` test
+whether encoded latent centers occupy a useful manifold; `posterior samples`
+add each selected frame's learned diagonal variance. Plausible empirical
+galleries alongside bad unit-normal galleries identify prior mismatch. They do
+not themselves define a deployable generative prior.
+
 For the native184x184 architecture experiments, select the hierarchical model
 explicitly. `--latent-dim` remains the global latent size; the spatial group is
 configured separately. The primary candidate is36 global values, eight6x6

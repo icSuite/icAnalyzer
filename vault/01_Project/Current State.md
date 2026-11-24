@@ -24,6 +24,13 @@ learned conditional prior (initially an auditable Kp-conditioned mixture or
 similar density). If they remain implausible, the latent geometry/objective
 rather than only the prior is defective.
 
+`sample_empirical_latent_at_kp.py` now implements that bounded diagnostic. It
+selects up to a configurable number of mission-spanning training frames per Kp
+neighborhood, validates the cache hash, encodes the union once, and writes
+separate posterior-mean and posterior-sample WIC/SI12 mosaics. Compact latent
+bank and source-frame provenance are retained. Four focused helper/diagnostic
+tests pass; no full server run has yet been reported.
+
 ## Beta=0.001 is the leading prior-sampling candidate (2026-11-24)
 
 The100-epoch `beta=0.001` run with30-epoch warm-up completed, was transferred
