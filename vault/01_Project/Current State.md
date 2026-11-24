@@ -103,9 +103,8 @@ Gaussian, an improvement of5.948 (about29 combined standard errors). All six
 components remain active and their weights vary smoothly with Kp. The decoded
 Kp0/2/4/6 galleries are plausible; relative to the Gaussian, the mixture gives
 broader and often more coherent oval variation but also noticeably heavier
-high-Kp intensity tails. The pooled validation score is frame-weighted and
-dominated by Kp2, so per-Kp held-out density and empirical tail calibration are
-required before incorporating this prior into joint CVAE training.
+high-Kp intensity tails than K=1. The pooled validation score is frame-weighted
+and dominated by Kp2, so a separate per-Kp evaluation was required.
 
 `evaluate_posthoc_conditional_prior.py` now performs that check without
 refitting either prior. It reuses the saved validation-row split, evaluates
@@ -116,8 +115,26 @@ reporting intensity tails, active area, brightness-weighted oval geometry,
 WIC--SI12 mean-brightness correlation, KS distances and sampled component
 fractions. The decoded held-out posterior is deliberately the reference so the
 test isolates prior calibration from decoder reconstruction error. Five
-focused conditional-prior/evaluator tests pass. Run this evaluator on the
-server bank next; no prior or CVAE training is involved.
+focused conditional-prior/evaluator tests pass.
+
+That evaluation is complete with2,000 decoded draws per source and Kp. K=6
+wins decisively at every Kp: paired held-out gains are5.236+/-0.179,
+5.679+/-0.053,6.801+/-0.112 and6.019+/-0.272 at Kp0/2/4/6, with77--87% of
+individual frames favoring K=6. Mean decoded-metric KS distance falls from
+0.174/0.143/0.140/0.247 for K=1 to0.133/0.087/0.077/0.166 for K=6; K=6 is
+better on11--12 of12 metrics at every Kp. Thus the conditional-mixture result
+is not an artifact of Kp2 prevalence.
+
+K=6 is nevertheless underdispersed relative to held-out posterior decodes,
+not overdispersed: its99th-percentile WIC maximum retains only49/83/75/77% of
+the held-out value at Kp0/2/4/6, and SI12 maximum retains73/77/67/45%.
+WIC--SI12 supported-mean correlation is also not reproduced consistently:
+held-out values0.086/0.104/0.190/0.402 become -0.132/0.050/0.241/0.170. The
+six-component diagonal mixture is a strong baseline and a clear improvement,
+but is not yet a final production prior. The next bounded model change should
+add residual within-component covariance, preferably a low-rank factor form,
+rather than launching another CVAE beta run or treating scalar temperature
+calibration as sufficient.
 
 ## Beta=0.001 is the leading prior-sampling candidate (2026-11-24)
 

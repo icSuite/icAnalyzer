@@ -80,10 +80,9 @@ orbit-held-out comparison with mean log density -451.075+/-0.148 per frame,
 versus -457.023+/-0.144 for K=1: +5.948, about29 combined standard errors. All
 six components are active and their weights vary smoothly with Kp. Both decoded
 priors are plausible; K=6 adds coherent morphological and amplitude variety,
-but its high-Kp samples have heavier intensity tails. Do not start another CVAE
-run yet. First evaluate held-out density separately by Kp and compare sampled
-tails with empirical posterior/observation tails. The pooled score is dominated
-by Kp2 because the bank contains9,089/55,991/22,880/4,321 frames at Kp0/2/4/6.
+with heavier tails than K=1. The pooled score is dominated by Kp2 because the
+bank contains9,089/55,991/22,880/4,321 frames at Kp0/2/4/6, so this result
+required a per-Kp check.
 
 The required check is implemented in
 `evaluate_posthoc_conditional_prior.py`. It uses the exact saved validation
@@ -92,8 +91,22 @@ then compares bounded decoded ensembles with decoded held-out encoder
 posteriors. Outputs include intensity-tail and active-area quantiles,
 brightness-weighted oval geometry, WIC--SI12 correlation, KS distances,
 component fractions, compact plots and metric samples. Five focused tests
-pass. Run it against the full bank on the server next; it does not refit the
-priors or CVAE.
+pass.
+
+The per-Kp evaluation is complete with2,000 decoded draws per source. K=6
+wins at every Kp: paired density gains are5.236+/-0.179,5.679+/-0.053,
+6.801+/-0.112 and6.019+/-0.272 at Kp0/2/4/6, with77--87% frame-level wins.
+Mean decoded-metric KS distance improves from0.174/0.143/0.140/0.247 to
+0.133/0.087/0.077/0.166, and K=6 improves11--12 of12 metrics at each Kp.
+
+The remaining defect is underdispersion and cross-channel dependence. K=6
+retains only49/83/75/77% of the held-out99th-percentile WIC maximum and
+73/77/67/45% of the SI12 maximum at Kp0/2/4/6. Held-out WIC--SI12
+mean-brightness correlations0.086/0.104/0.190/0.402 become
+-0.132/0.050/0.241/0.170. Treat K=6 diagonal as the validated baseline, not
+the final prior. Next implement/test low-rank residual covariance within each
+conditional mixture component; do not run another beta CVAE or rely only on a
+scalar sampling temperature.
 
 Portfolio impact: Central update needed: No.
 
