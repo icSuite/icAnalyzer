@@ -94,7 +94,18 @@ selection. It saves each prior, its Kp-dependent weights and matched decoded
 WIC/SI12 galleries. Components share one membership across the complete latent
 row and are explicitly not physical labels. Ten focused empirical-prior checks
 pass, and a synthetic optimization smoke completes with finite held-out
-density. The real uncapped bank fit has not yet run.
+density.
+
+The real uncapped-bank fit is complete on92,281 frames from927 orbits. The
+six-component prior was selected: its orbit-held-out mean log density is
+-451.075+/-0.148 per frame versus -457.023+/-0.144 for the conditional
+Gaussian, an improvement of5.948 (about29 combined standard errors). All six
+components remain active and their weights vary smoothly with Kp. The decoded
+Kp0/2/4/6 galleries are plausible; relative to the Gaussian, the mixture gives
+broader and often more coherent oval variation but also noticeably heavier
+high-Kp intensity tails. The pooled validation score is frame-weighted and
+dominated by Kp2, so per-Kp held-out density and empirical tail calibration are
+required before incorporating this prior into joint CVAE training.
 
 ## Beta=0.001 is the leading prior-sampling candidate (2026-11-24)
 

@@ -73,8 +73,17 @@ against a six-component conditional mixture using orbit-held-out density,
 samples complete posterior rows including encoder variance, standardizes from
 training orbits only, and decodes matched Kp0/2/4/6 galleries from both. The
 saved prior uses one component membership for the full global+spatial latent
-row. Ten focused checks and a synthetic optimization smoke pass. Run it on the
-uncapped bank next; no CVAE retraining is involved.
+row. Ten focused checks and a synthetic optimization smoke pass.
+
+The uncapped-bank fit is complete on92,281 frames from927 orbits. K=6 wins the
+orbit-held-out comparison with mean log density -451.075+/-0.148 per frame,
+versus -457.023+/-0.144 for K=1: +5.948, about29 combined standard errors. All
+six components are active and their weights vary smoothly with Kp. Both decoded
+priors are plausible; K=6 adds coherent morphological and amplitude variety,
+but its high-Kp samples have heavier intensity tails. Do not start another CVAE
+run yet. First evaluate held-out density separately by Kp and compare sampled
+tails with empirical posterior/observation tails. The pooled score is dominated
+by Kp2 because the bank contains9,089/55,991/22,880/4,321 frames at Kp0/2/4/6.
 
 Portfolio impact: Central update needed: No.
 
