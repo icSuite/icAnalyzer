@@ -1,9 +1,26 @@
 # Current State
 
-Last reviewed: 2026-11-24 (fixed-normal prior failure)
+Last reviewed: 2026-11-24 (empirical latent sampling result)
 Repository snapshot: `vae/wic-si12` including the hierarchical native-grid
 commit; `main` remains at `7c71591`
 Worktree: user annotation and generated-output changes preserved
+
+## Empirical Kp-local latent samples look substantially better (2026-11-24)
+
+The user ran the new empirical conditional sampler for the beta0.001 model and
+reports that its plots look much better than fixed-unit-normal prior samples.
+The sampler encoded up to4,096 mission-spanning training frames within0.34 Kp
+of each target, preserved each complete36-global+288-spatial posterior row, and
+decoded500 selected rows at exact Kp0/2/4/6. Separate products distinguish
+posterior means from draws that also include learned diagonal variance.
+
+This supports prior mismatch as the main cause of the failed low-beta unit-
+normal galleries: the encoder/decoder representation produces plausible fields
+for in-support latents, while `N(0,I)` falls outside the learned aggregate
+posterior. The empirical sampler is a diagnostic/resampling model, not yet a
+deployable generative prior. Next compare mean versus posterior-draw galleries;
+if both are acceptable, fit and validate an explicit Kp-conditional density to
+the joint latent vectors, starting with an auditable conditional mixture.
 
 ## Fixed standard-normal prior fails low-beta models (2026-11-24)
 

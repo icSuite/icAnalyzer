@@ -1,8 +1,20 @@
 # Handoff - Latest
 
 Last updated: 2026-11-24
-Last reviewed: 2026-11-24 (fixed-normal prior failure)
+Last reviewed: 2026-11-24 (empirical latent sampling result)
 Repository snapshot: `vae/wic-si12` including the hierarchical native-grid commit, with generated-output changes preserved; `main` remains at `7c71591`
+
+## Empirical conditional latent galleries improve substantially
+
+The user ran `sample_empirical_latent_at_kp.py` on beta0.001 and reports that
+the plots look much better than fixed-normal prior samples. This supports an
+aggregate-posterior/prior mismatch rather than decoder failure: complete joint
+latent rows near each target Kp decode plausibly where `N(0,I)` did not. The
+current method resamples training-supported latent mixtures and is diagnostic,
+not a deployable prior. Next inspect posterior-mean versus posterior-draw
+galleries; if both pass, fit an explicit Kp-conditional joint latent density.
+
+Portfolio impact: Central update needed: No.
 
 ## Low-beta fixed-normal prior samples fail visually
 
