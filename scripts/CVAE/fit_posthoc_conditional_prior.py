@@ -43,6 +43,20 @@ def candidate_directory(components, covariance_rank):
     suffix = f"_rank{covariance_rank}" if covariance_rank else ""
     return f"prior_k{components}{suffix}"
 
+
+def disable_triton_bmm_override_for_low_rank_fit(covariance_ranks, device):
+    """Use ordinary ATen BMM when PyTorch's optional Triton override is unsafe."""
+
+    backend = getattr(torch.backends, "python_native", None)
+    if (
+        device.type != "cuda" or not any(covariance_ranks)
+        or backend is None or not hasattr(backend, "disable_operations")
+    ):
+        return False
+    backend.disable_operations("bmm")
+    return True
+
+
 def latent_dataset(bank, rows):
     rows = np.asarray(rows, dtype=np.int64)
     return TensorDataset(
@@ -323,6 +337,14 @@ def run(arguments):
         "cuda" if torch.cuda.is_available() else "cpu"
     ) if arguments.device == "auto" else arguments.device
     device = torch.device(device_name)
+    if disable_triton_bmm_override_for_low_rank_fit(
+        arguments.covariance_ranks, device
+    ):
+        print(
+            "Disabled PyTorch's optional Triton BMM override for the low-rank "
+            "fit; using the standard ATen CUDA implementation.",
+            flush=True,
+        )
     artifact_path = run_directory / "wic_cvae.pt"
     model, transform, artifact = load_run_artifact(artifact_path, device=device)
     if (

@@ -142,7 +142,14 @@ never constructs a324x324 covariance matrix; sampling adds one coherent
 rank-dimensional residual draw per frame. The fitter can compare matched
 `--components 6 --covariance-ranks 0 8` candidates on the same orbit split,
 and the evaluator always uses the matched diagonal K=6 candidate as the
-baseline, including when the low-rank candidate loses. Eighteen focused
+baseline, including when the low-rank candidate loses.
+
+The first server attempt completed the diagonal candidate but failed on the
+first rank8 backward pass because PyTorch's optional Python-native Triton BMM
+override tried to compile against system CUDA headers that lack `CUtensorMap`.
+The fitter now disables only that optional `bmm` override for CUDA low-rank
+fits, falling back to the standard ATen CUDA implementation without changing
+the model or likelihood. Nineteen focused
 prior/empirical tests pass, including
 agreement with an explicit full-covariance Gaussian, finite factor gradients
 and configuration/sampling round-trip. A correlated-data optimization smoke

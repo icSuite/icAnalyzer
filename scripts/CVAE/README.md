@@ -306,6 +306,10 @@ PYTHONPATH=. python scripts/CVAE/fit_posthoc_conditional_prior.py \
 The rank-zero candidate preserves the original diagonal implementation. The
 same orbit split and posterior standardization are used for both candidates;
 the saved summary records the covariance rank and selects by held-out density.
+For CUDA low-rank fits the script disables only PyTorch's optional
+Python-native/Triton `bmm` override and uses the standard ATen CUDA operation.
+This avoids runtime compilation against incompatible system CUDA headers and
+does not change the likelihood calculation.
 Run the same evaluator on this new output to determine whether low-rank
 covariance improves both per-Kp density and decoded tail/cross-channel
 calibration.

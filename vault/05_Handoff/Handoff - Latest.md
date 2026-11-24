@@ -113,7 +113,11 @@ evaluation avoids dense324x324 covariance matrices, and rank zero is backward
 compatible. The fitter accepts `--components 6 --covariance-ranks 0 8`, saves
 both matched candidates and records the selected rank; the evaluator compares
 low rank against its matched K=6 diagonal baseline whether it wins or loses.
-Eighteen focused tests pass,
+The first server attempt then exposed a PyTorch/Triton compatibility issue:
+the optional native `bmm` override tried to compile against CUDA headers
+without `CUtensorMap`. The fitter now disables only this override for CUDA
+low-rank runs and uses standard ATen CUDA BMM; the scientific calculation is
+unchanged. Nineteen focused tests pass,
 including an explicit full-covariance reference and finite factor gradients;
 a correlated-data smoke improved negative log density10.08 to7.26. Run the
 rank0/rank8 post-hoc fit on the existing uncapped bank next. Do not retrain the

@@ -10,6 +10,9 @@ from scripts.CVAE.evaluate_posthoc_conditional_prior import (
     field_metrics,
     rows_near_kp,
 )
+from scripts.CVAE.fit_posthoc_conditional_prior import (
+    disable_triton_bmm_override_for_low_rank_fit,
+)
 
 
 def test_single_component_zero_network_matches_standard_normal():
@@ -124,6 +127,21 @@ def test_legacy_diagonal_configuration_remains_loadable():
 
     assert restored.covariance_rank == 0
     assert restored.factor_head is None
+
+
+def test_low_rank_cuda_fit_disables_optional_native_bmm(monkeypatch):
+    calls = []
+    backend = type("Backend", (), {
+        "disable_operations": lambda self, name: calls.append(name),
+    })()
+    monkeypatch.setattr(torch.backends, "python_native", backend, raising=False)
+
+    disabled = disable_triton_bmm_override_for_low_rank_fit(
+        covariance_ranks=(0, 8), device=torch.device("cuda")
+    )
+
+    assert disabled
+    assert calls == ["bmm"]
 
 
 def test_aggregate_posterior_standardization_includes_encoder_variance():
