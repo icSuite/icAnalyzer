@@ -1,9 +1,27 @@
 # Current State
 
-Last reviewed: 2026-11-23 (beta=0.0003 native-resolution screen)
+Last reviewed: 2026-11-24 (beta=0.001 native-resolution screen)
 Repository snapshot: `vae/wic-si12` including the hierarchical native-grid
 commit; `main` remains at `7c71591`
 Worktree: user annotation and generated-output changes preserved
+
+## Beta=0.001 is the leading prior-sampling candidate (2026-11-24)
+
+The100-epoch `beta=0.001` run with30-epoch warm-up completed, was transferred
+locally and was evaluated on the identical eight held-out frames. Median
+native/coarse normalized errors are0.559/0.528 WIC and0.601/0.466 SI12.
+Fine-pattern correlations are0.562/0.295 and amplitude-retention ratios are
+0.475/0.379. These equal or improve the50-epoch beta0.0003 candidate while
+retaining reconstruction close to beta zero.
+
+All36 global dimensions and216/288 spatial dimensions exceed the descriptive
+0.01-nat threshold on the selected frames. Selected-frame KL is24.5 global
+plus224.9 spatial, compared with70.4+398.6 at beta0.0003. Full held-out test
+KL is168.5 nats/frame (15.7+152.8), reconstruction2.217 and total2.385; epoch98
+was selected. Beta0.001 therefore dominates beta0.0003 on this screen by
+halving KL without a reconstruction penalty. Stop beta training for now. The
+next gate is a small matched fixed-Kp prior gallery for beta0.001 and0.0003
+using identical latent seeds; do not launch50,000-draw production sampling.
 
 ## Beta=0.0003 retains reconstruction without collapse (2026-11-23)
 

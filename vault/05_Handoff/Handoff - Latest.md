@@ -1,8 +1,21 @@
 # Handoff - Latest
 
-Last updated: 2026-11-23
-Last reviewed: 2026-11-23 (beta=0.0003 native-resolution screen)
+Last updated: 2026-11-24
+Last reviewed: 2026-11-24 (beta=0.001 native-resolution screen)
 Repository snapshot: `vae/wic-si12` including the hierarchical native-grid commit, with generated-output changes preserved; `main` remains at `7c71591`
+
+## Beta=0.001 leads the rate--distortion screen
+
+The100-epoch beta0.001 run passed identical Tests B/C. Median native/coarse
+normalized error is0.559/0.528 WIC and0.601/0.466 SI12; fine-pattern
+correlation is0.562/0.295 and amplitude retention0.475/0.379. All36 global and
+216/288 spatial dimensions exceed0.01 nat. Full held-out test KL is168.5
+nats/frame with reconstruction2.217, versus348.6 and2.322 at beta0.0003.
+Epoch98 was selected. Beta0.001 is the current candidate. Stop training more
+betas and make a small matched fixed-Kp prior gallery for beta0.001 versus
+0.0003 with common seeds before any50,000-draw production run.
+
+Portfolio impact: Central update needed: No.
 
 ## Beta=0.0003 screen passes reconstruction/usage gate
 
