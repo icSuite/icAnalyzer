@@ -1,9 +1,28 @@
 # Current State
 
-Last reviewed: 2026-11-24 (beta=0.001 native-resolution screen)
+Last reviewed: 2026-11-24 (fixed-normal prior failure)
 Repository snapshot: `vae/wic-si12` including the hierarchical native-grid
 commit; `main` remains at `7c71591`
 Worktree: user annotation and generated-output changes preserved
+
+## Fixed standard-normal prior fails low-beta models (2026-11-24)
+
+The user generated matched500-draw prior galleries at Kp0/2/4/6 with common
+seeds. Their visual assessment is that beta0.0003 produces absolute nonsense;
+beta0.001 is better but remains bad. This is consistent with the held-out KL:
+the two models reconstruct well but their aggregate posteriors remain far from
+the fixed unit-normal prior. Increasing one scalar beta until unit-normal draws
+work previously caused global collapse and severe smoothing, so further scalar
+beta sweeps are not the next step.
+
+Next isolate the prior mismatch without retraining the decoder: encode a broad
+training subset, retain each full joint global+spatial latent vector with its
+Kp, and sample from the empirical aggregate posterior in narrow Kp
+neighborhoods. Do not sample dimensions or latent groups independently. If
+those in-support latents decode plausibly, replace the fixed normal with a
+learned conditional prior (initially an auditable Kp-conditioned mixture or
+similar density). If they remain implausible, the latent geometry/objective
+rather than only the prior is defective.
 
 ## Beta=0.001 is the leading prior-sampling candidate (2026-11-24)
 

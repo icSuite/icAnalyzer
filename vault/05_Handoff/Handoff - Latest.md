@@ -1,8 +1,20 @@
 # Handoff - Latest
 
 Last updated: 2026-11-24
-Last reviewed: 2026-11-24 (beta=0.001 native-resolution screen)
+Last reviewed: 2026-11-24 (fixed-normal prior failure)
 Repository snapshot: `vae/wic-si12` including the hierarchical native-grid commit, with generated-output changes preserved; `main` remains at `7c71591`
+
+## Low-beta fixed-normal prior samples fail visually
+
+The user inspected matched500-draw Kp0/2/4/6 galleries: beta0.0003 produces
+absolute nonsense and beta0.001 is better but still bad. Stop scalar-beta
+training. The next diagnostic is empirical conditional aggregate-posterior
+sampling: encode a broad training subset, sample complete joint latent vectors
+from narrow Kp neighborhoods, and decode at matching Kp. Plausible results
+would justify a learned Kp-conditional prior; bad results would identify a
+deeper latent-geometry/objective problem.
+
+Portfolio impact: Central update needed: No.
 
 ## Beta=0.001 leads the rate--distortion screen
 
