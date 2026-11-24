@@ -133,6 +133,20 @@ tail calibration and cross-channel correlation evaluation has not yet been run
 for rank8. Run `evaluate_posthoc_conditional_prior.py` on this fit next; no
 refitting is needed.
 
+The full per-Kp evaluation is complete. Rank8 beats diagonal K=6 at every Kp:
+paired log-density gains are5.492+/-0.226,8.153+/-0.072,12.258+/-0.142 and
+8.146+/-0.355 at Kp0/2/4/6, with69--93% frame-level wins. Mean12-metric
+decoded KS changes from0.133/0.093/0.080/0.172 to
+0.129/0.071/0.090/0.144. Rank8 restores WIC99th-percentile maxima to roughly
+the held-out values at Kp2/4/6 (101/111/104%) but Kp0 remains low at58%; Kp6
+SI12 supported-mean tail reaches98% while its maximum reaches only62%.
+Correlation improves at Kp0/6 but is mixed elsewhere, the Kp6 WIC bulk becomes
+too faint, and Kp0 SI12 becomes too active. Select rank8 as the preferred
+post-hoc latent prior/current sampler, with explicit calibration caveats. Do
+not run a blind rank sweep. Next expose the saved prior in the general sampling
+path; a later jointly learned prior should keep low-rank covariance and retain
+these decoded checks.
+
 Portfolio impact: Central update needed: No.
 
 ## Beta=0.001 leads the rate--distortion screen

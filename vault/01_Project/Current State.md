@@ -169,6 +169,27 @@ overall, but does not yet establish per-Kp or decoded calibration. Run the
 existing per-Kp evaluator on the saved rank0/rank8 directory next before
 choosing rank8 as the production prior.
 
+The full rank0/rank8 evaluation is complete with2,000 decoded draws per source
+and Kp. Rank8 wins latent density at every Kp: paired gains are
+5.492+/-0.226,8.153+/-0.072,12.258+/-0.142 and8.146+/-0.355 at Kp0/2/4/6,
+with69--93% frame-level wins. Residual covariance therefore matters throughout
+the Kp range, not only in the Kp2-dominated pooled population.
+
+Decoded calibration improves materially but not uniformly. Mean12-metric KS
+distance changes from0.133/0.093/0.080/0.172 for diagonal K=6 to
+0.129/0.071/0.090/0.144 for rank8 at Kp0/2/4/6. Rank8 brings the WIC99th-
+percentile maximum from65/77/84% to101/111/104% of the held-out value at
+Kp2/4/6, while Kp0 remains underdispersed at58%. At Kp6 the SI12
+99th-percentile supported mean improves from62% to98%, but its maximum remains
+low at62%. Cross-channel mean-brightness correlation moves closer at Kp0 and6
+but overshoots at Kp4; it is not fully calibrated. Rank8 also shifts the Kp6
+WIC bulk too faint and makes Kp0 SI12 too active. Rank8 is therefore the
+preferred post-hoc latent-density prior and current sampling candidate, not a
+claim of complete physical calibration. Do not run a blind rank sweep. The
+next implementation choice is to expose this saved prior in the general
+samplers; any future jointly learned prior should retain the low-rank form and
+evaluate decoded calibration explicitly.
+
 ## Beta=0.001 is the leading prior-sampling candidate (2026-11-24)
 
 The100-epoch `beta=0.001` run with30-epoch warm-up completed, was transferred
