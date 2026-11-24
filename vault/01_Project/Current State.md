@@ -66,13 +66,25 @@ in the leading projection, and their decoded centers are morphologically almost
 identical. Treat this as evidence for a non-Gaussian/confounded Kp-conditioned
 aggregate posterior, not evidence for named physical auroral modes.
 
-The mode test must now be repeated without the original4096-frame-per-target
-neighborhood cap. `sample_empirical_latent_at_kp.py` supports
+The mode test can bypass the original4096-frame-per-target neighborhood cap.
+`sample_empirical_latent_at_kp.py` supports
 `--all-matching-frames --bank-only`; with `--kp-half-width0.01` this encodes
 every training frame in the requested discrete Kp categories and skips gallery
 decoding. Kp is not continuous: GFZ/Product2 store the traditional thirds as
 decimals (`1.667` means the discrete `2-` category). That representation
 entered upstream with icBuilder commit `b67a6f1` on2026-08-04, not in the CVAE.
+
+The uncapped grouped run is complete using width/tolerance0.34, so each integer
+target pools its minus, neutral and plus categories. It covers92,281 frames and
+927 unique orbits: Kp0/2/4/6 contain9,089/55,991/22,880/4,321 frames from
+174/629/253/48 orbits. Training BIC selects5/5/6/6 components, but stability
+medians are0.69/0.86/0.52/0.19; held-out density generally plateaus and Kp6 is
+worse at six than five components. Most decoded centers vary continuously in
+brightness and oval morphology rather than defining distinct regimes. Minor
+components can remain orbit/category concentrated. The40-component PCA cap
+captures only0.74--0.82 of latent variance. The larger result therefore
+supports a flexible non-Gaussian conditional density, not a fixed set of
+physical auroral modes.
 
 ## Beta=0.001 is the leading prior-sampling candidate (2026-11-24)
 

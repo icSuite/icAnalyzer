@@ -48,13 +48,24 @@ that the Kp-conditioned aggregate posterior is non-Gaussian and confounded by
 omitted conditions/orbit sampling; a flexible prior remains justified, while
 the fitted components should not be presented as physical auroral modes.
 
-Repeat the mode test using an uncapped category bank before designing the
-prior. The empirical sampler now accepts `--all-matching-frames --bank-only`;
+The empirical sampler accepts `--all-matching-frames --bank-only` for an
+uncapped category bank;
 combine it with `--kp-half-width0.01` to encode every training frame at Kp
 categories0,2,4 and6 without decoding galleries. Kp remains discrete. GFZ and
 Product2 encode thirds as decimals (`1.667` is `2-`); this representation was
 introduced upstream in icBuilder commit `b67a6f1` on2026-08-04 rather than by
 the CVAE.
+
+That uncapped run is complete with width/tolerance0.34, pooling minus, neutral
+and plus within each integer Kp group. It uses92,281 frames from927 unique
+orbits. Kp0/2/4/6 select5/5/6/6 components by training BIC, with median
+assignment stability0.69/0.86/0.52/0.19. BIC commonly continues falling at the
+six-component ceiling, held-out density mostly plateaus, and Kp6 prefers five
+components held out. Decoded centers mainly trace continuous brightness/oval
+variation rather than stable discrete regimes. Treat mixture components only
+as density machinery; the supported conclusion is a flexible, non-Gaussian
+Kp-conditional prior rather than named physical modes. PCA40 retains only
+0.74--0.82 of variance, a qualification for any detailed component count.
 
 Portfolio impact: Central update needed: No.
 
