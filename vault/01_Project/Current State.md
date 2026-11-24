@@ -1,9 +1,29 @@
 # Current State
 
-Last reviewed: 2026-11-24 (empirical latent sampling result)
+Last reviewed: 2026-11-24 (joint conditional prior implementation)
 Repository snapshot: `vae/wic-si12` including the hierarchical native-grid
 commit; `main` remains at `7c71591`
 Worktree: user annotation and generated-output changes preserved
+
+## Joint Kp-conditioned rank-eight prior is ready for full training (2026-11-24)
+
+The hierarchical CVAE now optionally learns the selected six-component,
+rank-eight Kp-conditioned prior jointly with the encoder and decoder. Training
+uses the decoder's existing reparameterized posterior sample to estimate
+`log q(z|image,Kp) - log p(z|Kp)`; the mixture density is exact and there is no
+second encoder or decoder pass. The prior couples the complete 36-global plus
+288-spatial latent row, so only the joint KL is reported.
+
+The model configuration and state include the prior network, artifact reload
+restores it, and the ordinary in-memory and out-of-core fixed-Kp samplers use
+it automatically. The fixed standard-normal path remains the default and is
+backward compatible. The server's incompatible optional Triton BMM override is
+disabled for low-rank CUDA runs while standard ATen CUDA BMM is retained.
+
+Seventy-three focused CVAE, artifact and sampling tests pass. Next run the full
+100-epoch native184 Kp model with `--latent-prior conditional-mixture`, six
+components and covariance rank eight; then apply the existing reconstruction
+and fixed-Kp decoded-calibration checks to the resulting artifact.
 
 ## Empirical Kp-local latent samples look substantially better (2026-11-24)
 

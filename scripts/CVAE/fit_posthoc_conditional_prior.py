@@ -19,6 +19,7 @@ from icanalyzer.cvae.artifacts import load_run_artifact
 from icanalyzer.cvae.prior import (
     ConditionalGaussianMixturePrior,
     aggregate_posterior_standardization,
+    disable_optional_native_bmm_override,
 )
 from scripts.CVAE.analyze_empirical_latent_modes import (
     FIELD_NAMES,
@@ -42,19 +43,6 @@ def candidate_label(components, covariance_rank):
 def candidate_directory(components, covariance_rank):
     suffix = f"_rank{covariance_rank}" if covariance_rank else ""
     return f"prior_k{components}{suffix}"
-
-
-def disable_triton_bmm_override_for_low_rank_fit(covariance_ranks, device):
-    """Use ordinary ATen BMM when PyTorch's optional Triton override is unsafe."""
-
-    backend = getattr(torch.backends, "python_native", None)
-    if (
-        device.type != "cuda" or not any(covariance_ranks)
-        or backend is None or not hasattr(backend, "disable_operations")
-    ):
-        return False
-    backend.disable_operations("bmm")
-    return True
 
 
 def latent_dataset(bank, rows):
@@ -337,8 +325,8 @@ def run(arguments):
         "cuda" if torch.cuda.is_available() else "cpu"
     ) if arguments.device == "auto" else arguments.device
     device = torch.device(device_name)
-    if disable_triton_bmm_override_for_low_rank_fit(
-        arguments.covariance_ranks, device
+    if disable_optional_native_bmm_override(
+        max(arguments.covariance_ranks), device
     ):
         print(
             "Disabled PyTorch's optional Triton BMM override for the low-rank "

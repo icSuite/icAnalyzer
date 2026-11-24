@@ -5,6 +5,20 @@ import torch
 from torch import nn
 
 
+def disable_optional_native_bmm_override(covariance_rank, device):
+    """Use ordinary ATen BMM when an optional Triton override is unsafe."""
+
+    device = torch.device(device)
+    backend = getattr(torch.backends, "python_native", None)
+    if (
+        device.type != "cuda" or int(covariance_rank) == 0
+        or backend is None or not hasattr(backend, "disable_operations")
+    ):
+        return False
+    backend.disable_operations("bmm")
+    return True
+
+
 class ConditionalGaussianMixturePrior(nn.Module):
     """Kp-conditioned diagonal or low-rank mixture over a joint latent row."""
 
@@ -62,15 +76,17 @@ class ConditionalGaussianMixturePrior(nn.Module):
             nn.init.normal_(self.factor_head.weight, mean=0, std=0.001)
             nn.init.zeros_(self.factor_head.bias)
 
-    def _distribution_parameters_at(self, kp):
+    def _distribution_parameters_at(self, kp, validate=True):
         """Return all parameters, including optional low-rank loadings."""
 
         reference = next(self.parameters())
         kp = torch.as_tensor(kp, dtype=reference.dtype, device=reference.device)
         if kp.ndim == 0:
             kp = kp[None]
-        if (
-            kp.ndim != 1 or not torch.isfinite(kp).all()
+        if kp.ndim != 1:
+            raise ValueError("Kp must be a finite vector within 0--9")
+        if validate and (
+            not torch.isfinite(kp).all()
             or torch.any((kp < 0) | (kp > 9))
         ):
             raise ValueError("Kp must be a finite vector within 0--9")
@@ -103,13 +119,15 @@ class ConditionalGaussianMixturePrior(nn.Module):
 
         return self._distribution_parameters_at(kp)[3]
 
-    def log_prob(self, latent, kp):
+    def log_prob(self, latent, kp, validate=True):
         """Evaluate the standardized joint latent log density."""
 
         latent = torch.as_tensor(latent)
         if latent.ndim != 2 or latent.shape[1] != self.latent_dim:
             raise ValueError("latent values do not match prior dimension")
-        logits, means, logvars, factors = self._distribution_parameters_at(kp)
+        logits, means, logvars, factors = self._distribution_parameters_at(
+            kp, validate=validate
+        )
         if len(logits) != len(latent):
             raise ValueError("Kp and latent batches must align")
         residual = latent[:, None] - means

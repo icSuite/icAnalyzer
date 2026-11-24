@@ -6,6 +6,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from .model import PartialConv2d, _spline_basis
+from .prior import ConditionalGaussianMixturePrior
 
 
 #%% Shared spatial operations
@@ -130,6 +131,7 @@ class HierarchicalSplineConditionalVAE(nn.Module):
         encoder_mask_policy="union",
         kp_conditioning=None,
         conditioning=None,
+        latent_prior=None,
         field_names=None,
         magnetic_latitude=None,
     ):
@@ -192,6 +194,43 @@ class HierarchicalSplineConditionalVAE(nn.Module):
             self.latent_groups["spatial"] = (
                 self.global_latent_dim, self.latent_dim
             )
+
+        self.latent_prior = None
+        self.latent_prior_configuration = None
+        if latent_prior is not None:
+            if self.kp_conditioning is None or self.conditioning is not None:
+                raise ValueError(
+                    "learned conditional latent prior requires scalar Kp conditioning"
+                )
+            latent_prior = dict(latent_prior)
+            if latent_prior.get("kind") != "conditional_gaussian_mixture_v1":
+                raise ValueError("unsupported hierarchical latent prior")
+            for name, expected in (
+                ("latent_dim", self.latent_dim),
+                ("kp_center", float(self.kp_conditioning["center"])),
+                ("kp_scale", float(self.kp_conditioning["scale"])),
+            ):
+                if name in latent_prior and not np.isclose(
+                    float(latent_prior[name]), expected
+                ):
+                    raise ValueError(
+                        "latent prior does not align with model latent/Kp configuration"
+                    )
+            self.latent_prior = ConditionalGaussianMixturePrior(
+                latent_dim=self.latent_dim,
+                components=int(latent_prior.get("components", 6)),
+                hidden_dim=int(latent_prior.get("hidden_dim", 64)),
+                kp_center=float(self.kp_conditioning["center"]),
+                kp_scale=float(self.kp_conditioning["scale"]),
+                minimum_logvar=float(latent_prior.get("minimum_logvar", -8)),
+                maximum_logvar=float(latent_prior.get("maximum_logvar", 4)),
+                covariance_rank=int(latent_prior.get("covariance_rank", 8)),
+                maximum_factor=float(latent_prior.get("maximum_factor", 2)),
+            )
+            self.latent_prior_configuration = {
+                "kind": "conditional_gaussian_mixture_v1",
+                **self.latent_prior.configuration(),
+            }
 
         coordinates = self._coordinate_maps(magnetic_latitude)
         self.register_buffer("coordinates", coordinates)
@@ -414,6 +453,29 @@ class HierarchicalSplineConditionalVAE(nn.Module):
         standard_deviation = torch.exp(0.5 * logvar)
         return mu + torch.randn_like(standard_deviation) * standard_deviation
 
+    def sample_prior(
+        self, count, generator=None, kp=None, conditioning=None,
+    ):
+        """Sample the configured prior in the model's native latent coordinates."""
+
+        count = int(count)
+        if count < 1:
+            raise ValueError("prior sample count must be positive")
+        reference = next(self.parameters())
+        if self.latent_prior is None:
+            return torch.randn(
+                count, self.latent_dim, dtype=reference.dtype,
+                device=reference.device, generator=generator,
+            )
+        if conditioning is not None or kp is None:
+            raise ValueError("learned latent prior sampling requires explicit Kp")
+        kp = torch.as_tensor(kp, dtype=reference.dtype, device=reference.device)
+        if kp.ndim == 0:
+            kp = kp.expand(count)
+        if kp.shape != (count,):
+            raise ValueError("prior sampling requires one Kp value per member")
+        return self.latent_prior.sample(kp, generator=generator)[0]
+
     def decode_coefficients(self, latent, kp=None, conditioning=None):
         if latent.ndim != 2 or latent.shape[1] != self.latent_dim:
             raise ValueError("latent array does not match hierarchical model")
@@ -451,7 +513,10 @@ class HierarchicalSplineConditionalVAE(nn.Module):
             self.column_basis, coefficients, self.row_basis
         )
 
-    def forward(self, encoder_input, valid=None, kp=None, conditioning=None):
+    def forward(
+        self, encoder_input, valid=None, kp=None, conditioning=None,
+        return_latent=False,
+    ):
         mu, logvar = self.encode(
             encoder_input, valid, kp=kp, conditioning=conditioning
         )
@@ -459,18 +524,21 @@ class HierarchicalSplineConditionalVAE(nn.Module):
         reconstructed = self.decode(
             latent, kp=kp, conditioning=conditioning
         )
+        if return_latent:
+            return reconstructed, mu, logvar, latent
         return reconstructed, mu, logvar
 
     def forward_samples(
         self, encoder_input, valid=None, kp=None, conditioning=None,
-        latent_samples=1
+        latent_samples=1, return_latent=False,
     ):
         latent_samples = int(latent_samples)
         if latent_samples < 1:
             raise ValueError("latent_samples must be positive")
         if latent_samples == 1:
             return self.forward(
-                encoder_input, valid, kp=kp, conditioning=conditioning
+                encoder_input, valid, kp=kp, conditioning=conditioning,
+                return_latent=return_latent,
             )
         mu, logvar = self.encode(
             encoder_input, valid, kp=kp, conditioning=conditioning
@@ -500,9 +568,12 @@ class HierarchicalSplineConditionalVAE(nn.Module):
             latent.reshape(len(mu) * latent_samples, self.latent_dim),
             **repeated
         )
-        return reconstructed.reshape(
+        reconstructed = reconstructed.reshape(
             len(mu), latent_samples, *reconstructed.shape[1:]
-        ), mu, logvar
+        )
+        if return_latent:
+            return reconstructed, mu, logvar, latent
+        return reconstructed, mu, logvar
 
     def configuration(self):
         configuration = {
@@ -533,6 +604,10 @@ class HierarchicalSplineConditionalVAE(nn.Module):
             configuration["kp_conditioning"] = dict(self.kp_conditioning)
         if self.conditioning is not None:
             configuration["conditioning"] = dict(self.conditioning)
+        if self.latent_prior_configuration is not None:
+            configuration["latent_prior"] = dict(
+                self.latent_prior_configuration
+            )
         return configuration
 
     @classmethod
@@ -549,6 +624,7 @@ class HierarchicalSplineConditionalVAE(nn.Module):
             encoder_mask_policy=configuration["encoder_mask_policy"],
             kp_conditioning=configuration.get("kp_conditioning"),
             conditioning=configuration.get("conditioning"),
+            latent_prior=configuration.get("latent_prior"),
             field_names=configuration["field_names"],
             magnetic_latitude=None,
         )

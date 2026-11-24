@@ -16,6 +16,7 @@ from .loss import (
     GAUSSIAN_UNCERTAINTY_LOSS_KIND,
     LEGACY_LOSS_CONFIGURATION,
     MEASUREMENT_UNCERTAINTY_LOSS_KIND,
+    conditional_monte_carlo_kl,
     vae_loss,
     validate_loss_configuration
 )
@@ -194,7 +195,11 @@ def _run_epoch(
     device = torch.device(device)
     loss_configuration = validate_loss_configuration(loss_configuration)
     model.train(training)
-    latent_groups = getattr(model, "latent_groups", None)
+    learned_prior = getattr(model, "latent_prior", None)
+    latent_groups = (
+        None if learned_prior is not None
+        else getattr(model, "latent_groups", None)
+    )
     metric_names = (
         "total", "reconstruction", "kl",
         *(f"kl_{name}" for name in (latent_groups or {}))
@@ -291,14 +296,36 @@ def _run_epoch(
                 if "kp" not in batch:
                     raise ValueError("Kp-conditioned training/evaluation requires per-image Kp labels")
                 condition_arguments["kp"] = batch["kp"].to(device, non_blocking=non_blocking)
-            if latent_samples == 1:
-                reconstructed, mu, logvar = model(
-                    encoder_input, input_mask, **condition_arguments
-                )
+            if learned_prior is None:
+                if latent_samples == 1:
+                    reconstructed, mu, logvar = model(
+                        encoder_input, input_mask, **condition_arguments
+                    )
+                else:
+                    reconstructed, mu, logvar = model.forward_samples(
+                        encoder_input, input_mask,
+                        latent_samples=latent_samples, **condition_arguments
+                    )
+                kl_override = None
             else:
-                reconstructed, mu, logvar = model.forward_samples(
-                    encoder_input, input_mask,
-                    latent_samples=latent_samples, **condition_arguments
+                if "kp" not in condition_arguments:
+                    raise ValueError(
+                        "learned conditional prior training requires scalar Kp"
+                    )
+                if latent_samples == 1:
+                    reconstructed, mu, logvar, latent = model(
+                        encoder_input, input_mask, return_latent=True,
+                        **condition_arguments
+                    )
+                else:
+                    reconstructed, mu, logvar, latent = model.forward_samples(
+                        encoder_input, input_mask,
+                        latent_samples=latent_samples, return_latent=True,
+                        **condition_arguments
+                    )
+                kl_override = conditional_monte_carlo_kl(
+                    mu, logvar, latent, learned_prior,
+                    condition_arguments["kp"]
                 )
             losses = vae_loss(
                 reconstructed,
@@ -317,6 +344,7 @@ def _run_epoch(
                     else None
                 ),
                 latent_groups=latent_groups,
+                kl_override=kl_override,
                 **uncertainty_arguments,
             )
             if training:

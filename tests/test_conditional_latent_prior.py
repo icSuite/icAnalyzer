@@ -1,17 +1,21 @@
 import numpy as np
 import torch
+from torch import nn
 
+from icanalyzer.cvae.loss import (
+    LEGACY_LOSS_CONFIGURATION,
+    conditional_monte_carlo_kl,
+)
 from icanalyzer.cvae.prior import (
     ConditionalGaussianMixturePrior,
     aggregate_posterior_standardization,
+    disable_optional_native_bmm_override,
 )
+from icanalyzer.cvae.training import _run_epoch
 from scripts.CVAE.evaluate_posthoc_conditional_prior import (
     evaluation_candidate_labels,
     field_metrics,
     rows_near_kp,
-)
-from scripts.CVAE.fit_posthoc_conditional_prior import (
-    disable_triton_bmm_override_for_low_rank_fit,
 )
 
 
@@ -28,6 +32,86 @@ def test_single_component_zero_network_matches_standard_normal():
     expected = torch.distributions.Normal(0, 1).log_prob(latent).sum(-1)
 
     torch.testing.assert_close(actual, expected)
+
+
+def test_conditional_monte_carlo_kl_uses_supplied_latent_and_has_gradients():
+    prior = ConditionalGaussianMixturePrior(
+        latent_dim=3, components=1, hidden_dim=4, covariance_rank=0
+    )
+    for parameter in prior.parameters():
+        nn.init.zeros_(parameter)
+    mu = torch.tensor([[0.2, -0.4, 0.7]], requires_grad=True)
+    logvar = torch.tensor([[0.1, -0.2, 0.3]], requires_grad=True)
+    noise = torch.tensor([[0.5, -1.0, 0.25]])
+    latent = mu + torch.exp(0.5 * logvar) * noise
+    kp = torch.tensor([2.0])
+
+    actual = conditional_monte_carlo_kl(
+        mu, logvar, latent, prior, kp
+    )
+    log_q = -0.5 * (
+        np.log(2 * np.pi) + logvar
+        + (latent - mu).square() * torch.exp(-logvar)
+    ).sum()
+    log_p = -0.5 * (
+        3 * np.log(2 * np.pi) + latent.square().sum()
+    )
+    torch.testing.assert_close(actual, log_q - log_p)
+
+    actual.backward()
+    assert mu.grad.abs().sum() > 0
+    assert logvar.grad.abs().sum() > 0
+    assert prior.mean_head.bias.grad.abs().sum() > 0
+
+
+def test_training_updates_joint_prior_and_omits_group_kl_metrics():
+    class TinyJointPriorVAE(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.encoder_mean = nn.Parameter(torch.tensor([0.4, -0.3]))
+            self.encoder_logvar = nn.Parameter(torch.tensor([-0.2, 0.1]))
+            self.decoder_scale = nn.Parameter(torch.tensor(0.1))
+            self.latent_prior = ConditionalGaussianMixturePrior(
+                latent_dim=2, components=2, hidden_dim=4,
+                covariance_rank=1,
+            )
+            self.kp_conditioning = {"center": 3.0, "scale": 2.0}
+            self.conditioning = None
+            self.latent_groups = {"global": (0, 1), "spatial": (1, 2)}
+
+        def forward(
+            self, encoder_input, valid=None, kp=None, return_latent=False
+        ):
+            batch = len(encoder_input)
+            mu = self.encoder_mean[None].expand(batch, -1)
+            logvar = self.encoder_logvar[None].expand_as(mu)
+            latent = mu + torch.randn_like(mu) * torch.exp(0.5 * logvar)
+            reconstructed = (
+                self.decoder_scale * latent[:, :1, None, None]
+            ).expand(batch, 1, 2, 2)
+            if return_latent:
+                return reconstructed, mu, logvar, latent
+            return reconstructed, mu, logvar
+
+    torch.manual_seed(12)
+    model = TinyJointPriorVAE()
+    before = model.latent_prior.mean_head.weight.detach().clone()
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-2)
+    batch = {
+        "encoder_input": torch.zeros(3, 1, 2, 2),
+        "target": torch.zeros(3, 1, 2, 2),
+        "mask": torch.ones(3, 1, 2, 2, dtype=torch.bool),
+        "weight": torch.ones(3, 1, 2, 2),
+        "kp": torch.tensor([0.0, 3.0, 6.0]),
+    }
+
+    metrics = _run_epoch(
+        model, [batch], optimizer=optimizer, device="cpu", beta=0.1,
+        training=True, loss_configuration=LEGACY_LOSS_CONFIGURATION,
+    )
+
+    assert set(metrics) == {"total", "reconstruction", "kl"}
+    assert not torch.equal(before, model.latent_prior.mean_head.weight)
 
 
 def test_mixture_sampling_returns_complete_aligned_rows():
@@ -136,9 +220,7 @@ def test_low_rank_cuda_fit_disables_optional_native_bmm(monkeypatch):
     })()
     monkeypatch.setattr(torch.backends, "python_native", backend, raising=False)
 
-    disabled = disable_triton_bmm_override_for_low_rank_fit(
-        covariance_ranks=(0, 8), device=torch.device("cuda")
-    )
+    disabled = disable_optional_native_bmm_override(8, torch.device("cuda"))
 
     assert disabled
     assert calls == ["bmm"]

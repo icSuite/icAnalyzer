@@ -224,6 +224,45 @@ def test_hierarchical_artifact_roundtrip_preserves_coordinates(tmp_path):
     )
 
 
+def test_joint_conditional_prior_roundtrip_and_automatic_sampling(tmp_path):
+    model = HierarchicalSplineConditionalVAE(
+        image_shape=(64, 64), global_latent_dim=4,
+        spatial_latent_channels=2, spline_control_points=16,
+        spline_degree=3, quality_weight_channels=2,
+        encoder_mask_policy="union", kp_conditioning=KP_CONDITION,
+        latent_prior={
+            "kind": "conditional_gaussian_mixture_v1",
+            "components": 3, "hidden_dim": 8, "covariance_rank": 2,
+        },
+        field_names=("wic_corrected", "si12"),
+    ).eval()
+    with torch.no_grad():
+        model.latent_prior.mean_head.bias.fill_(2.5)
+        model.latent_prior.logvar_head.bias.fill_(-8.0)
+        model.latent_prior.factor_head.weight.zero_()
+        model.latent_prior.factor_head.bias.zero_()
+    transform = ChannelTransform(
+        [1, 1], [0, 0], [1, 1], kind=ChannelTransform.LOG10_KIND
+    )
+    artifact = tmp_path / "joint-prior.pt"
+    save_run_artifact(
+        artifact, model, transform, history=[], training_configuration={},
+        data_provenance={}, split_files={"train": [], "validation": [], "test": []}
+    )
+
+    restored, restored_transform, saved = load_run_artifact(artifact)
+    assert saved["model_configuration"]["latent_prior"]["components"] == 3
+    assert restored.latent_prior.covariance_rank == 2
+    samples, latent = sample_decoded_ensemble(
+        restored, restored_transform, 5, batch_size=5, seed=19,
+        kp=2, return_latent=True,
+    )
+
+    assert samples.shape == (5, 2, 64, 64)
+    assert latent.shape == (5, model.latent_dim)
+    assert latent.mean() > 2.0
+
+
 def test_named_conditioning_and_ensemble_sampling_use_total_latent():
     model = HierarchicalSplineConditionalVAE(
         image_shape=(64, 64), global_latent_dim=4,

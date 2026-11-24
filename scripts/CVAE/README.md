@@ -314,6 +314,35 @@ Run the same evaluator on this new output to determine whether low-rank
 covariance improves both per-Kp density and decoded tail/cross-channel
 calibration.
 
+The same six-component rank-eight form can instead be learned jointly with
+the hierarchical CVAE. The encoder remains diagonal Gaussian, while the KL is
+estimated from the same reparameterized latent draw already decoded for the
+reconstruction term: `log q(z|image,Kp) - log p(z|Kp)`. The mixture density is
+evaluated exactly, so this adds no encoder or decoder pass. The complete prior
+network is stored inside `wic_cvae.pt`, and the ordinary fixed-Kp samplers use
+it automatically after reload:
+
+```bash
+PYTHONPATH=. python scripts/CVAE/train_wic_cvae.py \
+  /path/to/paired/cache \
+  --output /path/to/new/run \
+  --architecture hierarchical --batch-order orbit \
+  --latent-prior conditional-mixture \
+  --prior-components 6 --prior-covariance-rank 8 --prior-hidden-dim 64 \
+  --epochs 100 --batch-size 264 \
+  --latent-dim 36 --spatial-latent-channels 8 \
+  --spline-control-points 92 --spline-degree 3 \
+  --beta 0.001 --kl-warmup-epochs 30 \
+  --learning-rate 0.0001 --seed 1 --training-holes \
+  --hole-device cuda --num-workers 4 --prefetch-factor 4 \
+  --cache-mib 4096 --device cuda
+```
+
+This option currently supports scalar Kp conditioning only. Because the prior
+couples all global and spatial latent dimensions, `kl_global` and `kl_spatial`
+are not separately defined; histories report only the joint KL. Omitting
+`--latent-prior` preserves the fixed standard-normal objective and artifacts.
+
 Evaluate the saved candidates separately within each Kp group before using the
 selected prior for production sampling. This reuses the exact saved
 orbit-held-out rows, reports paired candidate-minus-baseline density gains,

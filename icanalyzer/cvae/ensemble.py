@@ -48,6 +48,21 @@ def correct_wic_roundoff(samples, transform):
     }
     return samples, diagnostics
 
+def _sample_model_prior(model, count, generator, condition_arguments):
+    """Sample the model-owned prior, retaining legacy normal compatibility."""
+
+    sampler = getattr(model, "sample_prior", None)
+    if callable(sampler):
+        return sampler(
+            count, generator=generator, **condition_arguments
+        )
+    reference = next(model.parameters())
+    return torch.randn(
+        count, model.latent_dim, dtype=reference.dtype,
+        device=reference.device, generator=generator,
+    )
+
+
 def sample_decoded_ensemble(
     model,
     transform,
@@ -136,14 +151,6 @@ def sample_decoded_ensemble(
         for start in range(0, n_samples, batch_size):
             current_size = min(batch_size, n_samples - start)
             stop = start + current_size
-            latent = torch.randn(
-                current_size,
-                model.latent_dim,
-                generator=generator,
-                device=device,
-            )
-            if return_latent:
-                latent_samples[start:stop] = latent.cpu().numpy()
             condition_arguments = {}
             if kp_conditioned:
                 condition_arguments["kp"] = torch.as_tensor(
@@ -153,6 +160,11 @@ def sample_decoded_ensemble(
                 condition_arguments["conditioning"] = torch.as_tensor(
                     conditioning[start:stop], device=device
                 )
+            latent = _sample_model_prior(
+                model, current_size, generator, condition_arguments
+            )
+            if return_latent:
+                latent_samples[start:stop] = latent.cpu().numpy()
             transformed = model.decode(latent, **condition_arguments)
             if support_mask is not None:
                 # Numeric placeholders only: never fabricate zero-valued training targets.
@@ -276,10 +288,6 @@ def sample_decoded_members_to_disk(
     with torch.no_grad():
         for start in range(0, n_samples, batch_size):
             stop = min(start + batch_size, n_samples)
-            latent = torch.randn(
-                stop - start, model.latent_dim,
-                generator=generator, device=device
-            )
             condition_arguments = {}
             if kp_conditioned:
                 condition_arguments["kp"] = torch.as_tensor(
@@ -289,6 +297,9 @@ def sample_decoded_members_to_disk(
                 condition_arguments["conditioning"] = torch.as_tensor(
                     conditioning[start:stop], device=device
                 )
+            latent = _sample_model_prior(
+                model, stop - start, generator, condition_arguments
+            )
             transformed = model.decode(latent, **condition_arguments)
             if support_mask is not None:
                 transformed = torch.where(

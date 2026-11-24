@@ -1,8 +1,29 @@
 # Handoff - Latest
 
 Last updated: 2026-11-24
-Last reviewed: 2026-11-24 (empirical latent sampling result)
+Last reviewed: 2026-11-24 (joint conditional prior implementation)
 Repository snapshot: `vae/wic-si12` including the hierarchical native-grid commit, with generated-output changes preserved; `main` remains at `7c71591`
+
+## Joint conditional prior is implemented
+
+The full hierarchical CVAE supports an optional jointly learned
+Kp-conditioned Gaussian mixture prior. The selected production form is six
+components with rank-eight residual covariance over the complete324-value
+global+spatial latent row. The KL uses the same posterior sample already sent
+to the decoder, so the new work is prior-network evaluation and low-rank
+density calculation rather than another image pass. The prior is saved inside
+`wic_cvae.pt`; existing fixed-Kp samplers automatically draw from it after
+artifact reload. Standard-normal training remains the default.
+
+Use `--latent-prior conditional-mixture --prior-components 6
+--prior-covariance-rank 8 --prior-hidden-dim 64` with the established
+native184 beta0.001/30-epoch-warm-up configuration. This option currently
+supports scalar Kp only. Joint covariance makes global/spatial KL decomposition
+undefined, so histories report total KL only. Seventy-three focused tests pass.
+Next run the full model on the server, then evaluate reconstruction and matched
+fixed-Kp prior galleries rather than another prior-family sweep.
+
+Portfolio impact: Central update needed: No.
 
 ## Empirical conditional latent galleries improve substantially
 

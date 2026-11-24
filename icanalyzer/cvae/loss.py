@@ -207,6 +207,64 @@ def latent_kl_terms(mu, logvar, latent_groups=None):
         raise ValueError("latent groups must partition the latent vector exactly")
     return total, diagnostics
 
+
+def conditional_monte_carlo_kl(mu, logvar, latent, prior, kp):
+    """Estimate summed KL(q || p(Kp)) from the decoder's latent samples.
+
+    ``latent`` is the same reparameterized sample used for reconstruction.
+    A sample axis is optional; when present, its estimates are averaged before
+    summing over images so the reduction matches :func:`latent_kl_terms`.
+    """
+
+    if mu.ndim != 2 or logvar.shape != mu.shape:
+        raise ValueError("posterior mean and log variance must share shape (batch, latent)")
+    if latent.ndim == 2:
+        if latent.shape != mu.shape:
+            raise ValueError("posterior latent sample does not match posterior parameters")
+        latent = latent[:, None]
+    elif (
+        latent.ndim != 3 or latent.shape[0] != mu.shape[0]
+        or latent.shape[2] != mu.shape[1] or latent.shape[1] < 1
+    ):
+        raise ValueError(
+            "posterior latent samples must have shape (batch, sample, latent)"
+        )
+
+    kp = torch.as_tensor(kp, dtype=mu.dtype, device=mu.device)
+    if kp.shape != (mu.shape[0],):
+        raise ValueError("conditional KL requires one Kp value per image")
+
+    residual = latent - mu[:, None]
+    log_q = -0.5 * (
+        np.log(2 * np.pi) + logvar[:, None]
+        + residual.square() * torch.exp(-logvar[:, None])
+    ).sum(dim=-1)
+
+    sample_count = latent.shape[1]
+    flat_latent = latent.reshape(-1, latent.shape[-1])
+    repeated_kp = kp[:, None].expand(-1, sample_count).reshape(-1)
+    log_p = prior.log_prob(
+        flat_latent, repeated_kp, validate=False
+    ).reshape(
+        len(mu), sample_count
+    )
+    estimate = (log_q - log_p).mean(dim=1).sum()
+    return estimate
+
+
+def resolved_kl_terms(mu, logvar, latent_groups=None, kl_override=None):
+    """Use an explicit conditional-prior KL or the analytic normal KL."""
+
+    if kl_override is None:
+        return latent_kl_terms(mu, logvar, latent_groups)
+    if latent_groups is not None:
+        raise ValueError(
+            "group KL diagnostics are undefined for a joint conditional prior"
+        )
+    if kl_override.ndim != 0:
+        raise ValueError("KL override must be one scalar")
+    return kl_override, {}
+
 def vae_loss(
     reconstructed,
     target,
@@ -223,6 +281,7 @@ def vae_loss(
     channel_balanced=False,
     reconstruction_reference_pixels=None,
     latent_groups=None,
+    kl_override=None,
 ):
     """Return the legacy-scaled reconstruction loss and summed KL term.
 
@@ -298,7 +357,9 @@ def vae_loss(
             pixel_count = int(reconstruction_reference_pixels)
         channel_reconstruction = channel_mse * pixel_count
         reconstruction_loss = torch.mean(channel_reconstruction)
-        kl_loss, group_kl = latent_kl_terms(mu, logvar, latent_groups)
+        kl_loss, group_kl = resolved_kl_terms(
+            mu, logvar, latent_groups, kl_override
+        )
         return {
             "total": reconstruction_loss + float(beta) * kl_loss,
             "reconstruction": reconstruction_loss,
@@ -388,7 +449,9 @@ def vae_loss(
         / (weight_sum + 1e-8)
         * state_size
     )
-    kl_loss, group_kl = latent_kl_terms(mu, logvar, latent_groups)
+    kl_loss, group_kl = resolved_kl_terms(
+        mu, logvar, latent_groups, kl_override
+    )
     total = reconstruction_loss + float(beta) * kl_loss
     return {
         "total": total,

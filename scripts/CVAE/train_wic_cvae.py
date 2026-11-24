@@ -34,6 +34,7 @@ from icanalyzer.cvae.loss import (
     LEGACY_LOSS_CONFIGURATION,
 )
 from icanalyzer.cvae.model import SplineConditionalVAE
+from icanalyzer.cvae.prior import disable_optional_native_bmm_override
 from icanalyzer.cvae.training import (
     _run_epoch,
     resolve_hole_device,
@@ -71,6 +72,23 @@ def run(arguments):
     cache = arguments.cache.expanduser().resolve()
     output = arguments.output.expanduser().resolve()
     device = training_device(arguments.device)
+    if arguments.latent_prior == "conditional-mixture":
+        if arguments.architecture != "hierarchical":
+            raise ValueError(
+                "conditional mixture prior requires --architecture hierarchical"
+            )
+        if arguments.conditioning is not None:
+            raise ValueError(
+                "conditional mixture prior currently requires scalar Kp conditioning"
+            )
+        if disable_optional_native_bmm_override(
+            arguments.prior_covariance_rank, device
+        ):
+            print(
+                "Disabled PyTorch's optional Triton BMM override for the "
+                "low-rank prior; using standard ATen CUDA BMM.",
+                flush=True,
+            )
     progress_file = output / "training_state.pt"
     if output.exists() and not arguments.resume:
         raise FileExistsError("choose a new WIC-CVAE run directory; existing runs are never overwritten")
@@ -205,7 +223,10 @@ def run(arguments):
         "latent_samples", "conditioning_embedding_dim", "conditioning_profile",
         "spline_control_points", "spline_degree", "scheduler_factor",
         "scheduler_patience", "scheduler_minimum_learning_rate",
-        "architecture", "kl_warmup_epochs", "batch_order"
+        "architecture", "kl_warmup_epochs", "batch_order", "latent_prior",
+        "prior_components", "prior_covariance_rank", "prior_hidden_dim",
+        "prior_minimum_logvar", "prior_maximum_logvar",
+        "prior_maximum_factor",
     )}
     configuration.update({
         "seed": seed, "device": device, "input_product_type": "precipitation_cs",
@@ -303,9 +324,21 @@ def run(arguments):
         "field_names": tuple(field_names)
     }
     if arguments.architecture == "hierarchical":
+        latent_prior = None
+        if arguments.latent_prior == "conditional-mixture":
+            latent_prior = {
+                "kind": "conditional_gaussian_mixture_v1",
+                "components": arguments.prior_components,
+                "hidden_dim": arguments.prior_hidden_dim,
+                "minimum_logvar": arguments.prior_minimum_logvar,
+                "maximum_logvar": arguments.prior_maximum_logvar,
+                "covariance_rank": arguments.prior_covariance_rank,
+                "maximum_factor": arguments.prior_maximum_factor,
+            }
         model = HierarchicalSplineConditionalVAE(
             global_latent_dim=arguments.latent_dim,
             spatial_latent_channels=arguments.spatial_latent_channels,
+            latent_prior=latent_prior,
             magnetic_latitude=np.asarray(metadata["grid"]["mlat"]),
             **model_arguments
         )
@@ -507,6 +540,21 @@ def parse_arguments(argv=None):
         "--spatial-latent-channels", type=int, default=8,
         help="6x6 spatial latent channels for the hierarchical architecture"
     )
+    parser.add_argument(
+        "--latent-prior",
+        choices=("standard-normal", "conditional-mixture"),
+        default="standard-normal",
+        help=(
+            "fixed standard normal or jointly learned Kp-conditioned Gaussian "
+            "mixture (default: standard-normal)"
+        ),
+    )
+    parser.add_argument("--prior-components", type=int, default=6)
+    parser.add_argument("--prior-covariance-rank", type=int, default=8)
+    parser.add_argument("--prior-hidden-dim", type=int, default=64)
+    parser.add_argument("--prior-minimum-logvar", type=float, default=-8.0)
+    parser.add_argument("--prior-maximum-logvar", type=float, default=4.0)
+    parser.add_argument("--prior-maximum-factor", type=float, default=2.0)
     parser.add_argument("--seed", type=int)
     for name, default in (("epochs", 500), ("batch-size", 264), ("latent-dim", 36),
                           ("latent-samples", 1),
@@ -551,6 +599,24 @@ def parse_arguments(argv=None):
         parser.error("worker count must be nonnegative and prefetch factor positive")
     if arguments.spatial_latent_channels < 0:
         parser.error("--spatial-latent-channels must be nonnegative")
+    if (
+        arguments.prior_components < 1 or arguments.prior_hidden_dim < 1
+        or arguments.prior_covariance_rank < 0
+    ):
+        parser.error("prior components/hidden dimension must be positive and rank nonnegative")
+    if (
+        not np.isfinite(arguments.prior_minimum_logvar)
+        or not np.isfinite(arguments.prior_maximum_logvar)
+        or arguments.prior_minimum_logvar >= arguments.prior_maximum_logvar
+        or not np.isfinite(arguments.prior_maximum_factor)
+        or arguments.prior_maximum_factor <= 0
+    ):
+        parser.error("prior variance/factor bounds are invalid")
+    if arguments.latent_prior == "conditional-mixture":
+        if arguments.architecture != "hierarchical":
+            parser.error("--latent-prior conditional-mixture requires --architecture hierarchical")
+        if arguments.conditioning is not None:
+            parser.error("--latent-prior conditional-mixture currently requires scalar Kp conditioning")
     if arguments.kl_warmup_epochs < 0:
         parser.error("--kl-warmup-epochs must be nonnegative")
     if arguments.batch_probe_batches < 0:
