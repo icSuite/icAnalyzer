@@ -107,6 +107,18 @@ high-Kp intensity tails. The pooled validation score is frame-weighted and
 dominated by Kp2, so per-Kp held-out density and empirical tail calibration are
 required before incorporating this prior into joint CVAE training.
 
+`evaluate_posthoc_conditional_prior.py` now performs that check without
+refitting either prior. It reuses the saved validation-row split, evaluates
+K=1 and K=6 on identical posterior draws within each requested Kp window, and
+reports the paired selected-minus-baseline density gain. It also decodes
+bounded ensembles from both priors and from held-out encoder posteriors,
+reporting intensity tails, active area, brightness-weighted oval geometry,
+WIC--SI12 mean-brightness correlation, KS distances and sampled component
+fractions. The decoded held-out posterior is deliberately the reference so the
+test isolates prior calibration from decoder reconstruction error. Five
+focused conditional-prior/evaluator tests pass. Run this evaluator on the
+server bank next; no prior or CVAE training is involved.
+
 ## Beta=0.001 is the leading prior-sampling candidate (2026-11-24)
 
 The100-epoch `beta=0.001` run with30-epoch warm-up completed, was transferred

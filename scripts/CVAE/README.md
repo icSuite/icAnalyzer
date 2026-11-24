@@ -286,6 +286,29 @@ orbit-held-out posterior-sample log density. Components are density basis
 functions, not physical auroral modes. This fit does not modify or retrain the
 CVAE decoder.
 
+Evaluate the saved candidates separately within each Kp group before using the
+selected prior for production sampling. This reuses the exact saved
+orbit-held-out rows, reports paired density gains, and compares decoded prior
+samples with decoded held-out posterior samples. The latter reference isolates
+prior calibration from decoder reconstruction error:
+
+```bash
+PYTHONPATH=. python scripts/CVAE/evaluate_posthoc_conditional_prior.py \
+  /path/to/empirical_latent_bank.npz /path/to/cvae_run \
+  /path/to/posthoc_prior \
+  --output /path/to/empty/posthoc_prior_evaluation \
+  --kp 0 2 4 6 --kp-tolerance 0.34 \
+  --posterior-samples 4 --draws 2000 \
+  --density-batch-size 1024 --decode-batch-size 64 \
+  --seed 12104 --device cuda
+```
+
+The output contains per-Kp density estimates, the paired selected-minus-
+baseline gain, intensity/morphology quantiles, Kolmogorov--Smirnov distances,
+compact figures and the individual decoded metric samples. The default active
+area thresholds are100 corrected-WIC units and5 SI12 units; they can be changed
+with `--wic-active-threshold` and `--si12-active-threshold`.
+
 For the native184x184 architecture experiments, select the hierarchical model
 explicitly. `--latent-dim` remains the global latent size; the spatial group is
 configured separately. The primary candidate is36 global values, eight6x6

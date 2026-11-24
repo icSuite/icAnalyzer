@@ -85,6 +85,16 @@ run yet. First evaluate held-out density separately by Kp and compare sampled
 tails with empirical posterior/observation tails. The pooled score is dominated
 by Kp2 because the bank contains9,089/55,991/22,880/4,321 frames at Kp0/2/4/6.
 
+The required check is implemented in
+`evaluate_posthoc_conditional_prior.py`. It uses the exact saved validation
+rows and identical posterior draws for paired per-Kp K=1/K=6 density gains,
+then compares bounded decoded ensembles with decoded held-out encoder
+posteriors. Outputs include intensity-tail and active-area quantiles,
+brightness-weighted oval geometry, WIC--SI12 correlation, KS distances,
+component fractions, compact plots and metric samples. Five focused tests
+pass. Run it against the full bank on the server next; it does not refit the
+priors or CVAE.
+
 Portfolio impact: Central update needed: No.
 
 ## Beta=0.001 leads the rate--distortion screen
