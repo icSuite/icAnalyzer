@@ -86,6 +86,16 @@ captures only0.74--0.82 of latent variance. The larger result therefore
 supports a flexible non-Gaussian conditional density, not a fixed set of
 physical auroral modes.
 
+`fit_posthoc_conditional_prior.py` now implements the next bounded test without
+CVAE retraining. It fits Kp-conditioned one- and six-component diagonal
+mixtures to complete joint global+spatial posterior samples, using
+training-orbit-only aggregate standardization and orbit-held-out density for
+selection. It saves each prior, its Kp-dependent weights and matched decoded
+WIC/SI12 galleries. Components share one membership across the complete latent
+row and are explicitly not physical labels. Ten focused empirical-prior checks
+pass, and a synthetic optimization smoke completes with finite held-out
+density. The real uncapped bank fit has not yet run.
+
 ## Beta=0.001 is the leading prior-sampling candidate (2026-11-24)
 
 The100-epoch `beta=0.001` run with30-epoch warm-up completed, was transferred

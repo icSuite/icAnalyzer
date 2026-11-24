@@ -262,6 +262,30 @@ also requires stable assignments, distinct plausible decoded morphology,
 adequate component mass, multiple source orbits and checks against data
 quality, coverage and omitted physical conditions.
 
+Fit a deployable-form post-hoc conditional prior before changing CVAE
+training. This compares a learned conditional Gaussian (`K=1`) with a
+six-component conditional mixture on orbit-held-out frames. The density is fit
+to complete global+spatial posterior samples, including encoder variance, and
+the same mixture component controls the entire joint latent row:
+
+```bash
+PYTHONPATH=. python scripts/CVAE/fit_posthoc_conditional_prior.py \
+  /path/to/empirical_latent_bank.npz /path/to/cvae_run \
+  --output /path/to/empty/posthoc_prior \
+  --components 1 6 --kp 0 2 4 6 \
+  --epochs 200 --patience 20 --batch-size 1024 \
+  --hidden-dim 64 --learning-rate 0.001 \
+  --validation-fraction 0.2 --validation-samples 4 \
+  --draws 500 --decode-batch-size 64 --seed 12104 --device cuda
+```
+
+Each candidate writes its training history, Kp-dependent component weights,
+saved prior and decoded WIC/SI12 sample galleries. The root
+`conditional_latent_prior.pt` is the candidate with the highest
+orbit-held-out posterior-sample log density. Components are density basis
+functions, not physical auroral modes. This fit does not modify or retrain the
+CVAE decoder.
+
 For the native184x184 architecture experiments, select the hierarchical model
 explicitly. `--latent-dim` remains the global latent size; the spatial group is
 configured separately. The primary candidate is36 global values, eight6x6

@@ -67,6 +67,15 @@ as density machinery; the supported conclusion is a flexible, non-Gaussian
 Kp-conditional prior rather than named physical modes. PCA40 retains only
 0.74--0.82 of variance, a qualification for any detailed component count.
 
+The post-hoc prior test is implemented in
+`fit_posthoc_conditional_prior.py`. It compares a learned conditional Gaussian
+against a six-component conditional mixture using orbit-held-out density,
+samples complete posterior rows including encoder variance, standardizes from
+training orbits only, and decodes matched Kp0/2/4/6 galleries from both. The
+saved prior uses one component membership for the full global+spatial latent
+row. Ten focused checks and a synthetic optimization smoke pass. Run it on the
+uncapped bank next; no CVAE retraining is involved.
+
 Portfolio impact: Central update needed: No.
 
 ## Beta=0.001 leads the rate--distortion screen
