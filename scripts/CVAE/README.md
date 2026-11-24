@@ -218,6 +218,31 @@ add each selected frame's learned diagonal variance. Plausible empirical
 galleries alongside bad unit-normal galleries identify prior mismatch. They do
 not themselves define a deployable generative prior.
 
+Test multimodality from the saved bank without reopening the image cache. Use
+exact Kp values so neighboring activity levels cannot manufacture apparent
+modes. The analyzer fits PCA on orbit-grouped training rows, compares one
+through six diagonal Gaussian components using training BIC and orbit-held-out
+log density, measures assignment stability, and decodes both each mathematical
+component center and one real high-responsibility representative:
+
+```bash
+PYTHONPATH=. python scripts/CVAE/analyze_empirical_latent_modes.py \
+  /path/to/empirical_latent_bank.npz /path/to/cvae_run \
+  --kp 0 2 4 6 \
+  --output /path/to/empty/latent_mode_analysis \
+  --kp-tolerance 0.01 --minimum-frames 500 \
+  --pca-variance 0.95 --pca-max-components 40 \
+  --max-components 6 --covariance-type diag \
+  --minimum-component-fraction 0.03 \
+  --initializations 5 --stability-repeats 10 \
+  --seed 12104 --device cuda
+```
+
+The selected mixture is a statistical candidate only. A physical-mode claim
+also requires stable assignments, distinct plausible decoded morphology,
+adequate component mass, multiple source orbits and checks against data
+quality, coverage and omitted physical conditions.
+
 For the native184x184 architecture experiments, select the hierarchical model
 explicitly. `--latent-dim` remains the global latent size; the spatial group is
 configured separately. The primary candidate is36 global values, eight6x6

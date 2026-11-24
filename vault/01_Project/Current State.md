@@ -46,7 +46,17 @@ selects up to a configurable number of mission-spanning training frames per Kp
 neighborhood, validates the cache hash, encodes the union once, and writes
 separate posterior-mean and posterior-sample WIC/SI12 mosaics. Compact latent
 bank and source-frame provenance are retained. Four focused helper/diagnostic
-tests pass; no full server run has yet been reported.
+tests pass. The user completed the real server run and reported that these
+empirical conditional samples look substantially better than fixed-normal
+samples from the same beta=0.001 decoder.
+
+`analyze_empirical_latent_modes.py` now consumes that bank without reopening
+the image cache. It isolates exact Kp values, uses orbit-held-out PCA/GMM
+selection for one through six components, measures initialization stability,
+saves frame assignments, and decodes mathematical centers beside real
+high-responsibility representatives. Six focused mode/sampling checks pass. A
+synthetic600-frame/two-mode end-to-end smoke selected two stable components and
+wrote every plot/data product. Real-bank mode results remain unmeasured.
 
 ## Beta=0.001 is the leading prior-sampling candidate (2026-11-24)
 
