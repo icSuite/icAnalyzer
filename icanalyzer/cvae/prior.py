@@ -6,12 +6,13 @@ from torch import nn
 
 
 class ConditionalGaussianMixturePrior(nn.Module):
-    """Kp-conditioned diagonal mixture over one complete joint latent row."""
+    """Kp-conditioned diagonal or low-rank mixture over a joint latent row."""
 
     def __init__(
         self, latent_dim, components=6, hidden_dim=64,
         kp_center=3.0, kp_scale=2.0,
         minimum_logvar=-8.0, maximum_logvar=4.0,
+        covariance_rank=0, maximum_factor=2.0,
     ):
         super().__init__()
         self.latent_dim = int(latent_dim)
@@ -21,11 +22,16 @@ class ConditionalGaussianMixturePrior(nn.Module):
         self.kp_scale = float(kp_scale)
         self.minimum_logvar = float(minimum_logvar)
         self.maximum_logvar = float(maximum_logvar)
+        self.covariance_rank = int(covariance_rank)
+        self.maximum_factor = float(maximum_factor)
         if (
             self.latent_dim < 1 or self.components < 1 or self.hidden_dim < 1
             or not np.isfinite((self.kp_center, self.kp_scale)).all()
             or self.kp_scale <= 0
             or not self.minimum_logvar < self.maximum_logvar
+            or self.covariance_rank < 0
+            or self.covariance_rank > self.latent_dim
+            or not np.isfinite(self.maximum_factor) or self.maximum_factor <= 0
         ):
             raise ValueError("invalid conditional-prior configuration")
 
@@ -42,13 +48,22 @@ class ConditionalGaussianMixturePrior(nn.Module):
         self.logvar_head = nn.Linear(
             self.hidden_dim, self.components * self.latent_dim
         )
+        self.factor_head = None
+        if self.covariance_rank:
+            self.factor_head = nn.Linear(
+                self.hidden_dim,
+                self.components * self.latent_dim * self.covariance_rank,
+            )
         nn.init.normal_(self.mean_head.weight, mean=0, std=0.01)
         nn.init.zeros_(self.mean_head.bias)
         nn.init.normal_(self.logvar_head.weight, mean=0, std=0.01)
         nn.init.zeros_(self.logvar_head.bias)
+        if self.factor_head is not None:
+            nn.init.normal_(self.factor_head.weight, mean=0, std=0.001)
+            nn.init.zeros_(self.factor_head.bias)
 
-    def parameters_at(self, kp):
-        """Return logits, means and log variances for one Kp per row."""
+    def _distribution_parameters_at(self, kp):
+        """Return all parameters, including optional low-rank loadings."""
 
         reference = next(self.parameters())
         kp = torch.as_tensor(kp, dtype=reference.dtype, device=reference.device)
@@ -67,7 +82,26 @@ class ConditionalGaussianMixturePrior(nn.Module):
         logvars = self.logvar_head(hidden).reshape_as(means).clamp(
             self.minimum_logvar, self.maximum_logvar
         )
-        return self.logit_head(hidden), means, logvars
+        factors = None
+        if self.factor_head is not None:
+            factors = self.factor_head(hidden).reshape(
+                len(kp), self.components, self.latent_dim, self.covariance_rank
+            )
+            factors = self.maximum_factor * torch.tanh(
+                factors / self.maximum_factor
+            )
+        return self.logit_head(hidden), means, logvars, factors
+
+    def parameters_at(self, kp):
+        """Return logits, means and diagonal log variances for each row."""
+
+        logits, means, logvars, _factors = self._distribution_parameters_at(kp)
+        return logits, means, logvars
+
+    def factors_at(self, kp):
+        """Return low-rank covariance loadings, or None for a diagonal prior."""
+
+        return self._distribution_parameters_at(kp)[3]
 
     def log_prob(self, latent, kp):
         """Evaluate the standardized joint latent log density."""
@@ -75,13 +109,38 @@ class ConditionalGaussianMixturePrior(nn.Module):
         latent = torch.as_tensor(latent)
         if latent.ndim != 2 or latent.shape[1] != self.latent_dim:
             raise ValueError("latent values do not match prior dimension")
-        logits, means, logvars = self.parameters_at(kp)
+        logits, means, logvars, factors = self._distribution_parameters_at(kp)
         if len(logits) != len(latent):
             raise ValueError("Kp and latent batches must align")
         residual = latent[:, None] - means
+        inverse_diagonal = torch.exp(-logvars)
+        quadratic = (residual.square() * inverse_diagonal).sum(dim=-1)
+        log_determinant = logvars.sum(dim=-1)
+        if factors is not None:
+            scaled_factors = factors * inverse_diagonal[..., None]
+            gram = torch.einsum(
+                "bkdr,bkds->bkrs", factors, scaled_factors
+            )
+            identity = torch.eye(
+                self.covariance_rank, dtype=gram.dtype, device=gram.device
+            )
+            cholesky = torch.linalg.cholesky(gram + identity)
+            projected = torch.einsum(
+                "bkdr,bkd->bkr", scaled_factors, residual
+            )
+            solved = torch.cholesky_solve(
+                projected[..., None], cholesky
+            ).squeeze(-1)
+            quadratic = (
+                quadratic - (projected * solved).sum(dim=-1)
+            ).clamp_min(0)
+            log_determinant = log_determinant + 2 * torch.log(
+                torch.diagonal(cholesky, dim1=-2, dim2=-1)
+            ).sum(dim=-1)
         component_log_prob = -0.5 * (
-            np.log(2 * np.pi) + logvars + residual.square() * torch.exp(-logvars)
-        ).sum(dim=-1)
+            self.latent_dim * np.log(2 * np.pi)
+            + log_determinant + quadratic
+        )
         return torch.logsumexp(
             torch.log_softmax(logits, dim=-1) + component_log_prob,
             dim=-1,
@@ -90,7 +149,7 @@ class ConditionalGaussianMixturePrior(nn.Module):
     def sample(self, kp, generator=None):
         """Draw one standardized complete latent row for every supplied Kp."""
 
-        logits, means, logvars = self.parameters_at(kp)
+        logits, means, logvars, factors = self._distribution_parameters_at(kp)
         probabilities = torch.softmax(logits, dim=-1)
         components = torch.multinomial(
             probabilities, 1, replacement=True, generator=generator
@@ -103,6 +162,16 @@ class ConditionalGaussianMixturePrior(nn.Module):
             device=selected_mean.device, generator=generator,
         )
         latent = selected_mean + noise * torch.exp(0.5 * selected_logvar)
+        if factors is not None:
+            selected_factor = factors[rows, components]
+            factor_noise = torch.randn(
+                (len(selected_mean), self.covariance_rank),
+                dtype=selected_mean.dtype, device=selected_mean.device,
+                generator=generator,
+            )
+            latent = latent + torch.einsum(
+                "bdr,br->bd", selected_factor, factor_noise
+            )
         return latent, components
 
     def configuration(self):
@@ -114,6 +183,8 @@ class ConditionalGaussianMixturePrior(nn.Module):
             "kp_scale": self.kp_scale,
             "minimum_logvar": self.minimum_logvar,
             "maximum_logvar": self.maximum_logvar,
+            "covariance_rank": self.covariance_rank,
+            "maximum_factor": self.maximum_factor,
         }
 
     @classmethod

@@ -6,6 +6,7 @@ from icanalyzer.cvae.prior import (
     aggregate_posterior_standardization,
 )
 from scripts.CVAE.evaluate_posthoc_conditional_prior import (
+    evaluation_candidate_labels,
     field_metrics,
     rows_near_kp,
 )
@@ -41,6 +42,90 @@ def test_mixture_sampling_returns_complete_aligned_rows():
     assert torch.all((component >= 0) & (component < 3))
 
 
+def test_low_rank_log_density_matches_full_covariance_distribution():
+    prior = ConditionalGaussianMixturePrior(
+        latent_dim=3, components=1, hidden_dim=4,
+        covariance_rank=2, maximum_factor=5,
+    ).double()
+    for parameter in prior.parameters():
+        torch.nn.init.zeros_(parameter)
+    mean = torch.tensor([0.2, -0.5, 0.7], dtype=torch.float64)
+    logvar = torch.log(torch.tensor([0.6, 1.2, 0.8], dtype=torch.float64))
+    raw_factor = torch.tensor(
+        [[0.30, -0.10], [0.20, 0.25], [-0.15, 0.35]],
+        dtype=torch.float64,
+    )
+    with torch.no_grad():
+        prior.mean_head.bias.copy_(mean)
+        prior.logvar_head.bias.copy_(logvar)
+        prior.factor_head.bias.copy_(raw_factor.ravel())
+    latent = torch.tensor(
+        [[0.1, -0.2, 0.4], [1.0, -1.0, 0.0]], dtype=torch.float64
+    )
+    factor = prior.factors_at(torch.tensor([2.0], dtype=torch.float64))[0, 0]
+    covariance = torch.diag(torch.exp(logvar)) + factor @ factor.T
+    expected = torch.distributions.MultivariateNormal(
+        mean, covariance_matrix=covariance
+    ).log_prob(latent)
+
+    actual = prior.log_prob(latent, torch.tensor([2.0, 2.0], dtype=torch.float64))
+
+    torch.testing.assert_close(actual, expected, rtol=1e-9, atol=1e-9)
+
+
+def test_low_rank_sampling_and_configuration_roundtrip():
+    prior = ConditionalGaussianMixturePrior(
+        latent_dim=5, components=2, hidden_dim=4,
+        covariance_rank=3, maximum_factor=1.5,
+    )
+
+    restored = ConditionalGaussianMixturePrior.from_configuration(
+        prior.configuration()
+    )
+    latent, component = restored.sample(
+        torch.tensor([0.0, 2.0, 4.0, 6.0]),
+        generator=torch.Generator().manual_seed(7),
+    )
+
+    assert restored.covariance_rank == 3
+    assert restored.maximum_factor == 1.5
+    assert latent.shape == (4, 5)
+    assert component.shape == (4,)
+    assert torch.isfinite(latent).all()
+
+
+def test_low_rank_factor_receives_finite_training_gradient():
+    torch.manual_seed(9)
+    prior = ConditionalGaussianMixturePrior(
+        latent_dim=6, components=2, hidden_dim=5, covariance_rank=2
+    )
+    latent = torch.randn(12, 6)
+    kp = torch.linspace(0, 6, len(latent))
+
+    loss = -prior.log_prob(latent, kp).mean()
+    loss.backward()
+
+    gradient = prior.factor_head.weight.grad
+    assert gradient is not None
+    assert torch.isfinite(gradient).all()
+    assert torch.count_nonzero(gradient) > 0
+
+
+def test_legacy_diagonal_configuration_remains_loadable():
+    original = ConditionalGaussianMixturePrior(
+        latent_dim=4, components=2, hidden_dim=3
+    )
+    configuration = original.configuration()
+    configuration.pop("covariance_rank")
+    configuration.pop("maximum_factor")
+    restored = ConditionalGaussianMixturePrior.from_configuration(configuration)
+
+    restored.load_state_dict(original.state_dict())
+
+    assert restored.covariance_rank == 0
+    assert restored.factor_head is None
+
+
 def test_aggregate_posterior_standardization_includes_encoder_variance():
     mu = np.array([[0.0, 2.0], [2.0, 4.0]], dtype=np.float32)
     logvar = np.zeros_like(mu)
@@ -59,6 +144,48 @@ def test_rows_near_kp_restricts_the_saved_validation_population():
     rows = rows_near_kp(bank, [0, 1, 2, 4, 5], target=2, tolerance=0.34)
 
     np.testing.assert_array_equal(rows, [1, 2])
+
+
+def test_low_rank_evaluation_uses_matched_diagonal_baseline_even_if_it_wins():
+    summary = {
+        "selected_components": 6,
+        "selected_candidate": {
+            "label": "K=6", "components": 6, "covariance_rank": 0,
+        },
+        "candidates": [
+            {
+                "label": "K=6", "components": 6, "covariance_rank": 0,
+                "validation": {"mean_log_density": -10},
+            },
+            {
+                "label": "K=6, rank=8", "components": 6,
+                "covariance_rank": 8,
+                "validation": {"mean_log_density": -11},
+            },
+        ],
+    }
+
+    baseline, comparison, selected = evaluation_candidate_labels(summary)
+
+    assert baseline == "K=6"
+    assert comparison == "K=6, rank=8"
+    assert selected == "K=6"
+
+
+def test_legacy_evaluation_compares_selected_mixture_with_gaussian():
+    summary = {
+        "selected_components": 6,
+        "candidates": [
+            {"components": 1, "validation": {"mean_log_density": -12}},
+            {"components": 6, "validation": {"mean_log_density": -10}},
+        ],
+    }
+
+    baseline, comparison, selected = evaluation_candidate_labels(summary)
+
+    assert baseline == "K=1"
+    assert comparison == "K=6"
+    assert selected == "K=6"
 
 
 def test_field_metrics_preserve_intensity_and_grid_coordinates():

@@ -131,10 +131,24 @@ the held-out value at Kp0/2/4/6, and SI12 maximum retains73/77/67/45%.
 WIC--SI12 supported-mean correlation is also not reproduced consistently:
 held-out values0.086/0.104/0.190/0.402 become -0.132/0.050/0.241/0.170. The
 six-component diagonal mixture is a strong baseline and a clear improvement,
-but is not yet a final production prior. The next bounded model change should
-add residual within-component covariance, preferably a low-rank factor form,
-rather than launching another CVAE beta run or treating scalar temperature
-calibration as sufficient.
+but is not yet a final production prior.
+
+The bounded covariance extension is now implemented. Each conditional mixture
+component can use `diagonal + factor @ factor.T` covariance through
+`--covariance-ranks`; rank zero preserves the exact diagonal path. The factor
+loadings are Kp-conditioned and shared across the complete global+spatial
+latent row. Log density uses the Woodbury identity and determinant lemma, so it
+never constructs a324x324 covariance matrix; sampling adds one coherent
+rank-dimensional residual draw per frame. The fitter can compare matched
+`--components 6 --covariance-ranks 0 8` candidates on the same orbit split,
+and the evaluator always uses the matched diagonal K=6 candidate as the
+baseline, including when the low-rank candidate loses. Eighteen focused
+prior/empirical tests pass, including
+agreement with an explicit full-covariance Gaussian, finite factor gradients
+and configuration/sampling round-trip. A correlated-data optimization smoke
+reduced negative log density from10.08 to7.26. Fit rank0 versus rank8 on the
+existing uncapped bank next; this is post-hoc prior training, not CVAE
+retraining.
 
 ## Beta=0.001 is the leading prior-sampling candidate (2026-11-24)
 

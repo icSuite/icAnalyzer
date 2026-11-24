@@ -33,6 +33,16 @@ from scripts.CVAE.sample_wic_at_kp import (
 
 #%% Posterior batches and density fitting
 
+def candidate_label(components, covariance_rank):
+    if covariance_rank:
+        return f"K={components}, rank={covariance_rank}"
+    return f"K={components}"
+
+
+def candidate_directory(components, covariance_rank):
+    suffix = f"_rank{covariance_rank}" if covariance_rank else ""
+    return f"prior_k{components}{suffix}"
+
 def latent_dataset(bank, rows):
     rows = np.asarray(rows, dtype=np.int64)
     return TensorDataset(
@@ -80,14 +90,16 @@ def evaluate_density(
 
 def fit_candidate(
     bank, train_rows, validation_rows, center, scale, arguments,
-    components, kp_center, kp_scale, device,
+    components, covariance_rank, kp_center, kp_scale, device,
 ):
-    torch.manual_seed(arguments.seed + components)
+    torch.manual_seed(arguments.seed + components + 100 * covariance_rank)
     prior = ConditionalGaussianMixturePrior(
         latent_dim=bank["mu"].shape[1], components=components,
         hidden_dim=arguments.hidden_dim, kp_center=kp_center,
         kp_scale=kp_scale, minimum_logvar=arguments.minimum_logvar,
         maximum_logvar=arguments.maximum_logvar,
+        covariance_rank=covariance_rank,
+        maximum_factor=arguments.maximum_factor,
     ).to(device)
     train_loader = DataLoader(
         latent_dataset(bank, train_rows), batch_size=arguments.batch_size,
@@ -108,7 +120,7 @@ def fit_candidate(
     center_tensor = torch.from_numpy(center).to(device)
     scale_tensor = torch.from_numpy(scale).to(device)
     generator = torch.Generator(device=device).manual_seed(
-        arguments.seed + 1000 + components
+        arguments.seed + 1000 + components + 100 * covariance_rank
     )
     best_loss = np.inf
     best_state = None
@@ -116,7 +128,8 @@ def fit_candidate(
     history = []
     progress = tqdm(
         range(1, arguments.epochs + 1),
-        desc=f"Conditional prior K={components}", unit="epoch",
+        desc=f"Conditional prior {candidate_label(components, covariance_rank)}",
+        unit="epoch",
     )
     for epoch in progress:
         prior.train()
@@ -175,7 +188,7 @@ def fit_candidate(
 
 #%% Diagnostics and decoded galleries
 
-def plot_history(history, output, components):
+def plot_history(history, output, label):
     epochs = [record["epoch"] for record in history]
     train = [record["train_negative_log_density"] for record in history]
     validation = [
@@ -185,7 +198,7 @@ def plot_history(history, output, components):
     axis.plot(epochs, train, label="training")
     axis.plot(epochs, validation, label="orbit-held-out")
     axis.set(
-        title=f"Conditional latent prior: {components} component(s)",
+        title=f"Conditional latent prior: {label}",
         xlabel="epoch", ylabel="negative log density",
     )
     axis.legend()
@@ -280,16 +293,17 @@ def save_prior_gallery(
 
 
 def plot_candidate_comparison(records, output):
-    components = [record["components"] for record in records]
+    positions = np.arange(len(records))
+    labels = [record["label"] for record in records]
     density = [record["validation"]["mean_log_density"] for record in records]
     error = [record["validation"]["standard_error"] for record in records]
-    figure, axis = plt.subplots(figsize=(6, 4.5), layout="constrained")
-    axis.errorbar(components, density, yerr=error, marker="o")
+    figure, axis = plt.subplots(figsize=(max(6, 1.8 * len(records)), 4.5), layout="constrained")
+    axis.errorbar(positions, density, yerr=error, marker="o", linestyle="none")
     axis.set(
         title="Orbit-held-out conditional prior density",
-        xlabel="mixture components", ylabel="mean log density",
+        xlabel="prior candidate", ylabel="mean log density",
     )
-    axis.set_xticks(components)
+    axis.set_xticks(positions, labels, rotation=20, ha="right")
     figure.savefig(output / "candidate_comparison.png", dpi=180)
     figure.savefig(output / "candidate_comparison.pdf")
     plt.close(figure)
@@ -343,63 +357,73 @@ def run(arguments):
 
     records = []
     payloads = {}
+    bank_sha256 = hashlib.sha256(bank_path.read_bytes()).hexdigest()
     for components in arguments.components:
-        candidate_output = output / f"prior_k{components}"
-        candidate_output.mkdir()
-        prior, history, validation = fit_candidate(
-            bank, train_rows, validation_rows, center, scale, arguments,
-            components, kp_center, kp_scale, device,
-        )
-        plot_history(history, candidate_output, components)
-        plot_component_weights(
-            prior, float(np.min(bank["kp"])), float(np.max(bank["kp"])),
-            candidate_output, device,
-        )
-        payload = {
-            "format": "posthoc_conditional_latent_prior_v1",
-            "prior_configuration": prior.configuration(),
-            "prior_state_dict": {
-                name: value.detach().cpu()
-                for name, value in prior.state_dict().items()
-            },
-            "latent_center": center,
-            "latent_scale": scale,
-            "artifact_sha256": artifact_sha256,
-            "bank_sha256": hashlib.sha256(bank_path.read_bytes()).hexdigest(),
-            "training_rows": train_rows,
-            "validation_rows": validation_rows,
-            "validation": validation,
-        }
-        torch.save(payload, candidate_output / "conditional_latent_prior.pt")
-        payloads[components] = payload
-        record = {
-            "components": components,
-            "epochs": len(history),
-            "validation": validation,
-            "history": history,
-            "directory": candidate_output.name,
-        }
-        records.append(record)
-        for target_kp in arguments.kp:
-            latent, selected_component, fields = decode_prior(
-                prior, model, transform, center, scale, target_kp,
-                arguments.draws, arguments.decode_batch_size,
-                arguments.seed + int(round(target_kp * 1000)) + components,
-                device, support,
+        for covariance_rank in arguments.covariance_ranks:
+            label = candidate_label(components, covariance_rank)
+            candidate_output = output / candidate_directory(
+                components, covariance_rank
             )
-            save_prior_gallery(
-                fields, latent, selected_component, support, mlat, mlt,
-                target_kp, f"conditional prior K={components}",
-                candidate_output / f"kp_{target_kp:g}",
-                arguments.wic_vmax, arguments.si12_vmax,
+            candidate_output.mkdir()
+            prior, history, validation = fit_candidate(
+                bank, train_rows, validation_rows, center, scale, arguments,
+                components, covariance_rank, kp_center, kp_scale, device,
             )
-            del fields
+            plot_history(history, candidate_output, label)
+            plot_component_weights(
+                prior, float(np.min(bank["kp"])), float(np.max(bank["kp"])),
+                candidate_output, device,
+            )
+            payload = {
+                "format": "posthoc_conditional_latent_prior_v2",
+                "prior_configuration": prior.configuration(),
+                "prior_state_dict": {
+                    name: value.detach().cpu()
+                    for name, value in prior.state_dict().items()
+                },
+                "latent_center": center,
+                "latent_scale": scale,
+                "artifact_sha256": artifact_sha256,
+                "bank_sha256": bank_sha256,
+                "training_rows": train_rows,
+                "validation_rows": validation_rows,
+                "validation": validation,
+            }
+            torch.save(payload, candidate_output / "conditional_latent_prior.pt")
+            key = (components, covariance_rank)
+            payloads[key] = payload
+            record = {
+                "label": label,
+                "components": components,
+                "covariance_rank": covariance_rank,
+                "epochs": len(history),
+                "validation": validation,
+                "history": history,
+                "directory": candidate_output.name,
+            }
+            records.append(record)
+            for target_kp in arguments.kp:
+                latent, selected_component, fields = decode_prior(
+                    prior, model, transform, center, scale, target_kp,
+                    arguments.draws, arguments.decode_batch_size,
+                    arguments.seed + int(round(target_kp * 1000))
+                    + components + 100 * covariance_rank,
+                    device, support,
+                )
+                save_prior_gallery(
+                    fields, latent, selected_component, support, mlat, mlt,
+                    target_kp, f"conditional prior {label}",
+                    candidate_output / f"kp_{target_kp:g}",
+                    arguments.wic_vmax, arguments.si12_vmax,
+                )
+                del fields
 
     selected = max(
         records, key=lambda record: record["validation"]["mean_log_density"]
     )
     torch.save(
-        payloads[selected["components"]], output / "conditional_latent_prior.pt"
+        payloads[(selected["components"], selected["covariance_rank"])],
+        output / "conditional_latent_prior.pt",
     )
     plot_candidate_comparison(records, output)
     summary = {
@@ -412,6 +436,11 @@ def run(arguments):
         "validation_frames": int(len(validation_rows)),
         "selection_policy": "highest orbit-held-out mean posterior-sample log density",
         "selected_components": selected["components"],
+        "selected_candidate": {
+            "label": selected["label"],
+            "components": selected["components"],
+            "covariance_rank": selected["covariance_rank"],
+        },
         "candidates": records,
         "qualification": (
             "Mixture components are density basis functions and must not be "
@@ -422,7 +451,7 @@ def run(arguments):
         json.dumps(summary, indent=2) + "\n"
     )
     print(
-        f"Selected K={selected['components']} by orbit-held-out density", flush=True
+        f"Selected {selected['label']} by orbit-held-out density", flush=True
     )
     return summary
 
@@ -433,6 +462,7 @@ def parse_arguments(argv=None):
     parser.add_argument("run_directory", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--components", type=int, nargs="+", default=(1, 6))
+    parser.add_argument("--covariance-ranks", type=int, nargs="+", default=(0,))
     parser.add_argument("--kp", type=float, nargs="+", default=(0, 2, 4, 6))
     parser.add_argument("--hidden-dim", type=int, default=64)
     parser.add_argument("--epochs", type=int, default=200)
@@ -445,6 +475,7 @@ def parse_arguments(argv=None):
     parser.add_argument("--validation-samples", type=int, default=4)
     parser.add_argument("--minimum-logvar", type=float, default=-8)
     parser.add_argument("--maximum-logvar", type=float, default=4)
+    parser.add_argument("--maximum-factor", type=float, default=2)
     parser.add_argument("--draws", type=int, default=500)
     parser.add_argument("--decode-batch-size", type=int, default=64)
     parser.add_argument("--seed", type=int, default=12104)
@@ -455,6 +486,8 @@ def parse_arguments(argv=None):
     if (
         any(value < 1 for value in arguments.components)
         or len(set(arguments.components)) != len(arguments.components)
+        or any(value < 0 for value in arguments.covariance_ranks)
+        or len(set(arguments.covariance_ranks)) != len(arguments.covariance_ranks)
         or arguments.hidden_dim < 1 or arguments.epochs < 1
         or arguments.patience < 1 or arguments.batch_size < 1
         or arguments.validation_samples < 1 or arguments.draws < 1
@@ -463,6 +496,8 @@ def parse_arguments(argv=None):
         or arguments.learning_rate <= 0 or arguments.weight_decay < 0
         or arguments.minimum_improvement < 0
         or not arguments.minimum_logvar < arguments.maximum_logvar
+        or not np.isfinite(arguments.maximum_factor)
+        or arguments.maximum_factor <= 0
         or not np.isfinite(arguments.kp).all()
         or any(not 0 <= value <= 9 for value in arguments.kp)
         or len(set(arguments.kp)) != len(arguments.kp)

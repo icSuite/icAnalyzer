@@ -286,9 +286,34 @@ orbit-held-out posterior-sample log density. Components are density basis
 functions, not physical auroral modes. This fit does not modify or retrain the
 CVAE decoder.
 
+To test residual dependence that a diagonal component cannot represent, fit
+matched diagonal and low-rank six-component candidates. Rank8 adds a
+Kp-conditioned factor matrix to each component, so its covariance is
+`diagonal + factor @ factor.T`. Likelihood uses the Woodbury identity and does
+not construct a324x324 covariance matrix:
+
+```bash
+PYTHONPATH=. python scripts/CVAE/fit_posthoc_conditional_prior.py \
+  /path/to/empirical_latent_bank.npz /path/to/cvae_run \
+  --output /path/to/empty/posthoc_lowrank_prior \
+  --components 6 --covariance-ranks 0 8 --kp 0 2 4 6 \
+  --epochs 200 --patience 20 --batch-size 1024 \
+  --hidden-dim 64 --learning-rate 0.001 \
+  --validation-fraction 0.2 --validation-samples 4 \
+  --draws 500 --decode-batch-size 64 --seed 12104 --device cuda
+```
+
+The rank-zero candidate preserves the original diagonal implementation. The
+same orbit split and posterior standardization are used for both candidates;
+the saved summary records the covariance rank and selects by held-out density.
+Run the same evaluator on this new output to determine whether low-rank
+covariance improves both per-Kp density and decoded tail/cross-channel
+calibration.
+
 Evaluate the saved candidates separately within each Kp group before using the
 selected prior for production sampling. This reuses the exact saved
-orbit-held-out rows, reports paired density gains, and compares decoded prior
+orbit-held-out rows, reports paired candidate-minus-baseline density gains,
+and compares decoded prior
 samples with decoded held-out posterior samples. The latter reference isolates
 prior calibration from decoder reconstruction error:
 
@@ -303,7 +328,7 @@ PYTHONPATH=. python scripts/CVAE/evaluate_posthoc_conditional_prior.py \
   --seed 12104 --device cuda
 ```
 
-The output contains per-Kp density estimates, the paired selected-minus-
+The output contains per-Kp density estimates, the paired comparison-minus-
 baseline gain, intensity/morphology quantiles, Kolmogorov--Smirnov distances,
 compact figures and the individual decoded metric samples. The default active
 area thresholds are100 corrected-WIC units and5 SI12 units; they can be changed

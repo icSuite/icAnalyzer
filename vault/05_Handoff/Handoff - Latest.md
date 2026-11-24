@@ -104,9 +104,20 @@ retains only49/83/75/77% of the held-out99th-percentile WIC maximum and
 73/77/67/45% of the SI12 maximum at Kp0/2/4/6. Held-out WIC--SI12
 mean-brightness correlations0.086/0.104/0.190/0.402 become
 -0.132/0.050/0.241/0.170. Treat K=6 diagonal as the validated baseline, not
-the final prior. Next implement/test low-rank residual covariance within each
-conditional mixture component; do not run another beta CVAE or rely only on a
-scalar sampling temperature.
+the final prior.
+
+Low-rank residual covariance is implemented as an option in the same prior.
+Each component now supports `diagonal + factor @ factor.T` with
+Kp-conditioned loadings over the complete latent row. Woodbury likelihood
+evaluation avoids dense324x324 covariance matrices, and rank zero is backward
+compatible. The fitter accepts `--components 6 --covariance-ranks 0 8`, saves
+both matched candidates and records the selected rank; the evaluator compares
+low rank against its matched K=6 diagonal baseline whether it wins or loses.
+Eighteen focused tests pass,
+including an explicit full-covariance reference and finite factor gradients;
+a correlated-data smoke improved negative log density10.08 to7.26. Run the
+rank0/rank8 post-hoc fit on the existing uncapped bank next. Do not retrain the
+CVAE.
 
 Portfolio impact: Central update needed: No.
 

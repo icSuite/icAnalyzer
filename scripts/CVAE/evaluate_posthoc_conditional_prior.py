@@ -19,6 +19,7 @@ from icanalyzer.cvae.artifacts import load_run_artifact
 from icanalyzer.cvae.prior import ConditionalGaussianMixturePrior
 from scripts.CVAE.analyze_empirical_latent_modes import FIELD_NAMES, load_bank
 from scripts.CVAE.fit_posthoc_conditional_prior import (
+    candidate_label,
     latent_dataset,
     sample_standardized_posterior,
 )
@@ -61,6 +62,52 @@ def rows_near_kp(bank, validation_rows, target, tolerance):
     if not len(rows):
         raise ValueError(f"no held-out frames lie within Kp {target:g}+/-{tolerance:g}")
     return rows
+
+
+def evaluation_candidate_labels(fit_summary):
+    candidates = []
+    for candidate in fit_summary["candidates"]:
+        rank = int(candidate.get("covariance_rank", 0))
+        candidates.append({
+            **candidate,
+            "covariance_rank": rank,
+            "label": candidate.get(
+                "label", candidate_label(candidate["components"], rank)
+            ),
+        })
+    selected_record = fit_summary.get("selected_candidate", {
+        "components": fit_summary["selected_components"],
+        "covariance_rank": 0,
+    })
+    selected_label = selected_record.get("label", candidate_label(
+        selected_record["components"], selected_record.get("covariance_rank", 0)
+    ))
+    selected = next(
+        candidate for candidate in candidates if candidate["label"] == selected_label
+    )
+    low_rank = [candidate for candidate in candidates if candidate["covariance_rank"]]
+    comparison = selected
+    if low_rank and not selected["covariance_rank"]:
+        comparison = max(
+            low_rank,
+            key=lambda candidate: candidate["validation"]["mean_log_density"],
+        )
+    if comparison["covariance_rank"]:
+        baseline = next(
+            candidate for candidate in candidates
+            if candidate["components"] == comparison["components"]
+            and candidate["covariance_rank"] == 0
+        )
+    else:
+        baseline = min(
+            (
+                candidate for candidate in candidates
+                if candidate["covariance_rank"] == 0
+                and candidate["label"] != comparison["label"]
+            ),
+            key=lambda candidate: candidate["components"],
+        )
+    return baseline["label"], comparison["label"], selected["label"]
 
 
 def evaluate_density(priors, bank, rows, center, scale, arguments, device):
@@ -209,19 +256,22 @@ def calibration_comparison(reference, candidate):
 
 #%% Compact comparison figures
 
-def plot_density(records, labels, output):
+def plot_density(records, labels, baseline, comparison, output):
     kp = np.asarray([record["target_kp"] for record in records])
     figure, axes = plt.subplots(1, 2, figsize=(11, 4.5), layout="constrained")
     for label in labels:
         mean = [record["priors"][label]["mean_log_density"] for record in records]
         error = [record["priors"][label]["standard_error"] for record in records]
         axes[0].errorbar(kp, mean, yerr=error, marker="o", label=label)
-    gain = [record["selected_minus_baseline"]["mean"] for record in records]
-    gain_error = [record["selected_minus_baseline"]["standard_error"] for record in records]
+    gain = [record["comparison_minus_baseline"]["mean"] for record in records]
+    gain_error = [record["comparison_minus_baseline"]["standard_error"] for record in records]
     axes[1].errorbar(kp, gain, yerr=gain_error, marker="o", color="tab:green")
     axes[1].axhline(0, color="black", linewidth=1)
     axes[0].set(title="Held-out latent density by Kp", xlabel="Kp", ylabel="mean log density")
-    axes[1].set(title="Selected prior gain", xlabel="Kp", ylabel="paired log-density gain")
+    axes[1].set(
+        title=f"{comparison} minus {baseline}",
+        xlabel="Kp", ylabel="paired log-density gain",
+    )
     axes[0].legend()
     figure.savefig(output / "density_by_kp.png", dpi=180)
     figure.savefig(output / "density_by_kp.pdf")
@@ -230,7 +280,9 @@ def plot_density(records, labels, output):
 
 def plot_calibration(raw, labels, output):
     targets = sorted(raw)
-    colors = {"heldout_posterior": "black", labels[0]: "tab:blue", labels[-1]: "tab:orange"}
+    palette = plt.get_cmap("tab10")
+    colors = {"heldout_posterior": "black"}
+    colors.update({label: palette(index) for index, label in enumerate(labels)})
     figure, axes = plt.subplots(2, 3, figsize=(14, 8), layout="constrained")
     for row, (field, field_label) in enumerate(zip(FIELD_NAMES, FIELD_LABELS)):
         for column, metric in enumerate(DISPLAY_METRICS):
@@ -269,15 +321,23 @@ def run(arguments):
     fit_summary = json.loads((prior_directory / "posthoc_prior_summary.json").read_text())
     priors, payloads = {}, {}
     for candidate in fit_summary["candidates"]:
-        label = f"K={candidate['components']}"
+        covariance_rank = int(candidate.get("covariance_rank", 0))
+        label = candidate.get(
+            "label", candidate_label(candidate["components"], covariance_rank)
+        )
         prior, payload = load_prior(
             prior_directory / candidate["directory"] / "conditional_latent_prior.pt",
             device,
         )
         priors[label], payloads[label] = prior, payload
     labels = list(priors)
-    baseline_label = f"K={min(candidate['components'] for candidate in fit_summary['candidates'])}"
-    selected_label = f"K={fit_summary['selected_components']}"
+    baseline_label, comparison_label, selected_label = evaluation_candidate_labels(
+        fit_summary
+    )
+    if any(label not in priors for label in (
+        baseline_label, comparison_label, selected_label,
+    )):
+        raise ValueError("summary does not contain the selected comparison priors")
     reference = payloads[baseline_label]
     validation_rows = np.asarray(reference["validation_rows"], dtype=np.int64)
     center = np.asarray(reference["latent_center"], dtype=np.float32)
@@ -323,11 +383,11 @@ def run(arguments):
                 "mean_log_density": float(np.mean(log_density)),
                 "standard_error": float(np.std(log_density, ddof=1) / np.sqrt(len(log_density))),
             }
-        gain = values[selected_label] - values[baseline_label]
+        gain = values[comparison_label] - values[baseline_label]
         density_records.append({
             "target_kp": float(target), "heldout_frames": int(len(rows)),
             "priors": prior_records,
-            "selected_minus_baseline": {
+            "comparison_minus_baseline": {
                 "mean": float(np.mean(gain)),
                 "standard_error": float(np.std(gain, ddof=1) / np.sqrt(len(gain))),
                 "frame_win_fraction": float(np.mean(gain > 0)),
@@ -385,7 +445,9 @@ def run(arguments):
                 for metric, values in metrics.items():
                     saved_arrays[f"kp_{target:g}_{source}_{field}_{metric}"] = values
 
-    plot_density(density_records, labels, output)
+    plot_density(
+        density_records, labels, baseline_label, comparison_label, output
+    )
     plot_calibration(raw_calibration, labels, output)
     np.savez_compressed(output / "decoded_metric_samples.npz", **saved_arrays)
     summary = {
@@ -398,7 +460,8 @@ def run(arguments):
             "wic_corrected": arguments.wic_active_threshold,
             "si12": arguments.si12_active_threshold,
         },
-        "baseline": baseline_label, "selected": selected_label,
+        "baseline": baseline_label, "comparison": comparison_label,
+        "fit_selected": selected_label,
         "density_by_kp": density_records, "decoded_calibration": calibration,
         "sampled_component_fractions": component_fractions,
         "reference_definition": (
