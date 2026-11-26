@@ -1,8 +1,8 @@
 # Current State
 
 Last reviewed: 2026-11-26 (AGU poster scope)
-Repository snapshot: `vae/wic-si12` at `9a91c47` plus the uncommitted AGU
-poster workflow; `main` remains at `7c71591`
+Repository snapshot: `vae/wic-si12` at `0566f9c` including the chronological
+AGU poster workflow; `main` remains at `7c71591`
 Worktree: user annotation, decision-log and generated-output changes preserved
 
 ## AGU poster is the active presentation task (2026-11-26)

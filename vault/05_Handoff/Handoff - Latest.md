@@ -2,8 +2,8 @@
 
 Last updated: 2026-11-26
 Last reviewed: 2026-11-26 (AGU poster scope)
-Repository snapshot: `vae/wic-si12` at `9a91c47` plus the uncommitted AGU
-poster workflow, with user annotation, decision-log and generated-output
+Repository snapshot: `vae/wic-si12` at `0566f9c` including the chronological
+AGU poster workflow, with user annotation, decision-log and generated-output
 changes preserved; `main` remains at `7c71591`
 
 ## AGU poster scope
