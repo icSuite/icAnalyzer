@@ -1,8 +1,8 @@
 # Current State
 
 Last reviewed: 2026-11-26 (AGU poster scope)
-Repository snapshot: `vae/wic-si12` including the joint-prior validation
-handoff; `main` remains at `7c71591`
+Repository snapshot: `vae/wic-si12` at `9a91c47` plus the uncommitted AGU
+poster workflow; `main` remains at `7c71591`
 Worktree: user annotation, decision-log and generated-output changes preserved
 
 ## AGU poster is the active presentation task (2026-11-26)
@@ -14,15 +14,25 @@ uncertainty discussion. The poster should form one chain from held-out WIC/SI12
 reconstruction through paired Hall/Pedersen ensemble structure to downstream
 electrodynamic consequences.
 
-The immediate gate remains inspection of the joint-prior fixed-Kp samples.
+The 5,000-member joint-prior Kp0/2/4/6 sampling products are local. Three
+chronological poster scripts now define the next executable workflow under
+`scripts/AGU2026/`: held-out posterior reconstruction validation, joint
+physical Hall/Pedersen covariance, and sparse covariance conditioning. The
+matching README contains server commands. Focused synthetic end-to-end tests
+verify the covariance-to-reconstruction handoff; the real poster calculations
+have not yet been run.
+
 Model validation should combine a representative held-out physical-space
 observation/reconstruction/residual panel with population-level held-out
 metrics; the encoder's quality/mask channels are not themselves a scientific
 image comparison. Covariance figures should show paired Hall/Pedersen mean,
 leading PCA perturbations in physical units and anchored teleconnection maps.
-Sparse reconstruction should reuse the established Gaussian conditioning
-calculation on the new native184 covariance and include both an example and a
-held-out skill summary. Lompe sensitivity should hold the event observations
+The covariance script saves the retained joint eigenfactor once, and the
+sparse script consumes that exact product. Sparse targets from the same
+ensemble are explicitly labelled an internal distribution-consistency
+demonstration; a separately seeded ensemble gives an independent Monte Carlo
+check. This is not independent physical conductance validation. Lompe
+sensitivity should hold the event observations
 and solver configuration fixed while varying whole paired conductance
 realizations; direct CVAE members are preferred to unconstrained Gaussian PCA
 draws because they preserve nonnegativity and Hall/Pedersen dependence.
@@ -48,15 +58,9 @@ six-component, rank-eight prior. Epoch98 is selected with validation total
 2.2016. Held-out test reconstruction is2.1700, joint KL148.35 and total2.3183;
 the corresponding standard-normal beta0.001 run had reconstruction2.217 and
 KL168.5. This is an encouraging objective improvement, not yet a decoded-
-calibration result. Next apply the existing reconstruction diagnostics and
-matched fixed-Kp prior galleries to the new artifact.
-
-The matched 5,000-draw Kp0/2/4/6 gallery is the immediate validation step.
-Sampling uses the prior embedded in the artifact automatically. A first server
-command used laptop Dropbox paths and failed before loading the model; the
-correct server roots are `~/IMAGE_CVAE_50km/cvae_runs/` and
-`~/IMAGE_CVAE_50km/samples/`. Completion of the corrected sampling run has not
-yet been confirmed.
+calibration result. The matched 5,000-draw Kp0/2/4/6 gallery is now local and
+used the prior embedded in the artifact automatically. The next action is the
+numbered AGU held-out reconstruction and conductance workflow above.
 
 ## Empirical Kp-local latent samples look substantially better (2026-11-24)
 

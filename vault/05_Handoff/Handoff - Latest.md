@@ -2,9 +2,9 @@
 
 Last updated: 2026-11-26
 Last reviewed: 2026-11-26 (AGU poster scope)
-Repository snapshot: `vae/wic-si12` including the joint-prior validation
-handoff, with user annotation, decision-log and generated-output changes
-preserved; `main` remains at `7c71591`
+Repository snapshot: `vae/wic-si12` at `9a91c47` plus the uncommitted AGU
+poster workflow, with user annotation, decision-log and generated-output
+changes preserved; `main` remains at `7c71591`
 
 ## AGU poster scope
 
@@ -19,12 +19,27 @@ The active deliverable is an AGU poster with four linked result blocks:
 4. one-time Lompe sensitivity with event data and solver settings fixed while
    whole paired conductance realizations vary.
 
-Do not continue the FAST-uncertainty thread in this project task. Inspect the
-joint-prior fixed-Kp galleries before using the new model in poster figures.
-For Lompe, prefer complete CVAE-derived conductance members over Gaussian PCA
-resampling so Hall/Pedersen pairing, nonnegativity and non-Gaussian structure
-are retained. The Lompe result is a sensitivity demonstration, not independent
-conductance validation.
+Do not continue the FAST-uncertainty thread in this project task. The local
+joint-prior gallery contains 5,000 draws at Kp0/2/4/6. Run the three numbered
+scripts in `scripts/AGU2026/README.md` to produce the first three result blocks:
+
+- `01_model_validation.py` evaluates `decoder(mu)` on the held-out native184
+  cache, writes population metrics, and selects the representative frame by
+  median joint NRMSE rather than visual preference;
+- `02_conductance_covariance.py` retains each paired Hall/Pedersen realization,
+  saves 100 joint physical-space modes by default, and plots the mean, leading
+  one-standard-deviation PCA patterns, and anchored correlations without a
+  dense covariance matrix;
+- `03_sparse_reconstruction.py` consumes that exact saved eigenfactor and
+  applies Gaussian conditioning to joint sparse H/P observations. Same-archive
+  targets are labelled internal distribution consistency; a separately seeded
+  truth ensemble is the preferred independent Monte Carlo check.
+
+Synthetic step-2-to-step-3 tests pass. No real poster output has yet been
+generated. For Lompe, after reviewing these figures, prefer complete
+CVAE-derived conductance members over Gaussian PCA resampling so Hall/Pedersen
+pairing, nonnegativity and non-Gaussian structure are retained. The Lompe
+result is a sensitivity demonstration, not independent conductance validation.
 
 ## Joint conditional prior is implemented
 
@@ -50,22 +65,17 @@ standard-normal beta0.001 run. Next evaluate the same reconstruction frames
 and matched fixed-Kp decoded galleries; do not infer calibration from the
 objective alone or start another prior-family sweep.
 
-The immediate gate is a matched 5,000-draw Kp0/2/4/6 gallery followed by the
-existing reconstruction and decoded-calibration diagnostics. Sampling uses the
-embedded prior automatically. The first server invocation failed before model
-loading because it used the laptop Dropbox run path. The corrected server roots
-are `~/IMAGE_CVAE_50km/cvae_runs/` and `~/IMAGE_CVAE_50km/samples/`; completion
-of that corrected run is not yet confirmed.
+The matched 5,000-draw Kp0/2/4/6 gallery is local. Sampling used the embedded
+prior automatically. Use the numbered AGU workflow above for the held-out
+reconstruction and conductance analyses rather than starting another training
+or prior-family sweep.
 
 ## Portfolio impact
 
-- Central update needed: Yes
-- Changes: AGU poster production is now the active icAnalyzer deliverable, with
-  four confirmed result blocks and a Lompe sensitivity endpoint.
-- Sync summary: The poster sequence is validation, covariance, sparse
-  reconstruction and one-time Lompe ensemble sensitivity. The joint-prior
-  gallery remains the first gate; priority and deadlines are otherwise
-  unchanged.
+- Central update needed: No
+- Changes: The first three poster blocks now have a reproducible numbered code
+  path and commands; no portfolio priority, deadline or scientific result has
+  changed.
 
 ## Empirical conditional latent galleries improve substantially
 
