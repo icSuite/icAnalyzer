@@ -1,7 +1,7 @@
 # Current State
 
 Last reviewed: 2026-11-26 (AGU poster scope)
-Repository snapshot: `vae/wic-si12` at `41a40b7` including the expanded
+Repository snapshot: `vae/wic-si12` at `6c90144` including the coverage-filtered
 chronological AGU poster workflow; `main` remains at `7c71591`
 Worktree: user annotation, decision-log and generated-output changes preserved
 
