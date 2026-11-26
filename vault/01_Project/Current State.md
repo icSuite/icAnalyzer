@@ -1,9 +1,31 @@
 # Current State
 
-Last reviewed: 2026-11-26 (joint-prior validation handoff)
+Last reviewed: 2026-11-26 (AGU poster scope)
 Repository snapshot: `vae/wic-si12` including the joint-prior validation
 handoff; `main` remains at `7c71591`
 Worktree: user annotation, decision-log and generated-output changes preserved
+
+## AGU poster is the active presentation task (2026-11-26)
+
+The user set four required poster results: model validation, conductance mean
+and covariance structure, sparse covariance-based reconstruction, and a
+single-time Lompe conductance-sensitivity ensemble. Stop the unrelated FAST
+uncertainty discussion. The poster should form one chain from held-out WIC/SI12
+reconstruction through paired Hall/Pedersen ensemble structure to downstream
+electrodynamic consequences.
+
+The immediate gate remains inspection of the joint-prior fixed-Kp samples.
+Model validation should combine a representative held-out physical-space
+observation/reconstruction/residual panel with population-level held-out
+metrics; the encoder's quality/mask channels are not themselves a scientific
+image comparison. Covariance figures should show paired Hall/Pedersen mean,
+leading PCA perturbations in physical units and anchored teleconnection maps.
+Sparse reconstruction should reuse the established Gaussian conditioning
+calculation on the new native184 covariance and include both an example and a
+held-out skill summary. Lompe sensitivity should hold the event observations
+and solver configuration fixed while varying whole paired conductance
+realizations; direct CVAE members are preferred to unconstrained Gaussian PCA
+draws because they preserve nonnegativity and Hall/Pedersen dependence.
 
 ## Joint Kp-conditioned rank-eight prior full run is complete (2026-11-24)
 

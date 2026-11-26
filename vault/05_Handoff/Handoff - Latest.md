@@ -1,10 +1,30 @@
 # Handoff - Latest
 
 Last updated: 2026-11-26
-Last reviewed: 2026-11-26 (joint-prior validation handoff)
+Last reviewed: 2026-11-26 (AGU poster scope)
 Repository snapshot: `vae/wic-si12` including the joint-prior validation
 handoff, with user annotation, decision-log and generated-output changes
 preserved; `main` remains at `7c71591`
+
+## AGU poster scope
+
+The active deliverable is an AGU poster with four linked result blocks:
+
+1. held-out WIC/SI12 model validation using observations, posterior
+   reconstructions, residuals and population metrics;
+2. paired Hall/Pedersen mean, leading physical-unit PCA perturbations and
+   anchored teleconnection maps;
+3. sparse reconstruction with the ensemble covariance, including an example
+   and held-out skill versus observation count;
+4. one-time Lompe sensitivity with event data and solver settings fixed while
+   whole paired conductance realizations vary.
+
+Do not continue the FAST-uncertainty thread in this project task. Inspect the
+joint-prior fixed-Kp galleries before using the new model in poster figures.
+For Lompe, prefer complete CVAE-derived conductance members over Gaussian PCA
+resampling so Hall/Pedersen pairing, nonnegativity and non-Gaussian structure
+are retained. The Lompe result is a sensitivity demonstration, not independent
+conductance validation.
 
 ## Joint conditional prior is implemented
 
@@ -39,12 +59,13 @@ of that corrected run is not yet confirmed.
 
 ## Portfolio impact
 
-- Central update needed: No
-- Changes: The icAnalyzer second-brain card, portfolio register and current
-  focus were synchronized on 2026-11-26.
-- Sync summary: Central memory now records the completed native184
-  six-component rank-eight Kp-conditioned model and the pending fixed-Kp
-  morphology/calibration gate. Priority and deadlines are unchanged.
+- Central update needed: Yes
+- Changes: AGU poster production is now the active icAnalyzer deliverable, with
+  four confirmed result blocks and a Lompe sensitivity endpoint.
+- Sync summary: The poster sequence is validation, covariance, sparse
+  reconstruction and one-time Lompe ensemble sensitivity. The joint-prior
+  gallery remains the first gate; priority and deadlines are otherwise
+  unchanged.
 
 ## Empirical conditional latent galleries improve substantially
 
