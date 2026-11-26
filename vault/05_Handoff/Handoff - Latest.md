@@ -1,8 +1,9 @@
 # Handoff - Latest
 
-Last updated: 2026-11-24
-Last reviewed: 2026-11-24 (joint conditional prior full run)
-Repository snapshot: `vae/wic-si12` including the hierarchical native-grid commit, with generated-output changes preserved; `main` remains at `7c71591`
+Last updated: 2026-11-26
+Last reviewed: 2026-11-26 (joint-prior validation handoff)
+Repository snapshot: `vae/wic-si12` at `bda3fba`, with user annotation,
+decision-log and generated-output changes preserved; `main` remains at `7c71591`
 
 ## Joint conditional prior is implemented
 
@@ -28,7 +29,22 @@ standard-normal beta0.001 run. Next evaluate the same reconstruction frames
 and matched fixed-Kp decoded galleries; do not infer calibration from the
 objective alone or start another prior-family sweep.
 
-Portfolio impact: Central update needed: No.
+The immediate gate is a matched 5,000-draw Kp0/2/4/6 gallery followed by the
+existing reconstruction and decoded-calibration diagnostics. Sampling uses the
+embedded prior automatically. The first server invocation failed before model
+loading because it used the laptop Dropbox run path. The corrected server roots
+are `~/IMAGE_CVAE_50km/cvae_runs/` and `~/IMAGE_CVAE_50km/samples/`; completion
+of that corrected run is not yet confirmed.
+
+## Portfolio impact
+
+- Central update needed: Yes
+- Changes: icAnalyzer has advanced from new-corpus/mask/cache preparation to a
+  completed native184 joint-prior CVAE; decoded calibration is now the next
+  decision gate.
+- Sync summary: The six-component rank-eight Kp-conditioned model completed
+  and reloads correctly. Objective metrics improve modestly over the matched
+  standard-normal run, but fixed-Kp morphology and calibration remain pending.
 
 ## Empirical conditional latent galleries improve substantially
 

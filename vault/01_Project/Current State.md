@@ -1,9 +1,8 @@
 # Current State
 
-Last reviewed: 2026-11-24 (joint conditional prior full run)
-Repository snapshot: `vae/wic-si12` including the hierarchical native-grid
-commit; `main` remains at `7c71591`
-Worktree: user annotation and generated-output changes preserved
+Last reviewed: 2026-11-26 (joint-prior validation handoff)
+Repository snapshot: `vae/wic-si12` at `bda3fba`; `main` remains at `7c71591`
+Worktree: user annotation, decision-log and generated-output changes preserved
 
 ## Joint Kp-conditioned rank-eight prior full run is complete (2026-11-24)
 
@@ -28,6 +27,13 @@ the corresponding standard-normal beta0.001 run had reconstruction2.217 and
 KL168.5. This is an encouraging objective improvement, not yet a decoded-
 calibration result. Next apply the existing reconstruction diagnostics and
 matched fixed-Kp prior galleries to the new artifact.
+
+The matched 5,000-draw Kp0/2/4/6 gallery is the immediate validation step.
+Sampling uses the prior embedded in the artifact automatically. A first server
+command used laptop Dropbox paths and failed before loading the model; the
+correct server roots are `~/IMAGE_CVAE_50km/cvae_runs/` and
+`~/IMAGE_CVAE_50km/samples/`. Completion of the corrected sampling run has not
+yet been confirmed.
 
 ## Empirical Kp-local latent samples look substantially better (2026-11-24)
 
