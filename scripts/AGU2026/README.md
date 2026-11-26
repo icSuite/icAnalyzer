@@ -9,7 +9,9 @@ report. The calculations retain WIC/SI12 pairing and Hall/Pedersen pairing.
 This evaluates the decoder at the posterior mean for every held-out frame. Ten
 distinct reconstruction panels are selected at the 5th, 15th, ..., 95th
 percentiles of joint NRMSE, spanning easy through difficult cases without
-visual cherry-picking.
+visual cherry-picking. A frame is eligible for these panels only when both WIC
+and SI12 have at least 60% finite/valid grid coverage. This does not remove
+lower-coverage frames from the population metrics.
 
 ```bash
 RUN=~/IMAGE_CVAE_50km/cvae_runs/wic_si12_kp_hierarchical_jointprior_k6_rank8_beta001_20261124

@@ -61,7 +61,7 @@ def frame_metrics(observed, reconstructed, valid):
     return records
 
 
-def select_representatives(records, count=10):
+def select_representatives(records, eligible=None, count=10):
     """Select distinct frames at evenly spaced joint-NRMSE quantiles."""
 
     scores = np.array([
@@ -69,8 +69,15 @@ def select_representatives(records, count=10):
         for frame in records
     ])
     finite = np.flatnonzero(np.isfinite(scores))
+    if eligible is not None:
+        eligible = np.asarray(eligible, dtype=bool)
+        if eligible.shape != scores.shape:
+            raise ValueError("representative eligibility must contain one value per frame")
+        finite = finite[eligible[finite]]
     if finite.size < count:
-        raise ValueError(f"need at least {count} held-out frames with finite reconstruction scores")
+        raise ValueError(
+            f"need at least {count} eligible held-out frames with finite reconstruction scores"
+        )
     ordered = finite[np.argsort(scores[finite])]
     quantiles = (np.arange(count) + 0.5) / count
     positions = np.rint(quantiles * (len(ordered) - 1)).astype(int)
@@ -202,7 +209,15 @@ def run(arguments):
     valid = np.concatenate(valid_batches)
     valid_full = np.broadcast_to(valid, observed.shape)
     records = frame_metrics(observed, reconstructed, valid_full)
-    representatives, joint_scores, representative_quantiles = select_representatives(records)
+    valid_fraction = np.mean(
+        valid_full & np.isfinite(observed), axis=(2, 3)
+    )
+    representative_eligible = np.all(
+        valid_fraction >= arguments.minimum_valid_fraction, axis=1
+    )
+    representatives, joint_scores, representative_quantiles = select_representatives(
+        records, eligible=representative_eligible
+    )
 
     rows = []
     for local, dataset_index in enumerate(indices):
@@ -213,6 +228,10 @@ def run(arguments):
             "time": str(dataset.frame_time[dataset_index]),
             "kp": float(dataset.kp[dataset_index]),
             "joint_nrmse": float(joint_scores[local]),
+            "wic_valid_fraction": float(valid_fraction[local, 0]),
+            "si12_valid_fraction": float(valid_fraction[local, 1]),
+            "minimum_valid_fraction": float(np.min(valid_fraction[local])),
+            "representative_eligible": bool(representative_eligible[local]),
         }
         for channel, prefix in enumerate(("wic", "si12")):
             row.update({f"{prefix}_{key}": value for key, value in records[local][channel].items()})
@@ -231,7 +250,8 @@ def run(arguments):
             f"Held-out performance percentile {100 * quantile:.0f}; "
             f"orbit {selected['orbit']}, frame {selected['source_frame']}, "
             f"{selected['time']}, Kp={selected['kp']:g}; "
-            f"joint NRMSE={selected['joint_nrmse']:.3g}"
+            f"joint NRMSE={selected['joint_nrmse']:.3g}; "
+            f"minimum coverage={100 * selected['minimum_valid_fraction']:.1f}%"
         )
         stem = f"01_representative_reconstruction_{number:02d}_p{round(100 * quantile):02d}"
         plot_representative(
@@ -247,7 +267,13 @@ def run(arguments):
         "cache_manifest_sha256": manifest_sha256,
         "split": arguments.split,
         "frames": len(rows),
-        "representative_selection": "ten distinct frames at the 5th, 15th, ..., 95th percentiles of joint WIC/SI12 NRMSE",
+        "representative_selection": (
+            "ten distinct frames at the 5th, 15th, ..., 95th percentiles of "
+            "joint WIC/SI12 NRMSE after requiring the minimum valid fraction "
+            "in each field"
+        ),
+        "representative_minimum_valid_fraction_per_field": arguments.minimum_valid_fraction,
+        "representative_eligible_frames": int(np.count_nonzero(representative_eligible)),
         "representatives": selected_rows,
         "population_figure_display": population_display,
         "metrics": {
@@ -272,6 +298,10 @@ def parse_arguments(argv=None):
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--split", choices=("validation", "test"), default="test")
     parser.add_argument("--maximum-frames", type=int, help="seeded diagnostic subset; omit for the full split")
+    parser.add_argument(
+        "--minimum-valid-fraction", type=float, default=0.6,
+        help="minimum finite/valid grid fraction required in each field for the ten representative figures",
+    )
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--cache-mib", type=int, default=4096)
     parser.add_argument("--max-open-orbits", type=int, default=8)
@@ -283,6 +313,8 @@ def parse_arguments(argv=None):
         parser.error("batch, cache, open-orbit and DPI settings must be positive")
     if arguments.maximum_frames is not None and arguments.maximum_frames < 1:
         parser.error("--maximum-frames must be positive")
+    if not np.isfinite(arguments.minimum_valid_fraction) or not 0 <= arguments.minimum_valid_fraction <= 1:
+        parser.error("--minimum-valid-fraction must lie between zero and one")
     return arguments
 
 
