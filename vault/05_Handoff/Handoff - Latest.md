@@ -2,8 +2,9 @@
 
 Last updated: 2026-11-26
 Last reviewed: 2026-11-26 (joint-prior validation handoff)
-Repository snapshot: `vae/wic-si12` at `bda3fba`, with user annotation,
-decision-log and generated-output changes preserved; `main` remains at `7c71591`
+Repository snapshot: `vae/wic-si12` including the joint-prior validation
+handoff, with user annotation, decision-log and generated-output changes
+preserved; `main` remains at `7c71591`
 
 ## Joint conditional prior is implemented
 
@@ -38,13 +39,12 @@ of that corrected run is not yet confirmed.
 
 ## Portfolio impact
 
-- Central update needed: Yes
-- Changes: icAnalyzer has advanced from new-corpus/mask/cache preparation to a
-  completed native184 joint-prior CVAE; decoded calibration is now the next
-  decision gate.
-- Sync summary: The six-component rank-eight Kp-conditioned model completed
-  and reloads correctly. Objective metrics improve modestly over the matched
-  standard-normal run, but fixed-Kp morphology and calibration remain pending.
+- Central update needed: No
+- Changes: The icAnalyzer second-brain card, portfolio register and current
+  focus were synchronized on 2026-11-26.
+- Sync summary: Central memory now records the completed native184
+  six-component rank-eight Kp-conditioned model and the pending fixed-Kp
+  morphology/calibration gate. Priority and deadlines are unchanged.
 
 ## Empirical conditional latent galleries improve substantially
 

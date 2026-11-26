@@ -1,7 +1,8 @@
 # Current State
 
 Last reviewed: 2026-11-26 (joint-prior validation handoff)
-Repository snapshot: `vae/wic-si12` at `bda3fba`; `main` remains at `7c71591`
+Repository snapshot: `vae/wic-si12` including the joint-prior validation
+handoff; `main` remains at `7c71591`
 Worktree: user annotation, decision-log and generated-output changes preserved
 
 ## Joint Kp-conditioned rank-eight prior full run is complete (2026-11-24)
