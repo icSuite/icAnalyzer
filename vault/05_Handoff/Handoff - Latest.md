@@ -24,8 +24,10 @@ joint-prior gallery contains 5,000 draws at Kp0/2/4/6. Run the three numbered
 scripts in `scripts/AGU2026/README.md` to produce the first three result blocks:
 
 - `01_model_validation.py` evaluates `decoder(mu)` on the held-out native184
-  cache, writes population metrics, and selects the representative frame by
-  median joint NRMSE rather than visual preference;
+  cache, writes population metrics, and selects ten distinct reconstruction
+  examples at the 5th, 15th, ..., 95th percentiles of joint NRMSE. Population
+  histograms show each field's central 1st--99th percentile range and report
+  tails clipped to the edge bins;
 - `02_conductance_covariance.py` retains each paired Hall/Pedersen realization,
   saves 100 joint physical-space modes by default, and plots the mean, leading
   one-standard-deviation PCA patterns, and anchored correlations without a

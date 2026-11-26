@@ -6,9 +6,10 @@ report. The calculations retain WIC/SI12 pairing and Hall/Pedersen pairing.
 
 ## 1. Held-out model validation
 
-This evaluates the decoder at the posterior mean for every held-out frame. The
-representative panel is selected as the frame nearest the median joint NRMSE,
-not by visual inspection.
+This evaluates the decoder at the posterior mean for every held-out frame. Ten
+distinct reconstruction panels are selected at the 5th, 15th, ..., 95th
+percentiles of joint NRMSE, spanning easy through difficult cases without
+visual cherry-picking.
 
 ```bash
 RUN=~/IMAGE_CVAE_50km/cvae_runs/wic_si12_kp_hierarchical_jointprior_k6_rank8_beta001_20261124

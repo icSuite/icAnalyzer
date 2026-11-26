@@ -49,6 +49,17 @@ def test_validation_metrics_are_exact_for_exact_reconstruction():
     assert metrics[0][0]["correlation"] == 1
 
 
+def test_validation_selects_ten_distinct_performance_quantiles():
+    records = [
+        [{"nrmse": float(value)}, {"nrmse": float(value + 1)}]
+        for value in range(20)
+    ]
+    selected, scores, quantiles = VALIDATION.select_representatives(records)
+    assert len(np.unique(selected)) == 10
+    np.testing.assert_allclose(quantiles, np.arange(0.05, 1, 0.1))
+    assert np.all(np.diff(scores[selected]) > 0)
+
+
 def test_covariance_then_sparse_reconstruction_smoke(tmp_path):
     ensemble = tmp_path / "ensemble_products.npz"
     synthetic_ensemble(ensemble)

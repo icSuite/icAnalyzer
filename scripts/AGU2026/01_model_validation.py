@@ -61,23 +61,28 @@ def frame_metrics(observed, reconstructed, valid):
     return records
 
 
-def select_representative(records):
-    """Select the frame nearest median joint NRMSE, without cherry-picking."""
+def select_representatives(records, count=10):
+    """Select distinct frames at evenly spaced joint-NRMSE quantiles."""
 
     scores = np.array([
         np.mean([entry["nrmse"] for entry in frame if entry["nrmse"] is not None])
         for frame in records
     ])
     finite = np.flatnonzero(np.isfinite(scores))
-    if not finite.size:
-        raise ValueError("no held-out frame has a finite reconstruction score")
-    median = np.median(scores[finite])
-    return int(finite[np.argmin(abs(scores[finite] - median))]), scores
+    if finite.size < count:
+        raise ValueError(f"need at least {count} held-out frames with finite reconstruction scores")
+    ordered = finite[np.argsort(scores[finite])]
+    quantiles = (np.arange(count) + 0.5) / count
+    positions = np.rint(quantiles * (len(ordered) - 1)).astype(int)
+    selected = ordered[positions]
+    if len(np.unique(selected)) != count:
+        raise RuntimeError("representative quantile selection did not produce distinct frames")
+    return selected, scores, quantiles
 
 
 #%% Poster figures
 
-def plot_representative(observed, reconstructed, valid, title, output, dpi):
+def plot_representative(observed, reconstructed, valid, title, output, stem, dpi):
     residual = reconstructed - observed
     figure, axes = plt.subplots(2, 3, figsize=(10.5, 6.5), constrained_layout=True)
     for channel, name in enumerate(("WIC", "SI12")):
@@ -97,26 +102,48 @@ def plot_representative(observed, reconstructed, valid, title, output, dpi):
             axes[channel, column].set_axis_off()
             figure.colorbar(image, ax=axes[channel, column], label="counts", shrink=0.78)
     figure.suptitle(title)
-    figure.savefig(output / "01_representative_reconstruction.png", dpi=dpi, bbox_inches="tight")
-    figure.savefig(output / "01_representative_reconstruction.pdf", bbox_inches="tight")
+    figure.savefig(output / f"{stem}.png", dpi=dpi, bbox_inches="tight")
+    figure.savefig(output / f"{stem}.pdf", bbox_inches="tight")
     plt.close(figure)
 
 
 def plot_population(records, output, dpi):
-    figure, axes = plt.subplots(1, 2, figsize=(9, 4), constrained_layout=True)
+    figure, axes = plt.subplots(2, 2, figsize=(9, 7), constrained_layout=True)
+    display = {}
     for channel, name in enumerate(("WIC", "SI12")):
-        nrmse = [frame[channel]["nrmse"] for frame in records if frame[channel]["nrmse"] is not None]
-        correlation = [frame[channel]["correlation"] for frame in records if frame[channel]["correlation"] is not None]
-        axes[0].hist(nrmse, bins=40, histtype="step", linewidth=1.8, label=name)
-        axes[1].hist(correlation, bins=np.linspace(-1, 1, 41), histtype="step", linewidth=1.8, label=name)
-    axes[0].set(xlabel="Frame RMSE / observed spatial SD", ylabel="Frames", title="Held-out reconstruction error")
-    axes[1].set(xlabel="Spatial correlation", ylabel="Frames", title="Held-out spatial agreement", xlim=(-1, 1))
-    for axis in axes:
-        axis.grid(alpha=0.2)
-        axis.legend()
+        nrmse = np.asarray([frame[channel]["nrmse"] for frame in records if frame[channel]["nrmse"] is not None])
+        correlation = np.asarray([frame[channel]["correlation"] for frame in records if frame[channel]["correlation"] is not None])
+        display[name] = {}
+        for column, (values, label, title) in enumerate((
+            (nrmse, "RMSE / observed spatial SD", "Held-out reconstruction error"),
+            (correlation, "Spatial correlation", "Held-out spatial agreement"),
+        )):
+            lower, upper = np.percentile(values, (1, 99))
+            if not upper > lower:
+                padding = max(abs(float(lower)) * 0.01, 1e-6)
+                lower, upper = lower - padding, upper + padding
+            clipped = np.clip(values, lower, upper)
+            axes[channel, column].hist(clipped, bins=np.linspace(lower, upper, 41), histtype="step", linewidth=1.8)
+            below = int(np.count_nonzero(values < lower))
+            above = int(np.count_nonzero(values > upper))
+            axes[channel, column].set(
+                xlabel=label, ylabel="Frames",
+                title=f"{name}: {title}\n1st–99th percentile display range",
+                xlim=(lower, upper),
+            )
+            axes[channel, column].text(
+                0.02, 0.96, f"tails clipped to edges: {below} low, {above} high",
+                transform=axes[channel, column].transAxes, va="top", fontsize=8,
+            )
+            axes[channel, column].grid(alpha=0.2)
+            display[name]["nrmse" if column == 0 else "correlation"] = {
+                "display_minimum": float(lower), "display_maximum": float(upper),
+                "clipped_low": below, "clipped_high": above,
+            }
     figure.savefig(output / "01_validation_population.png", dpi=dpi, bbox_inches="tight")
     figure.savefig(output / "01_validation_population.pdf", bbox_inches="tight")
     plt.close(figure)
+    return display
 
 
 #%% Chronological validation workflow
@@ -175,7 +202,7 @@ def run(arguments):
     valid = np.concatenate(valid_batches)
     valid_full = np.broadcast_to(valid, observed.shape)
     records = frame_metrics(observed, reconstructed, valid_full)
-    representative, joint_scores = select_representative(records)
+    representatives, joint_scores, representative_quantiles = select_representatives(records)
 
     rows = []
     for local, dataset_index in enumerate(indices):
@@ -195,10 +222,23 @@ def run(arguments):
         writer.writeheader()
         writer.writerows(rows)
 
-    selected = rows[representative]
-    title = f"Held-out orbit {selected['orbit']}, frame {selected['source_frame']}, {selected['time']}, Kp={selected['kp']:g}"
-    plot_representative(observed[representative], reconstructed[representative], valid_full[representative], title, output, arguments.dpi)
-    plot_population(records, output, arguments.dpi)
+    selected_rows = []
+    for number, (representative, quantile) in enumerate(zip(representatives, representative_quantiles), start=1):
+        selected = dict(rows[representative])
+        selected["performance_percentile"] = float(100 * quantile)
+        selected_rows.append(selected)
+        title = (
+            f"Held-out performance percentile {100 * quantile:.0f}; "
+            f"orbit {selected['orbit']}, frame {selected['source_frame']}, "
+            f"{selected['time']}, Kp={selected['kp']:g}; "
+            f"joint NRMSE={selected['joint_nrmse']:.3g}"
+        )
+        stem = f"01_representative_reconstruction_{number:02d}_p{round(100 * quantile):02d}"
+        plot_representative(
+            observed[representative], reconstructed[representative],
+            valid_full[representative], title, output, stem, arguments.dpi,
+        )
+    population_display = plot_population(records, output, arguments.dpi)
     summary = {
         "purpose": "held-out posterior reconstruction validation",
         "model": str(artifact_path),
@@ -207,8 +247,9 @@ def run(arguments):
         "cache_manifest_sha256": manifest_sha256,
         "split": arguments.split,
         "frames": len(rows),
-        "representative_selection": "frame nearest the median joint WIC/SI12 NRMSE",
-        "representative": selected,
+        "representative_selection": "ten distinct frames at the 5th, 15th, ..., 95th percentiles of joint WIC/SI12 NRMSE",
+        "representatives": selected_rows,
+        "population_figure_display": population_display,
         "metrics": {
             name: {
                 metric: float(np.nanmedian([frame[channel][metric] for frame in records if frame[channel][metric] is not None]))

@@ -20,7 +20,10 @@ chronological poster scripts now define the next executable workflow under
 physical Hall/Pedersen covariance, and sparse covariance conditioning. The
 matching README contains server commands. Focused synthetic end-to-end tests
 verify the covariance-to-reconstruction handoff; the real poster calculations
-have not yet been run.
+have not yet been run. Model validation now selects ten distinct frames at the
+5th through 95th percentiles of joint NRMSE. Its population histograms use
+per-field 1st--99th percentile display ranges with clipped-tail counts, so
+extreme errors cannot collapse the central distribution into one bin.
 
 Model validation should combine a representative held-out physical-space
 observation/reconstruction/residual panel with population-level held-out
